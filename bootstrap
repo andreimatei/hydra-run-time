@@ -1,6 +1,6 @@
 #! /bin/sh
 # slc, a SVP generic compiler.
-# Copyright (C) 2009 The CSA group, Universiteit van Amsterdam
+# Copyright (C) 2009 The CSA group, Universiteit van Amsterdam.
 
 me=$(basename $0)
 

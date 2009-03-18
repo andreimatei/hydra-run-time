@@ -1,3 +1,10 @@
+# t-ptl/simpl.m4: this file is part of the slc project.
+#
+# Copyright (C) 2008,2009 Universiteit van Amsterdam.
+# All rights reserved.
+#
+# $Id$
+
 # ###############################################
 #  Macro definitions for the muTC-ptl syntax
 # ###############################################
