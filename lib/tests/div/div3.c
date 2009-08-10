@@ -1,5 +1,5 @@
 //
-// div3.sl: this file is part of the slc project.
+// div3.c: this file is part of the slc project.
 //
 // Copyright (C) 2009 Universiteit van Amsterdam.
 //
@@ -14,7 +14,7 @@
 // $Id$
 //
 
-m4_include(svp/div.slh)
+#include <svp/div.h>
 
 sl_def(t_main, void)
 {
