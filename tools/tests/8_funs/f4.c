@@ -1,5 +1,5 @@
 //
-// f4.sl: this file is part of the SL toolchain.
+// f4.c: this file is part of the SL toolchain.
 //
 // Copyright (C) 2009 Universiteit van Amsterdam.
 //
@@ -10,8 +10,6 @@
 //
 // The complete GNU General Public Licence Notice can be found as the
 // `COPYING' file in the root directory.
-//
-// $Id$
 //
 
 #include <svp/testoutput.h>
