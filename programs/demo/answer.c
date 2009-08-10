@@ -1,5 +1,5 @@
 //
-// helloworld.sl: this file is part of the slc project.
+// answer.sl: this file is part of the slc project.
 //
 // Copyright (C) 2009 Universiteit van Amsterdam.
 //
@@ -14,10 +14,10 @@
 // $Id$
 //
 
-m4_include(svp/iomacros.slh)
+#include <svp/iomacros.h>
 
 sl_def(t_main, void)
 {
-  puts("hello world!\n");
+  printf("%d\n", 42);
 }
 sl_enddef
