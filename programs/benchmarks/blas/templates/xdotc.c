@@ -14,8 +14,8 @@
 // $Id$
 //
 
-m4_include(complex.slh)
-m4_define(INT, long)
+#include "blas_complex.h"
+#define INT long
 
 sl_def(FUNCTION[[]]_mt, void,
        sl_glparm(COMPLEX*restrict, sx),

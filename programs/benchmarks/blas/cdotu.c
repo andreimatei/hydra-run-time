@@ -1,5 +1,5 @@
 //
-// saxpy.sl: this file is part of the slc project.
+// cdotu.sl: this file is part of the slc project.
 //
 // Copyright (C) 2009 Universiteit van Amsterdam.
 //
@@ -14,6 +14,9 @@
 // $Id$
 //
 
-m4_define(FLOAT, float)
-m4_define(FUNCTION, saxpy)
-m4_include(templates/xaxpy.sl)
+#define COMPLEX blas_complex
+#define FLOAT float
+#define FUNCTION cdotu
+#define OP1 -
+#define OP2 +
+#include "templates/xdotc.c"

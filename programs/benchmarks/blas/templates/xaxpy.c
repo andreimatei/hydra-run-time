@@ -1,5 +1,5 @@
 //
-// xaxpy.sl: this file is part of the slc project.
+// xaxpy.c: this file is part of the slc project.
 //
 // Copyright (C) 2009 Universiteit van Amsterdam.
 //
@@ -14,7 +14,7 @@
 // $Id$
 //
 
-m4_define(INT, long)
+#define INT long
 
 sl_def(FUNCTION[[]]_mt, void,
        sl_glfparm(FLOAT, a),

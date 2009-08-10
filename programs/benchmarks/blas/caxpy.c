@@ -1,5 +1,5 @@
 //
-// ddot.sl: this file is part of the slc project.
+// caxpy.sl: this file is part of the slc project.
 //
 // Copyright (C) 2009 Universiteit van Amsterdam.
 //
@@ -14,6 +14,7 @@
 // $Id$
 //
 
-m4_define(FLOAT, float)
-m4_define(FUNCTION, ddot)
-m4_include(templates/xdot.sl)
+#define FLOAT float
+#define COMPLEX blas_complex
+#define FUNCTION caxpy
+#include "templates/xaxpyc.c"
