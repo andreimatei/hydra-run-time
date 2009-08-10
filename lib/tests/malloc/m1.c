@@ -1,5 +1,5 @@
 //
-// sac1.sl: this file is part of the SL toolchain.
+// m1.c: this file is part of the SL toolchain.
 //
 // Copyright (C) 2009 Universiteit van Amsterdam.
 //
@@ -14,22 +14,16 @@
 // $Id$
 //
 
-m4_include(sac_helpers.slh)
-m4_include(svp/iomacros.slh);
+#include <cmalloc.h>
 
 sl_def(t_main, void)
 {
-	const char msg[] = "hello world\n";
+   char *p;
 
-	char *p1;
+   p = (char*)sl_funcall(malloc_place, ptr, [[malloc]], sl_farg(size_t, 10));
 
-	p1 = (char*)malloc(7);
-	strncpy(p1, msg, 5);
-	p1[5] = '\n';
-	p1[6] = '\0';
+   p[5] = 'h';
 
-	puts(p1);
-
-	free(p1);
+   sl_funcall(malloc_place, void, [[free]], sl_farg(void*, p));
 }
 sl_enddef
