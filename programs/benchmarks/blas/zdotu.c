@@ -1,5 +1,5 @@
 //
-// caxpy.sl: this file is part of the slc project.
+// zdotu.sl: this file is part of the slc project.
 //
 // Copyright (C) 2009 Universiteit van Amsterdam.
 //
@@ -14,7 +14,9 @@
 // $Id$
 //
 
-m4_define(FLOAT, float)
-m4_define(COMPLEX, blas_complex)
-m4_define(FUNCTION, caxpy)
-m4_include(templates/xaxpyc.sl)
+#define COMPLEX blas_zomplex
+#define FLOAT double
+#define FUNCTION zdotu
+#define OP1 -
+#define OP2 +
+#include "templates/xdotc.c"
