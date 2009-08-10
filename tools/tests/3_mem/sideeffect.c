@@ -1,5 +1,5 @@
 //
-// arggen.sl: this file is part of the slc project.
+// sideeffect.c: this file is part of the slc project.
 //
 // Copyright (C) 2009 Universiteit van Amsterdam.
 //
@@ -14,17 +14,21 @@
 // $Id$
 //
 
-m4_include(svp/iomacros.slh)
-m4_include(cstddef.slh)
+#include <svp/testoutput.h>
 
-#ifdef FIBRE_DATA
-#include "fdata.c"
-#else
-#include "data.c"
-#endif
+int blah;
+
+sl_def(foo, void)
+{
+  blah = 10;
+}
+sl_enddef
 
 sl_def(t_main, void)
 {
-  write(&__slr_data, sizeof(__slr_data));
+  blah = 42;
+  sl_proccall(foo);
+  output_int(blah, 1);
+  output_char('\n', 1);
 }
 sl_enddef
