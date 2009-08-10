@@ -1,6 +1,5 @@
-sl_begin_header([[SLC_CSTDBOOL_SLH]])m4_dnl -*- m4 -*-
 //
-// cstdbool.slh: this file is part of the slc project.
+// roman.slh: this file is part of the slc project.
 //
 // Copyright (C) 2009 Universiteit van Amsterdam.
 //
@@ -14,18 +13,9 @@ sl_begin_header([[SLC_CSTDBOOL_SLH]])m4_dnl -*- m4 -*-
 //
 // $Id$
 //
+#ifndef __SVP_ROMAN_H__
+# define __SVP_ROMAN_H__
 
-#ifdef __mt_freestanding__
-
-#define bool _Bool
-#define true 1
-#define false 0
-#define __bool_true_false_are_defined 1
-
-#else
-
-#include <stdbool.h>
+sl_decl(roman, void, sl_glparm(short, x));
 
 #endif
-
-sl_end_header([[SLC_CSTDBOOL_SLH]])

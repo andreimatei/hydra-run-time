@@ -1,4 +1,3 @@
-sl_begin_header([[SLC_SVP_ASSERT_SLH]])m4_dnl -*- m4 -*-
 //
 // assert.slh: this file is part of the slc project.
 //
@@ -14,20 +13,25 @@ sl_begin_header([[SLC_SVP_ASSERT_SLH]])m4_dnl -*- m4 -*-
 //
 // $Id$
 //
+#ifndef __SVP_ASSERT_H__
+# define __SVP_ASSERT_H__
 
-m4_include(svp/io.slh)
-m4_include(svp/lib.slh)
+#include <svp/iomacros.h>
+#include <svp/abort.h>
+#include <svp/compiler.h>
 
-m4_ifndef([[NDEBUG]],[[
-m4_define([[svp__assert]],
-[[do {
-    sl_proccall(svp_io_puts, sl_glarg(const char*, str,  "[[$2]]:[[$3]]: failed assertion [[$1]]\n"));
-    svp_abort();
-   } while(0)]])
+#ifdef NDEBUG
+#define svp_assert(e) ((void)0)
+#else
 
-m4_define([[svp_assert]],[[if (unlikely(!([[$1]]))) svp__assert([[$1]], __file__, __line__)]])
-]], [[ /* !NDEBUG */
-m4_define([[svp__assert]], [[]])
-]])
+#define svp_assert(e)  \
+    ((void) (likely(e) ? 0 : svp__assert (#e, __FILE__, __LINE__)))
+#define svp__assert(e, file, line) \
+  ({ \
+    printf("%s:%u: failed assertion `%s'\n", file, line, e); \
+    svp_abort(); \
+   })
 
-sl_end_header([[SLC_SVP_ASSERT_SLH]])
+#endif
+
+#endif

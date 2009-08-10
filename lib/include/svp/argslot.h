@@ -1,6 +1,5 @@
-sl_begin_header([[SLC_CMALLOC_SLH]])m4_dnl -*- m4 -*-
 //
-// cmalloc.slh: this file is part of the SL toolchain.
+// argslot.slh: this file is part of the slc project.
 //
 // Copyright (C) 2009 Universiteit van Amsterdam.
 //
@@ -14,23 +13,26 @@ sl_begin_header([[SLC_CMALLOC_SLH]])m4_dnl -*- m4 -*-
 //
 // $Id$
 //
+#ifndef __SVP_ARGSLOT_H__
+# define __SVP_ARGSLOT_H__
 
-m4_include(cstddef.slh)
+#include <cstdint.h>
 
-#define malloc_place 5
+/* argument slot suitable to simulate
+   C's variable argument lists */
 
-#ifdef __mt_freestanding__
-
-extern void* malloc(size_t);
-extern void free(void*);
-extern void* calloc(size_t, size_t);
-extern void* realloc(void*, size_t);
-
-#else
-
-#include <stdlib.h>
+typedef union {
+  uint8_t ub;
+  int8_t sb;
+  uint16_t us;
+  int16_t ss;
+  uint32_t ul;
+  int32_t sl;
+  uint64_t uq;
+  int64_t sq;
+  float f;
+  double d;
+  void *ptr;
+} svp_arg_slot;
 
 #endif
-
-
-sl_end_header([[SLC_CMALLOC_SLH]])
