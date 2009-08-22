@@ -1,5 +1,5 @@
 //
-// f7.c: this file is part of the SL toolchain.
+// bigret.c: this file is part of the SL toolchain.
 //
 // Copyright (C) 2009 Universiteit van Amsterdam.
 //
@@ -15,14 +15,21 @@
 #include <svp/testoutput.h>
 #include <svp/compiler.h>
 
-int a;
+struct foo {
+  char hello[100];
+};
 
-noinline int* foo() { return &a; }
+noinline
+struct foo hello(void)
+{
+  struct foo l = { "hello!" };
+  return l;
+}
 
 sl_def(t_main, void)
 {
-  int *p = foo();
-  output_int(&a - p, 1); 
+  struct foo a = hello();
+  output_string(a.hello, 1);
   output_char('\n', 1);
 }
 sl_enddef
