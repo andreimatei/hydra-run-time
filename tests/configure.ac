@@ -20,7 +20,7 @@ AM_INIT_AUTOMAKE([1.11 tar-ustar no-define foreign dist-bzip2
 
 AM_SILENT_RULES([yes])
 
-SLC_PATH_LOCAL([..])
+SLC_PATH_LOCAL([../slc])
 AC_WITH_SLC
 AC_SLC_TESTS
 
