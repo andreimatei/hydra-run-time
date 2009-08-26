@@ -1,4 +1,4 @@
-## configure.ac: this file is part of the SL buildroot.
+## configure.ac: this file is part of the SL demo suite.
 ## 
 ## Copyright (C) 2009 Universiteit van Amsterdam
 ##
@@ -12,15 +12,19 @@
 ##
 
 AC_PREREQ([2.61])
-AC_INIT([sl], [2.1.0a], [sl-users@nic.surfnet.nl])
+AC_INIT([sl-tests], [2.1.0a], [sl-users@nic.surfnet.nl])
 AC_CONFIG_AUX_DIR([build-aux])
 
-AM_INIT_AUTOMAKE([1.11 tar-ustar no-define foreign dist-bzip2])
+AM_INIT_AUTOMAKE([1.11 tar-ustar no-define foreign dist-bzip2
+                  color-tests silent-rules parallel-tests])
+
+AM_SILENT_RULES([yes])
+
+SLC_PATH_LOCAL([../slc])
+AC_WITH_SLC
+AC_SLC_TESTS
 
 AC_CONFIG_FILES([Makefile])
-AC_CONFIG_SUBDIRS([slc])
-AC_CONFIG_SUBDIRS([tests])
-AC_CONFIG_SUBDIRS([programs])
 
 AC_OUTPUT
 
