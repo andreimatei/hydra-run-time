@@ -13,15 +13,16 @@
 
 # 
 
-include $(srcdir)/alltests.mk
-EXTRA_DIST = $(TESTSUITE) $(XTESTSUITE)
+SUBDIRS = build-aux tools lib doc
 
-if ENABLE_TESTSUITE
-TESTS = $(TESTSUITE)
-if ENABLE_XFAIL_TESTS
-TESTS += $(XTESTSUITE)
-endif
-endif
+README: $(srcdir)/doc/README.txt
+	$(AM_V_at)rm -f $@
+	$(AM_V_GEN)cp $(srcdir)/doc/README.txt $@
+	$(AM_V_at)chmod -w $@
 
-include $(top_srcdir)/tests.mk
+NEWS: $(srcdir)/doc/NEWS.txt
+	$(AM_V_at)rm -f $@
+	$(AM_V_GEN)cp $(srcdir)/doc/NEWS.txt $@
+	$(AM_V_at)chmod -w $@
 
+ACLOCAL_AMFLAGS = -I build-aux -I m4
