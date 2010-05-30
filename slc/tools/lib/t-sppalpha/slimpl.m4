@@ -34,7 +34,7 @@ m4_define([[__sl_funcname]], [[$1]])
 m4_define([[__sl_breaktype]], [[$2]])
 m4_step([[__sl_dispcount]])
 m4_define([[__sl_thparms]],"m4_join([[" "]],m4_shiftn(2,$@))")
-m4_esyscmd(m4_quote(PYTHON SPP_PY ppp2alpha fundef m4_sh_escape(__sl_funcname) __sl_dispcount __sl_thparms))
+m4_esyscmd(m4_quote(PYTHON SPP_PY sppalpha fundef m4_sh_escape(__sl_funcname) __sl_dispcount __sl_thparms))
 m4_assert(m4_sysval == 0)
 ]])
 m4_define([[sl_enddef]],[[
@@ -83,7 +83,7 @@ m4_foreach([[_sl_arg]],m4_quote(_sl_thargs),[[m4_apply([[sl_initarg]],m4_split(_
 register long __sl_syncvar_[[]]__sl_tag; m4_dnl
 register void* const __sl_funcptr_[[]]__sl_tag = (void*)([[$8]]);  m4_dnl
 m4_define([[__sl_thargs2]], m4_mapall_sep([[m4_sh_escape]],[[ ]], m4_dquote(m4_shiftn(8, $@))))
-m4_esyscmd(m4_quote(PYTHON SPP_PY ppp2alpha create m4_sh_escape(__sl_crfuncname) __sl_tag __sl_crbrktype __sl_thargs2))
+m4_esyscmd(m4_quote(PYTHON SPP_PY sppalpha create m4_sh_escape(__sl_crfuncname) __sl_tag __sl_crbrktype __sl_thargs2))
 m4_assert(m4_sysval == 0)
 m4_ifblank([[$1]],,[[([[$1]]) = __sl_fid_[[]]__sl_tag;]])
 ]])
