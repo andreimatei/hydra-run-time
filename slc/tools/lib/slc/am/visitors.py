@@ -166,7 +166,7 @@ class Create_2_HydraCall(ScopedVisitor):
         sync_call += ')'
         
         sync_call_assignment = CVarSet(decl = cr.cvar_exitcode, rhs = sync_call)
-        
+       
         newbl.append(sync_call_assignment)
                                         
         return newbl
@@ -347,6 +347,8 @@ class TFun_2_HydraCFunctions(DefaultVisitor):
             const tc_ident_t* prev = _get_prev_ident();
             const tc_ident_t* next = _get_next_ident();
             
+
+
             if (__end_index - __start_index > 4) {\n
             """
         if fundef.name <> "t_main":  # for main, we won't need this branch (and we can't generate it either
@@ -394,13 +396,13 @@ class TFun_2_HydraCFunctions(DefaultVisitor):
         return flatten(et.loc, " return 0 ")
 
 
-    def visit_program(self, p):
-        # TODO: remove the absolute path below
-        p._items.insert(0, Opaque("#include <stdlib.h>"))
-        p._items.insert(0, Opaque("#include \"/home/amatei/src/thesis/trunk/runtime/rt.h\""))
-        super(TFun_2_HydraCFunctions, self).visit_program(p)  # TODO: do I need
-                                                              # this call?
-        return p
+    #def visit_program(self, p):
+    #    # TODO: remove the absolute path below
+    #    p._items.insert(0, Opaque("#include <stdlib.h>"))
+    #    p._items.insert(0, Opaque("#include \"/home/amatei/src/thesis/trunk/runtime/rt.h\""))
+    #    super(TFun_2_HydraCFunctions, self).visit_program(p)  # TODO: do I need
+    #                                                          # this call?
+    #    return p
 
 
 __all__ = ["Create_2_HydraCall", "TFun_2_HydraCFunctions"]

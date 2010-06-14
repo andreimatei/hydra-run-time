@@ -243,6 +243,13 @@ for d in $slc_incdir; do
 done
 IFS=$save_IFS
 
+# Extra includes
+case $slc_dialect-$slc_variant in
+   spr-am*)
+      slc_ppflags+=(-D__SL_EXTRA_INCLUDE='"/home/amatei/src/thesis/trunk/runtime/rt.h"')
+      ;;
+esac
+
 # Compiler selection
 case $slc_dialect-$slc_arch in
     utc-x) slc_compiler=($CC_HOST -E) ;;
