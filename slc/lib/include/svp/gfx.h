@@ -1,7 +1,7 @@
 //
 // gfx.h: this file is part of the SL toolchain.
 //
-// Copyright (C) 2009 Universiteit van Amsterdam.
+// Copyright (C) 2009,2010 Universiteit van Amsterdam.
 //
 // This program is free software; you can redistribute it and/or
 // modify it under the terms of the GNU General Public License
@@ -40,8 +40,8 @@
 #endif
 #else
 
-#include <cstddef.h>
-#include <cstdint.h>
+#include <stddef.h>
+#include <stdint.h>
 #include <svp/compiler.h>
 
 extern uint32_t * __restrict__ __gfx_framebuffer;
