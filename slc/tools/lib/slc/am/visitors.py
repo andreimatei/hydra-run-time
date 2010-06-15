@@ -46,7 +46,7 @@ class Create_2_HydraCall(ScopedVisitor):
             # find my own index
             index = self.get_arg_index(arg = seta.decl, shared = True)
             setter = (flatten(seta.loc, "write_istruct(&") +
-                self.__first_tc + ('.tc->shareds[%d], ' % index) + b +
+                self.__first_tc + ('.tc->shareds[%d], ' % index) + '(long)(' + b + ')' +
                 ', &' + self.__first_tc + ');\n')
         else:
             # find my own index
@@ -56,7 +56,7 @@ class Create_2_HydraCall(ScopedVisitor):
             # that we don't execute the rhs again)
             setter = CVarSet(loc = seta.loc, decl = seta.decl.cvar, rhs = b) + ';'
             setter += (flatten(seta.loc, "write_global(") +
-                self.__fam_context + ', %s' % index + ', ' + CVarUse(decl = seta.decl.cvar) + ');\n')
+                self.__fam_context + ', %s' % index + ', (long)' + CVarUse(decl = seta.decl.cvar) + ');\n')
 
         self.__arg_setters.append(setter)
         return None
@@ -182,26 +182,26 @@ class TFun_2_HydraCFunctions(DefaultVisitor):
         newbl = []
         param = self.__paramNames_2_params[getp.name]
         if not param.isShared:
-            newbl.append(flatten(None,
-                        'read_istruct(&cur_tc->globals[%d], _get_parent_ident())' %
-                        param.index))
+            newbl.append(flatten(None, '((') + getp.decl.ctype + ')'
+                        'read_istruct(&cur_tc->globals[%d], _get_parent_ident()))' %
+                        param.index)
         else: #shared
             if self.__state == 0: #begin
-                newbl.append(flatten(None,#getp.loc,
-                            'read_istruct(&cur_tc->shareds[%d], prev)' %
-                            param.index))
+                newbl.append(flatten(None, '((') + getp.decl.ctype + ')' +
+                            'read_istruct(&cur_tc->shareds[%d], prev))' %
+                            param.index)
             elif self.__state == 1: #middle
-                newbl.append(flatten(None,#getp.loc,
-                            'read_istruct_same_tc(&cur_tc->shareds[%d])' %
-                            param.index))
+                newbl.append(flatten(None, '((') + getp.decl.ctype + ')' +
+                            'read_istruct_same_tc(&cur_tc->shareds[%d]))' %
+                            param.index)
             elif self.__state == 2: #end
-                newbl.append(flatten(None,#getp.loc,
-                            'read_istruct_same_tc(&cur_tc->shareds[%d])' %
-                            param.index))
+                newbl.append(flatten(None, '((') + getp.decl.ctype + ')' +
+                            'read_istruct_same_tc(&cur_tc->shareds[%d]))' %
+                            param.index)
             elif self.__state == 3: #generic
-                newbl.append(flatten(None,#getp.loc,
-                            'read_istruct(&cur_tc->shareds[%d], prev)' %
-                            param.index))
+                newbl.append(flatten(None, '((') + getp.decl.ctype + ')' +
+                            'read_istruct(&cur_tc->shareds[%d], prev))' %
+                            param.index)
             else:
                assert False
 
@@ -216,7 +216,7 @@ class TFun_2_HydraCFunctions(DefaultVisitor):
         #write to a global (from a child) and, if so, what it's supposed to mean
         assert(param.isShared)
 
-        if setp.decl.seen_get:
+        if setp.decl.seen_get:  # TODO: do I need casting for b in all the branched below?
             if self.__state == 0: #begin
                 newbl.append(flatten(None,#setp.loc,
                              'write_istruct_same_tc(&cur_tc->shareds[%d],' %
@@ -227,7 +227,7 @@ class TFun_2_HydraCFunctions(DefaultVisitor):
                              'write_istruct_same_tc(&cur_tc->shareds[%d],' %
                               param.index) + b + ')')
             elif self.__state == 2 or self.__state == 3: #end and generic
-                newbl.append(flatten(None,#setp.loc,
+                newbl.append(flatten(None,#setp.loc,  # end and generic are passed the array of shareds as an argument
                              'if (_is_last_tc()) {shareds[%d] = ' % param.index) \
                              + b \
                              + ';} else {write_istruct(&next->tc->shareds[%d], ' % param.index \
@@ -242,6 +242,7 @@ class TFun_2_HydraCFunctions(DefaultVisitor):
 
     def visit_funparm(self, parm):
         self.__paramNames_2_params[parm.name] = parm
+        assert not (parm.type.startswith("shf") or parm.type.startswith("glf"))
         if parm.type.startswith("sh"):
             parm.isShared = True
             parm.index = self.__sh_parm_index
