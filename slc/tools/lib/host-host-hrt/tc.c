@@ -1,4 +1,3 @@
-#include "sl_hrt.h"
 #include <ucontext.h>
 #include <stdio.h>
 #include <unistd.h>
@@ -9,6 +8,7 @@
 #include <string.h>
 #include <stdarg.h>
 #include <signal.h>
+#include "sl_hrt.h"
 
 
 #define CACHE_LINE_SIZE 128  // in bytes
@@ -563,13 +563,13 @@ stack_t alloc_stack(int tc_index, int size) {
   void* mapping =
     mmap(stack_lowaddr, size, PROT_READ | PROT_WRITE,
          MAP_PRIVATE|MAP_FIXED|MAP_ANON|
-#if defined(MAP_GROWSDOWN) /* linux */
+//#if defined(MAP_GROWSDOWN) /* linux */
    MAP_GROWSDOWN
-#elif defined(MAP_STACK) /* FreeBSD */
-   MAP_STACK
-#else
-#error Cannot request stack-like mmap on this system.
-#endif
+//#elif defined(MAP_STACK) /* FreeBSD */
+//   MAP_STACK
+//#else
+//#error Cannot request stack-like mmap on this system.
+//#endif
     , -1, 0);
   if (mapping == MAP_FAILED) {
     perror("alloc_stack"); exit(1);
@@ -928,6 +928,7 @@ extern fam_main_t _fam_t_main;
 /*
   main function; sets up the runtime and creates fam_main, with one thread
  */
+#undef main
 int main(int argc, char** argv) {
 
   struct sigaction sa;

@@ -141,7 +141,7 @@ case $alias in
     mta_s)        alias=spr-seq_naked-mtalpha-sim ;;
 
     hrt)          alias=spr-hrt_hybrid-host-host-hrt ;;
-    hrt_n)        alias=spr-hrt_naked-host-host-hrt ;;
+    hrt_n)        alias=spr-hrt_naked-host-host-hrt ;slc_use_libsl=no ;;
     hrt_s)        alias=spr-seq_naked-host-host-hrt ;;
 
     ptl)   alias=ptl-ptl-host-host-ptl ;;
@@ -361,7 +361,9 @@ case $slc_arch-$slc_os in
 	slc_debug_flags=()
 	;;
     host-host-hrt)
+        slc_ppflags+=(-D_GNU_SOURCE -D_XOPEN_SOURCE -Dmain=__program_main)
         slc_ldflags+=($PTHREAD_LIBS -static)
+        slc_cflags+=(-O0)
         ;;
 esac
 
