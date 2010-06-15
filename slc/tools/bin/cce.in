@@ -141,7 +141,7 @@ case $alias in
     mta_s)        alias=spr-seq_naked-mtalpha-sim ;;
 
     hrt)          alias=spr-hrt_hybrid-host-host-hrt ;;
-    hrt_n)        alias=spr-hrt_naked-host-host-hrt ;slc_use_libsl=no ;;
+    hrt_n)        alias=spr-hrt_naked-host-host-hrt ;;
     hrt_s)        alias=spr-seq_naked-host-host-hrt ;;
 
     ptl)   alias=ptl-ptl-host-host-ptl ;;
@@ -198,7 +198,7 @@ case $slc_dialect in
             seq_naked) target=seq ;;
             mta_naked) target=mta ;;
             mta_hybrid) target=mta+seq ;;
-            hrt_naked)  target=hrt ;;
+            hrt_naked)  target=hrt ;slc_use_libsl=no; slc_use_main=no;;
             hrt_hybrid) target=hrt+seq ;;
             *) echo "unknown variant: $slc_dialect-$slc_variant" >&2 ;;
         esac
