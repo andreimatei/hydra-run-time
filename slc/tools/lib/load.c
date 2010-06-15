@@ -70,16 +70,9 @@ void *__fibre_base = 0;
 
 __attribute__((__constructor__))
 void slr_init(
-#ifndef __cplusplus
-int argc, char **argv
-#endif
 )
 {
     char *progname = 0;
-#ifndef __cplusplus
-    if (argc && argv[0][0])
-        progname = argv[0];
-#endif
     char *vs = getenv("VERBOSE");
     bool verbose = false;
     if (vs && vs[0])
