@@ -43,6 +43,9 @@ CC_MTSPARC=$UTCC_MTSPARC
 AR_MTSPARC=${AR_MTSPARC_OVERRIDE:-@AR_MTSPARC@}
 RANLIB_MTSPARC=${RANLIB_MTSPARC_OVERRIDE:-@RANLIB_MTSPARC@}
 
+PTHREAD_CC=${PTHREAD_CC_OVERRIDE:-@PTHREAD_CC@}
+PTHREAD_CFLAGS=${PTHREAD_CFLAGS_OVERRIDE:-@PTHREAD_CFLAGS@}
+PTHREAD_LIBS=${PTHREAD_LIBS_OVERRIDE:-@PTHREAD_LIBS@}
 
 version=@slc_version@
 bugreports=@bugreports@
@@ -136,7 +139,10 @@ case $alias in
     mta_n)        alias=spr-mta_naked-mtalpha-sim ;;
     mta_on)       alias=spp-mta_naked-mtalpha-sim ;;
     mta_s)        alias=spr-seq_naked-mtalpha-sim ;;
-    am)           alias=spr-am_naked-host-host-seqc ;;
+
+    hrt)          alias=spr-hrt_hybrid-host-host-hrt ;;
+    hrt_n)        alias=spr-hrt_naked-host-host-hrt ;slc_use_libsl=no ;;
+    hrt_s)        alias=spr-seq_naked-host-host-hrt ;;
 
     ptl)   alias=ptl-ptl-host-host-ptl ;;
     utc0)  alias=utc0-mta_naked-mtalpha-sim ;;
@@ -190,9 +196,10 @@ case $slc_dialect in
         target=unknown
         case $slc_variant in
             seq_naked) target=seq ;;
-            am_naked) target=am ;;
             mta_naked) target=mta ;;
             mta_hybrid) target=mta+seq ;;
+            hrt_naked)  target=hrt ;;
+            hrt_hybrid) target=hrt+seq ;;
             *) echo "unknown variant: $slc_dialect-$slc_variant" >&2 ;;
         esac
         slc_translator=("$spr_helper" -b "$target")
@@ -204,7 +211,6 @@ case $slc_dialect in
     spr|utc*|seqc*|ptl*) slc_transbase=$slc_dialect ;;
     spp) slc_transbase=$slc_dialect$basearch ;;
 esac
-
 
 save_IFS=$IFS
 IFS=:
@@ -220,7 +226,7 @@ if test -z "$found"; then
 else
     slc_trans=$found
     slc_tflags+=("-I$slc_trans")
-    slc_pp_prefix=(-include "$slc_trans/include/sl_support.h")
+    slc_pp_prefix+=(-include "$slc_trans/include/sl_support.h")
 fi
 
 for m4_preinc in slc_m4sugar.m4 slc.m4; do
@@ -255,10 +261,11 @@ case $slc_dialect-$slc_arch in
     utc-x) slc_compiler=($CC_HOST -E) ;;
     *-x) slc_compiler=("$scu_helper" compile) ;;
     *-host)
-	case $slc_complang in
-	    cpp) slc_compiler=($CXX_HOST) ;;
-	    c)   slc_compiler=($CC_HOST -std=gnu99) ;;
-	    utc) echo "$basename: warning: no compiler for $dialect-$arch" >&2 ;;
+	case $slc_complang-$slc_os in
+            c-*hrt)   slc_compiler=($PTHREAD_CC $PTHREAD_CFLAGS) ;;
+            cpp-*ptl) slc_compiler=($CXX_HOST $PTHREAD_CFLAGS -D_GLIBCXX_USE_C99_MATH=1) ;; 
+	    c-*)      slc_compiler=($CC_HOST) ;;
+	    *) echo "$basename: warning: no compiler for $dialect-$arch" >&2 ;;
 	esac
 	slc_filter1=(cp)
 	slc_filter2=(cp)
@@ -282,12 +289,14 @@ case $slc_dialect-$slc_arch in
 esac
 
 # Compiler flags selection; default to optimize
-case $slc_dialect in
-    spr)
+case $slc_dialect-$slc_arch in
+    spr-mt*)
 	slc_cflags+=(-O2) ;;
-    spp)
+    spr-host)
+        slc_cflags+=(-O3) ;;
+    spp-*)
 	slc_cflags+=(-O2 -DMT_FORCE_TEMP_FOR_SHARED_WRITE=1) ;;
-    utc0)
+    utc0-*)
 	slc_cflags+=(-O1) ;;
     *) ;;
 esac
@@ -295,8 +304,14 @@ esac
 # Assembler and linker selection
 case $slc_complang-$slc_arch in
     *-x)      slc_aslink=("$scu_helper" assemble/link);;
-    cpp-host) slc_aslink=(${CXX_HOST:-g++}) ;;
-    *-host)   slc_aslink=(${CC_HOST:-gcc}) ;;
+    *-host)
+	case $slc_complang-$slc_os in
+            c-*hrt)   slc_aslink=($PTHREAD_CC $PTHREAD_CFLAGS $PTHREAD_LIBS) ;;
+	    cpp-*ptl) slc_aslink=($CXX_HOST $PTHREAD_CFLAGS $PTHREAD_LIBS) ;;
+	    c-*)      slc_aslink=($CC_HOST) ;;
+	    *) echo "$basename: warning: no as/ld for $dialect-$arch" >&2 ;;
+	esac
+	;;
     cpp-*)    slc_aslink=($(eval "echo \${CXX_$archvar:-\"\$scu_helper\"}")) ;;
     *-*)      slc_aslink=($(eval "echo \${CC_$archvar:-\"\$scu_helper\"}")) ;;
 esac
@@ -321,31 +336,42 @@ case $slc_arch in
 	      ;;
 esac
 
-# Extra defines
+
+# Propagate selection to programs/libraries
+slc_ppflags+=( \
+    -D__slc_dialect_${slc_dialect//[^a-zA-Z0-9]/_}__ \
+    -D__slc_variant_${slc_variant//[^a-zA-Z0-9]/_}__ \
+    -D__slc_arch_${slc_arch//[^a-zA-Z0-9]/_}__ \
+    -D__slc_os_${slc_os//[^a-zA-Z0-9]/_}__ )
+
+# Extra flag selection
+
 case $slc_arch in
     mtalpha)
-        slc_cflags+=(-mcpu=ev6 -mfix -mcix -mmax -mbwx -fno-math-errno -fno-trapping-math)
+        slc_cflags+=(-mcpu=21264a -fno-math-errno -fno-trapping-math)
         ;;
     *)
 	;;
 esac
 slc_ppflags+=(-DUSE_C_DIVIDE)
 
-# Extra flag selection
+slc_debug_flags=(${slc_debug_flags:+$slc_debug_flags})
 case $slc_arch-$slc_os in
     mt*-sim)
         slc_ppflags+=(-D__mt_freestanding__ -D__WORDSIZE=64)
         # slc_cflags="$slc_cflags -D__mt_freestanding__ -D__WORDSIZE=64"
         # slc_cflags="$slc_cflags -nostdinc"
 	slc_ldflags+=(-Wl,-Ttext -Wl,0x1000000 -nostdlib)
-	if test -n "$slc_debug_flags"; then
-	    echo "$basename: warning: flags unsupported by $slc_arch-$slc_os: $slc_debug_flags" >&2
+	if test "x$slc_debug_flags" != "x"; then
+	    echo "$basename: warning: flags unsupported by $slc_arch-$slc_os: ${slc_debug_flags[*]}" >&2
 	fi
 	slc_debug_flags=()
 	;;
-    *)
-	slc_debug_flags=(${slc_debug_flags:+$slc_debug_flags})
-	;;
+    host-host-hrt)
+        slc_ppflags+=(-D_GNU_SOURCE -D_XOPEN_SOURCE -Dmain=__program_main)
+        slc_ldflags+=($PTHREAD_LIBS -static)
+        slc_cflags+=(-O0)
+        ;;
 esac
 
 # OS selection
@@ -382,7 +408,10 @@ case $slc_os in
 	if test "$slc_use_libsl" != "no"; then
             slc_ldflags+=("-lsl")
 	fi
-	slc_ldflags+=("-lslc")
+
+        if test "$slc_use_slrt" != "no"; then
+	    slc_ldflags+=("-lslc")
+        fi
 
         if test "$slc_use_main" != "no"; then
             slc_ldflags+=("-lslmain")
@@ -390,14 +419,6 @@ case $slc_os in
 
         IFS=$save_IFS
 	;;
-esac
-
-# Program entry selection
-case $slc_os in
-    host-ptl)
-	slc_ldflags+=(-lpthread)
-	;;
-    *)  ;;
 esac
 
 set | grep '^slc_'

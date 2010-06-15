@@ -1,5 +1,5 @@
 //
-// malloc_wrappers.c: this file is part of the SL toolchain.
+// stdbool.h: this file is part of the SL toolchain.
 //
 // Copyright (C) 2009,2010 Universiteit van Amsterdam.
 //
@@ -12,24 +12,12 @@
 // `COPYING' file in the root directory.
 //
 
-#include <cstdlib.h>
+#ifndef SLC_MTA_STDBOOL_H
+# define SLC_MTA_STDBOOL_H
 
-void* malloc(size_t sz)
-{
-  return fast_malloc(sz);
-}
+#define bool _Bool
+#define true 1
+#define false 0
+#define __bool_true_false_are_defined 1
 
-void free(void* ptr)
-{
-  return fast_free(ptr);
-}
-
-void* calloc(size_t cnt, size_t sz)
-{
-  return fast_calloc(cnt, sz);
-}
-
-void* realloc(void *ptr, size_t sz)
-{
-  return fast_realloc(ptr, sz);
-}
+#endif // ! SLC_MTA_STDBOOL_H

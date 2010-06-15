@@ -12,10 +12,10 @@
 // `COPYING' file in the root directory.
 //
 
-#include <cstdint.h>
-#include <cstddef.h>
+#include <stdint.h>
+#include <stddef.h>
+#include <assert.h>
 #include <svp/slr.h>
-#include <svp/assert.h>
 #include <svp/delegate.h>
 
 #define ROL32(W, bits) (((W) << bits) | ((W) >> (32 - bits)))
@@ -145,11 +145,12 @@ uint32_t output[5];
 slr_decl(slr_var(unsigned, N, "problem size (512-bit chunks)"));
 
 // SLT_RUN: N=10
+// XIGNORE: mta_*n:R
 
 sl_def(t_main, void)
 {
   unsigned sz = slr_get(N)[0];
-  svp_assert(sz < MAX_CHUNKS);
+  assert(sz < MAX_CHUNKS);
   sl_create(,,,,,,, sha1_kernel,
 	    sl_glarg(uint32_t*restrict, gout, output),
 	    sl_glarg(const uint32_t*restrict, ginput, data),

@@ -11,7 +11,7 @@
 ## `COPYING' file in the root directory.
 ##
 
-AC_PREREQ([2.61])
+AC_PREREQ([2.65])
 AC_INIT([sl-core], 
         m4_esyscmd([(pre=; if test -d ../.git -a ! -d .git; then pre=$PWD/; cd ..; fi; \
                     ${pre}build-aux/version-gen ${pre}build-aux/tarball-version ${pre}build-aux/package-version)]), 
@@ -32,7 +32,7 @@ AC_CACHE_CHECK([for Bourne-Again shell], [ac_cv_path_BASH],
 AC_SUBST([BASH], [$ac_cv_path_BASH])
 
 AC_PROG_GNU_M4
-AM_PATH_PYTHON([2.5],[],[AC_MSG_ERROR([`slr' requires Python 2.5 or later])])
+AM_PATH_PYTHON([2.6],[],[AC_MSG_ERROR([The SL tool chain requires Python >= 2.6.])])
 
 
 m4_define([SLC_OPT_PROG],
@@ -59,16 +59,67 @@ SLC_OPT_PROG([help2man],
 
 AC_PROG_EGREP
 AC_PROG_SED
-AC_PROG_CC
+AC_PROG_CC_C99
+
+if test "x$ac_cv_prog_cc_c99" = "xno"; then
+   AC_MSG_ERROR([Cannot find a C99 compiler.])
+fi
+
 AC_PROG_CXX
 AC_PROG_RANLIB
 AC_PROG_LN_S
+AX_PTHREAD
+AX_TLS
 
 ######### Options #########
 
 SLC_PATH_LOCAL([.])
 AC_WITH_SLC
 SLC_CHECK_TARGETS
+
+if test "x$ax_pthread_ok" = "xyes" -a "x$ac_cv_tls" != "xnone"; then
+   PTHREAD_CFLAGS="$PTHREAD_CFLAGS -DTHREADSPEC=$ac_cv_tls"
+fi
+AM_CONDITIONAL([CHECK_TLSMALLOC], [test "x$ax_pthread_ok" = "xyes" -a "x$ac_cv_tls" != "xnone"])
+
+
+if test "x$enable_ptl" = "xyes"; then
+  if test "x$GXX" != "xyes"; then
+     AC_MSG_WARN([not using the GNU C++ compiler. muTC-ptl support is disabled.])
+     enable_ptl=no
+  fi
+  if test "x$ax_pthread_ok" != "xyes"; then
+     AC_MSG_WARN([POSIX threads not available. muTC-ptl support is disabled.])
+     enable_hrt=no
+  fi
+fi
+
+if test "x$enable_hrt" = "xyes"; then
+  if test "x$ax_pthread_ok" != "xyes"; then
+     AC_MSG_WARN([POSIX threads not available. hrt support is disabled.])
+     enable_hrt=no
+  fi
+fi
+
+if test "x$enable_mtalpha" = "xyes"; then
+  if test "x$UTCC_MTALPHA" = "xno" \
+     -o "x$CC_ALPHA" = "xno" \
+     -o "x$AR_MTALPHA" = "xno" \
+     -o "x$RANLIB_MTALPHA" = "xno"; then
+   AC_MSG_WARN([Some Alpha/MT-Alpha utilities are missing; MT-Alpha support disabled.])
+   enable_mtalpha=no
+  fi
+fi
+
+if test "x$enable_mtsparc" = "xyes"; then
+  if test "x$UTCC_MTSPARC" = "xno" \
+     -o "x$CC_SPARC" = "xno" \
+     -o "x$AR_MTSPARC" = "xno" \
+     -o "x$RANLIB_MTSPARC" = "xno"; then
+   AC_MSG_WARN([Some Sparc/MT-Sparc utilities are missing; MT-Sparc support disabled.])
+   enable_mtsparc=no
+  fi
+fi
 
 if test "x$MGSIM_ALPHA" = "xno"; then
    AC_MSG_WARN([Cannot find the MT-Alpha Microgrid simulator. `slr' will not run MT-Alpha programs.])
@@ -86,6 +137,7 @@ AC_CONFIG_FILES([
 	tools/lib/Makefile
         tools/lib/slc_config.py
 	lib/Makefile
+        lib/src/tlsmalloc/Makefile
 	doc/Makefile
 ])
 

@@ -1,3 +1,433 @@
+2010-06-14  Raphael 'kena' Poss  <r.c.poss@uva.nl>
+
+	* doc/NEWS.txt: Initialize for 3.1.x.
+
+2010-06-14  Raphael 'kena' Poss  <r.c.poss@uva.nl>
+
+	Release version 3.1.
+
+	* build-aux/package_version: Update to 3.1.
+
+	* doc/NEWS.txt: Document recent changes.
+
+2010-06-14  Raphael 'kena' Poss  <r.c.poss@uva.nl>
+
+	Packaging fixes.
+	
+	* lib/Makefile.am (nobase_dist_pkgdata_DATA): Remove duplicate.
+	* lib/src/tlsmalloc/Makefile.am: List `tls_arch_pthreads.h' and
+	`tlsconfig.h'.
+	* tools/lib/Makefile.am (nobase_python_PYTHON): List `am'.
+
+2010-06-14  Raphael 'kena' Poss  <r.c.poss@uva.nl>
+
+	Fix library build.
+	
+	* lib/src/getenv.c,
+	* lib/src/gdtoa/gdtoaimpl.h: Use `malloc' and `free' instead of
+	`fast_malloc' and `fast_free'.
+
+2010-06-14  Raphael 'kena' Poss  <r.c.poss@uva.nl>
+
+	Improve the TLS memory allocator.
+
+	* lib/src/tlsmalloc/tlsconfig.h,
+	* lib/src/tlsmalloc/tlsmalloc.c: Optimize bin selection by using
+	compiler built-in bit count operations.
+
+	* lib/src/tlsmalloc/tlsmcheck.c: Update accordingly.
+
+	* lib/src/tlsmalloc/tlsmalloc.c (free_superblock): Fix bug where
+	too many superblocks would be released.
+
+2010-06-14  Raphael 'kena' Poss  <r.c.poss@uva.nl>
+
+	Minor fixes to quiet compiler warnings.
+
+	* lib/src/strncmp.c,
+	* lib/src/vprintf.c: Use the standard C header names.
+
+2010-06-14  Raphael 'kena' Poss  <r.c.poss@uva.nl>
+
+	Make the TLS memory allocator the default allocator on MT-Alpha.
+
+	* lib/src/malloc_wrappers.c: Remove.
+	
+	* lib/mtalpha.mk: Do not build the dlmalloc wrappers any
+	more. Compile `tlsmalloc' and rename the services to their
+	standard C names.
+
+2010-06-14  Raphael 'kena' Poss  <r.c.poss@uva.nl>
+
+	Enhance the TLS memory allocator.
+
+	* lib/mtalpha-sim/include/stdlib.h: Rename the `fast_XXX' macros
+	to `excl_dlXXX' to clarify their meaning.
+
+	* lib/src/tlsmalloc/tls_arch_mtalpha.h: Use them. Also, use the
+	new MGSim mmap/munmap interface to manage storage.
+
+	* lib/src/tlsmalloc/tlsmalloc.c: Place the count of superblocks at
+	the first word, since this has a special behavior on the Microgrid
+	(permissions are not checked for the first word of TLS, so it can
+	be read to 0 without error). Also, map and count the control block
+	itself. Rename the `mallinfo' services to `stats', since
+	`mallinfo' has special semantics not supported yet. 
+
+	* lib/src/tlsmalloc/tlsmalloc.h,
+	* lib/src/tlsmalloc/tlsmalloc.c: Fix interface of `calloc'.
+
+	* lib/src/tlsmalloc/tricks.h: Fix `forceinline'.
+
+2010-06-14  Raphael 'kena' Poss  <r.c.poss@uva.nl>
+
+	Enhance the SL/MGSim interface.
+
+	The Microgrid simulator was recently modified to allow programs to
+	interact more with the simulation. With the increased functionality,
+	some extra encapsulation in the library becomes needed.
+
+	* tools/include/svp/mgsim.h: New. Encapsulates accesses to MGSim
+	control functions.
+	* tools/Makefile.am: List the new file.
+
+	* tools/include/svp/abort.h,
+	* tools/include/svp/testoutput.h,
+	* lib/include/svp/gfx.h: Use it.
+	
+	* lib/src/exit.c: New.
+	* lib/mtalpha.mk: List the new file.
+	* lib/mtalpha-sim/include/stdlib.h: Declare `exit' and `_Exit'.
+
+2010-06-13  Raphael 'kena' Poss  <r.c.poss@uva.nl>
+
+	Enhance TLS memory allocator.
+
+	* lib/src/tlsmalloc/Makefile.am,
+	* lib/src/tlsmalloc/tls_arch_mtalpha.h,
+	* lib/src/tlsmalloc/tls_arch_pthread.h,
+	* lib/src/tlsmalloc/tlsconfig.h,
+	* lib/src/tlsmalloc/tlsmalloc.c,
+	* lib/src/tlsmalloc/tlsmalloc.h,
+	* lib/src/tlsmalloc/tlsmcheck.c: Improve.
+
+2010-06-13  Raphael 'kena' Poss  <r.c.poss@uva.nl>
+
+	Initial implementation of TLS memory allocator.
+
+	* lib/src/tlsmalloc/Makefile.am,
+	* lib/src/tlsmalloc/tls_arch_mtalpha.h,
+	* lib/src/tlsmalloc/tls_arch_pthread.h,
+	* lib/src/tlsmalloc/tlsconfig.h,
+	* lib/src/tlsmalloc/tlsmalloc.c,
+	* lib/src/tlsmalloc/tlsmalloc.h,
+	* lib/src/tlsmalloc/tlsmcheck.c,
+	* lib/src/tlsmalloc/tricks.h: New.
+
+	* lib/Makefile.am,
+	* lib/mtalpha.mk: List the new files.
+
+	* build-aux/ax_tls.m4: New.
+	* configure.ac: Use it.
+
+2010-06-13  Raphael 'kena' Poss  <r.c.poss@uva.nl>
+
+	Support use of standard C header names in SL code.
+
+	* lib/include/bits/float.h,
+	* lib/include/sys/ctypes.h,
+	* lib/include/calloca.h,
+	* lib/include/cassert.h,
+	* lib/include/cctype.h,
+	* lib/include/cerrno.h,
+	* lib/include/cfloat.h,
+	* lib/include/climits.h,
+	* lib/include/cmalloc.h,
+	* lib/include/cmath.h,
+	* lib/include/cstdarg.h,
+	* lib/include/cstdbool.h,
+	* lib/include/cstddef.h,
+	* lib/include/cstdint.h,
+	* lib/include/cstdio.h,
+	* lib/include/cstdlib.h,
+	* lib/include/cstring.h,
+	* lib/include/cstrings.h,
+	* lib/include/ctime.h: Deprecate. Move MT-specific content to...
+
+	* lib/mtalpha-sim/include/bits/float.h,
+	* lib/mtalpha-sim/include/sys/types.h,
+	* lib/mtalpha-sim/include/alloca.h,
+	* lib/mtalpha-sim/include/assert.h,
+	* lib/mtalpha-sim/include/errno.h,
+	* lib/mtalpha-sim/include/float.h,
+	* lib/mtalpha-sim/include/limits.h,
+	* lib/mtalpha-sim/include/math.h,
+	* lib/mtalpha-sim/include/stdarg.h,
+	* lib/mtalpha-sim/include/stdbool.h,
+	* lib/mtalpha-sim/include/stddef.h,
+	* lib/mtalpha-sim/include/stdint.h,
+	* lib/mtalpha-sim/include/stdio.h,
+	* lib/mtalpha-sim/include/stdlib.h,
+	* lib/mtalpha-sim/include/string.h,
+	* lib/mtalpha-sim/include/strings.h,
+	* lib/mtalpha-sim/include/sys/types.h,
+	* lib/mtalpha-sim/include/time.h: ...here, and...
+	* lib/include/svp/fast_malloc.h: ...here.
+
+	* lib/Makefile.am,
+	* lib/mtalpha.mk: Update file lists accordingly.
+	
+	* lib/src/malloc.c: Use the standard header names.
+	* lib/src/mtalpha.mk: Relax defines for `malloc'.
+
+	* lib/include/svp/argslot.h,
+	* lib/include/svp/assert.h,
+	* lib/include/svp/div.h,
+	* lib/include/svp/gfx.h,
+	* lib/include/svp/io.h,
+	* lib/include/svp/iomacros.h,
+	* lib/include/svp/perf.h,
+	* lib/include/svp/sep.h,
+	* tools/include/svp/fibre.h,
+	* tools/include/svp/slr.h,
+	* tools/lib/arggen.c,
+	* lib/src/_hdtoa.c,
+	* lib/src/abort.c,
+	* lib/src/atoi.c,
+	* lib/src/atol.c,
+	* lib/src/atoll.c,
+	* lib/src/bcopy.c,
+	* lib/src/ctype.c,
+	* lib/src/dtoa_simple.c,
+	* lib/src/fprintf.c,
+	* lib/src/gdtoa/g_ddfmt.c,
+	* lib/src/gdtoa/gdtoa.h,
+	* lib/src/gdtoa/gdtoaimp.h,
+	* lib/src/gdtoa/hexnan.c,
+	* lib/src/getenv.c,
+	* lib/src/heap.c,
+	* lib/src/io.c,
+	* lib/src/malloc_wrappers.c,
+	* lib/src/memset.c,
+	* lib/src/missing_uclibc_math.c,
+	* lib/src/mtconf.h,
+	* lib/src/mtinit.c,
+	* lib/src/mtsep.c,
+	* lib/src/mtstdio.h,
+	* lib/src/perf.c,
+	* lib/src/printf-pos.c,
+	* lib/src/printf.c,
+	* lib/src/printfcommon.h,
+	* lib/src/printflocal.h,
+	* lib/src/snprintf.c,
+	* lib/src/sprintf.c,
+	* lib/src/stpcpy.c,
+	* lib/src/stpncpy.c,
+	* lib/src/strcat.c,
+	* lib/src/strchr.c,
+	* lib/src/strcpy.c,
+	* lib/src/strdup.c,
+	* lib/src/strerror.c,
+	* lib/src/strlcat.c,
+	* lib/src/strlcpy.c,
+	* lib/src/strlen.c,
+	* lib/src/strncat.c,
+	* lib/src/strncpy.c,
+	* lib/src/strnlen.c,
+	* lib/src/strtol.c,
+	* lib/src/strtoll.c,
+	* lib/src/strtoul.c,
+	* lib/src/strtoull.c,
+	* lib/src/sys_errlist.c,
+	* lib/src/vfprintf.c,
+	* lib/src/vsnprintf.c: Use the standard header names.
+
+2010-06-13  Raphael 'kena' Poss  <r.c.poss@uva.nl>
+
+	Fix `slr' for target `ptl'.
+
+	* tools/lib/host-host-ptl/slrt.c: Fix typo in long `cce' tag.
+
+2010-06-13  Raphael 'kena' Poss  <r.c.poss@uva.nl>
+
+	Enhance `ptl' target.
+
+	* configure.ac: Disable `ptl' target if POSIX threads are not
+	detected.
+	
+	* tools/bin/cce.in: Use `PTHREAD_CFLAGS' and `PTHREAD_LIBS' when
+	compiling for target `ptl'. Define `_GLIBCXX_USE_C99_MATH' always
+	for `ptl'.
+
+	* tools/lib/ptl.mk (ptl_host_host_ptl_libslc_a_CXXFLAGS): Use
+	`PTHREAD_CFLAGS.'
+	
+	* lib/ptl.mk (SLC_PTL): Use `AM_CXXFLAGS' too.
+
+2010-06-13  Raphael 'kena' Poss  <r.c.poss@uva.nl>
+
+	Fix bug in build of `libslc' for `hrt' targets.
+
+	* tools/lib/hrt.mk: Use `CFLAGS' instead of `CXXFLAGS'. Use `slc'
+	to compile `tc.c' since it needs extra compiler flags known to
+	`cce' only.
+
+2010-06-13  Raphael 'kena' Poss  <r.c.poss@uva.nl>
+
+	Configuration fix.
+
+	* build-aux/slc.m4: Move tests for environment compatibility to...
+	* configure.ac: ... here, because they are embedded in `cce' afterwards.
+
+2010-06-13  Raphael 'kena' Poss  <r.c.poss@uva.nl>
+
+	Remove `hrt' from default build.
+
+	The set of conditions that allow to build the `hrt' runtime is not
+	yet precisely known. Build is likely to fail on most systems.
+
+	* configure.ac: Disable `hrt' by default.
+
+2010-06-13  Raphael 'kena' Poss  <r.c.poss@uva.nl>
+
+	Fix bug in `spr'.
+
+	* tools/lib/slc/lower/lowercreate.py (AutoResolve): Insert
+	missing semicolon in generated code.
+
+2010-06-13  Raphael 'kena' Poss  <kena@coda.science.uva.nl>
+
+	Fix bugs in `hrt' compilation.
+
+	* tools/bin/cce.in: Use pthreads for `slc_aslink' when
+	necessary. Fix initialization of `slc_debug_flags'.
+
+	* tools/lib/hrt.mk: Use `$(SLC_HRT_N)'.
+
+	* tools/lib/slc/am/visitors.py: Use 0 instead of `NULL'.
+
+2010-06-13  Raphael 'kena' Poss  <kena@coda.science.uva.nl>
+
+	Try to provide some FreeBSD compatibility for `hrt'.
+
+	* tools/lib/host-host-hrt/tc.c (alloc_stack): Try to use
+	`MAP_STACK' if `MAP_GROWSDOWN' is not defined (FreeBSD).
+
+2010-06-13  Raphael 'kena' Poss  <r.c.poss@uva.nl>
+
+	Merge the following changes.
+
+	2010-06-13  Raphael 'kena' Poss  <r.c.poss@uva.nl>
+
+	Bump required tool versions.
+
+	* configure.ac: Require Autoconf 2.65 and Python 2.6.
+
+	2010-06-13  Raphael 'kena' Poss  <r.c.poss@uva.nl>
+
+	Better support for C99.
+
+	* configure.ac: Require a C99 compiler.
+
+	* tools/bin/cce.in: Do not add `-std=gnu99', since `configure' now
+	does the right thing.
+
+2010-06-11  Raphael 'kena' Poss  <r.c.poss@uva.nl>
+
+	Extend build process for `hrt' targets.
+
+	* build-aux/slc.m4: New conditional ENABLE_SLC_HRT.
+
+	* build-aux/ax_pthread.m4: Import from the Autoconf archive.
+	* configure.ac: Use it.
+
+	* tools/bin/Makefile.am,
+	* tools/bin/cce.in: Propagate compiler/flags for pthreads to use
+	with `hrt' targets.
+
+	* tools/lib/host-host-hrt/include/sl_hrt.h,
+	* tools/lib/host-host-hrt/tc.c: New (placeholders).
+
+	* tools/lib/host-host-hrt/slrt.c,
+	* tools/lib/hrt.mk: New.
+
+	* tools/lib/Makefile.am: Use `hrt.mk' too.
+
+	* tools/lib/t-spr/include/sl_support.h: Include `sl_hrt.h' when
+	appropriate.
+
+	* tools/lib/slc/am/visitors.py: Remove `visit_programs', since the
+	runtime header is now included automatically.
+
+2010-06-11  Raphael 'kena' Poss  <r.c.poss@uva.nl>
+
+	Merge contribution from Andrei Matei: new `hrt' back-end.
+
+	* tools/lib/slc/am/__init__.py,
+	* tools/lib/slc/am/visitors.py: New.
+
+	* tools/lib/slc/front/chains.py: Define new chain `hrt'.
+
+2010-06-11  Raphael 'kena' Poss  <r.c.poss@uva.nl>
+
+	Introduce new `hrt' targets.
+
+	* tools/bin/cce.in: Recognize aliases `hrt', `hrt_n' and
+	`hrt_s'. Update flags accordingly.
+
+2010-06-11  Raphael 'kena' Poss  <r.c.poss@uva.nl>
+
+	Remove obsolete files.
+
+	* lib/host-host-ptl/include/svp_os.h,
+	* lib/host-host-seqc/include/svp_os.h,
+	* lib/mtalpha-sim/include/svp_asmdiv.h,
+	* lib/mtalpha-sim/include/svp_os.h: Remove.
+
+	* lib/seqc.mk,
+	* lib/ptl.mk,
+	* lib/mtalpha.mk: Update accordingly.
+
+2010-06-11  Raphael 'kena' Poss  <r.c.poss@uva.nl>
+
+	Enhance `cce'.
+
+	* tools/bin/cce.in: Propagate more information to programs: efine
+	`__slc_dialect_XXX__', `__slc_variant_XXX__', `__slc_arch_XXX__'
+	and `__slc_os_XXX__' according to parameters. Optimize more when compiling
+	for host. Avoid linking in `libslc' if `-nostartfiles' is specified.
+
+2010-06-11  Raphael 'kena' Poss  <r.c.poss@uva.nl>
+
+	Appease compiler when using `spr'.
+
+	* tools/lib/slc/lower/split.py (SplitCreates.visit_lowcreate):
+	Ensure label for first alternative is always used.
+
+	* tools/lib/slc/lower/lowercreate.py (AutoResolve): New visitor to
+	ensure that the resolved label is always used.
+	* tools/lib/slc/front/chains.py: Use it.
+
+	* tools/lib/slc/lower/seq.py: Indicate that `__slI' is maybe unused.
+
+	* tools/lib/slc/mtalpha/visitors.py: Ensure that the end label is
+	always used.
+
+	* tools/lib/slc/lower/split.py (SplitCreates): Simplify by reusing
+	`ScopedVisitor'.
+
+2010-06-11  Raphael 'kena' Poss  <r.c.poss@uva.nl>
+
+	Minor MT-Alpha optimizations.
+
+	* tools/bin/cce.in: Option `-mcpu' actually overrides `-mfix',
+	etc. In order to use all ISA extensions, use `-mcpu=21264a'
+	instead.
+
+	* lib/include/cstrings.h: Declare `ffs'.
+	* lib/src/ffs.c: New.
+	* lib/mtalpha.mk: Tell `malloc' to use `ffs'. Compile `ffs.c'.
+
 2010-06-02  Raphael 'kena' Poss  <r.c.poss@uva.nl>
 
 	Add missing module initializers in slc library.

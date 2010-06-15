@@ -1,8 +1,5 @@
 ########## muTC-PTL implementation ##########
 
-nobase_dist_pkgdata_DATA += \
-	host-host-ptl/include/svp_os.h
-
 if ENABLE_SLC_PTL
 
 nobase_pkglib_LIBRARIES += ptl-host-host-ptl/libsl.a 
@@ -17,7 +14,7 @@ ptl_host_host_ptl_libsl_a_BUILTOBJS = \
 ptl_host_host_ptl_libsl_a_SOURCES =
 ptl_host_host_ptl_libsl_a_LIBADD = $(ptl_host_host_ptl_libsl_a_BUILTOBJS)
 
-SLC_PTL = $(SLC_RUN) -b ptl -nostdlib $(CXXFLAGS)
+SLC_PTL = $(SLC_RUN) -b ptl -nostdlib $(AM_CXXFLAGS) $(CXXFLAGS)
 
 ptl-host-host-ptl/%.o: $(srcdir)/src/%.c
 	$(AM_V_at)$(MKDIR_P) ptl-host-host-ptl

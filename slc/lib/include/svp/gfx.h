@@ -1,7 +1,7 @@
 //
 // gfx.h: this file is part of the SL toolchain.
 //
-// Copyright (C) 2009 Universiteit van Amsterdam.
+// Copyright (C) 2009,2010 Universiteit van Amsterdam.
 //
 // This program is free software; you can redistribute it and/or
 // modify it under the terms of the GNU General Public License
@@ -20,28 +20,30 @@
 #define gfx_init() ((void)0)
 #define gfx_close() ((void)0)
 
-#if defined(__alpha__) || defined(__mtalpha__)
+#include <svp/mgsim.h>
 
-#define gfx_resize(W, H) \
-  __asm__ __volatile__("print %1, %0" : : "rI"((1<<5)|(1<<6)), "r"((((unsigned long)(W)) << 48) | ((((unsigned long)(H)) & 0xffff) << 32)))
+#define gfx_resize(W, H)  \
+    mgsim_control((((unsigned long)(W))<<48) | ((((unsigned long)(H)) & 0xffff)<<32), \
+                  MGSCTL_TYPE_GFX, MGSCTL_GFX_RESIZE, 0)
 
+#define gfx_putpixel(X, Y, Data) \
+    mgsim_control((((unsigned long)(X))<<48) | ((((unsigned long)(Y)) & 0xffff)<<32)|((Data) & 0xffffffff), \
+                  MGSCTL_TYPE_GFX, MGSCTL_GFX_PUTPIXEL, MGSCTL_GFX_PUTPIXEL_XY)
 
-#define gfx_putpixel(X, Y, Data)					\
-  __asm__ __volatile__("print %1, %0" : : "rI"((1<<5)|(0<<6)),		\
-		       "r"((((unsigned long)(X)) << 48) | ((((unsigned long)(Y)) & 0xffff) << 32) | ((Data) & 0xffffffff)))
-
-#define gfx_fb_set(Offset, Data)					\
-  __asm__ __volatile__("print %1, %0" : : "rI"((1<<5)|(0<<6)|(1<<4)),	\
-		       "r"((((unsigned long)(Offset)) << 32) | ((Data) & 0xffffffff)))
+#define gfx_fb_set(Offset, Data) \
+    mgsim_control((((unsigned long)(Offset)) << 32) | ((Data) & 0xffffffff), \
+                  MGSCTL_TYPE_GFX, MGSCTL_GFX_PUTPIXEL, MGSCTL_GFX_PUTPIXEL_OFFSET)
 
 #define gfx_dump(Key, Stream, EmbedTimeStamp, EmbedThreadInfo)		\
-  __asm__ __volatile__("print %1, %0" : : "rI"((1<<5)|(2<<6)|((EmbedTimeStamp)<<4)|((EmbedThreadInfo)<<3)|(Stream)), "r"((long)(Key)))
+    mgsim_control((long)(Key),                                          \
+                  MGSCTL_TYPE_GFX, MGSCTL_GFX_SSHOT,                    \
+                  ((EmbedTimeStamp)?MGSCTL_GFX_SSHOT_TIMESTAMP:0) |     \
+                  ((EmbedThreadInfo)?MGSCTL_GFX_SSHOT_TINFO:0) | (Stream))
 
-#endif
 #else
 
-#include <cstddef.h>
-#include <cstdint.h>
+#include <stddef.h>
+#include <stdint.h>
 #include <svp/compiler.h>
 
 extern uint32_t * __restrict__ __gfx_framebuffer;

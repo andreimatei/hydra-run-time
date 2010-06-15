@@ -11,7 +11,9 @@
 ## `COPYING' file in the root directory.
 ##
 
-# 
+#
+SUBDIRS = src/tlsmalloc
+ 
 EXTRA_DIST = \
 	src/io.c \
 	src/gfx.c \
@@ -23,7 +25,7 @@ EXTRA_DIST = \
 	src/div.c
 
 nobase_dist_pkgdata_DATA = \
-	include/bits/float.h \
+	include/sys/ctypes.h \
 	include/calloca.h \
 	include/cassert.h \
 	include/cctype.h \
@@ -43,11 +45,11 @@ nobase_dist_pkgdata_DATA = \
 	include/ctime.h \
 	include/sac_helpers.h \
 	include/undocumented.h \
-	include/sys/ctypes.h \
 	include/svp/argslot.h \
 	include/svp/assert.h \
 	include/svp/callgate.h \
 	include/svp/div.h \
+	include/svp/fast_malloc.h \
 	include/svp/gfx.h \
 	include/svp/io.h \
 	include/svp/iomacros.h \
