@@ -257,12 +257,22 @@ class TFun_2_HydraCFunctions(DefaultVisitor):
         self.__sh_parm_index = 0  # counter for the number of shareds seen
         self.__gl_parm_index = 0  # counter for the number of globals seen
         self.__paramNames_2_params = {}
+        for parm in fundecl.parms:
+            parm.accept(self)
+        
         if fundecl.extras.get_attr('static', None) is not None:
             qual = "static"
         elif omitextern:
             qual = ""
         else:
             qual = "extern"
+
+        if not keep:
+            newitems = flatten(fundecl.loc, "%s void " % qual) + gen_loop_fun_name(fundecl.name) + "();";
+            return newitems
+        else:
+            return None
+        """
         self.__buffer = flatten(fundecl.loc, 
                                 " %s long %s(const long __slI" 
                                 % (qual, fundecl.name))
@@ -272,6 +282,7 @@ class TFun_2_HydraCFunctions(DefaultVisitor):
         ret = self.__buffer
         self.__buffer = None
         return ret
+        """
  
     def visit_fundeclptr(self, fundecl):
         #TODO
