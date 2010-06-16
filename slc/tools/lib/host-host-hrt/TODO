@@ -1,0 +1,15 @@
+in write_istruct and read_istruct, the generic version, handle the case where the reader/writer is inexistent (node_index == -1); this will happen for continuation creates, because the parent is inexistent?
+
+discuss with Raphael about schemes for distibuting the threads in a fam, and what aditional concurrency some schemes might produce. When assigning multiple chunks to a TC, does a block size != 1 make any sense?
+
+fix atomic_increment_next_tc
+
+replace NODE_INDEX with a function which returns the current node
+
+pad the spinlocks for the runnable queues and for the family contexts
+
+support continuation creates - careful, the .parent of a TC can't be a dummy, since reading a global
+calls get_parent_ident() to find out who is going to write the global...
+
+- when working across nodes, make sure the shareds written by a child make it across the network before the
+write to the "done" istruct

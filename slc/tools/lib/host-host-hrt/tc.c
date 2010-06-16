@@ -132,7 +132,7 @@ __thread tc_t* _cur_tc = NULL;  // pointer to the TC currently occupying the acc
 fam_context_t fam_contexts[MAX_PROCS_PER_NODE][NO_FAM_CONTEXTS_PER_PROC];
 /* locks for allocating fam contexts; one per processor */
 // TODO: pad to one per cache line
-pthread_spinlock_t fam_contexts_locks[MAX_PROCS_PER_NODE];
+padded_spinlock_t fam_contexts_locks[MAX_PROCS_PER_NODE];
 
 void unblock_tc(tc_t* tc, int same_processor);
 void block_tc_and_unlock(tc_t* tc, pthread_spinlock_t* lock);
@@ -193,7 +193,7 @@ fam_context_t* allocate_fam(
   //find an empty fam_context within the family contexts of the current proc
   //(technically, it doesn't matter where the fam context is chosen from)
   int i;
-  pthread_spin_lock(&fam_contexts_locks[_cur_tc->ident.proc_index]);
+  pthread_spin_lock((pthread_spinlock_t*)&(fam_contexts_locks[_cur_tc->ident.proc_index]));
   for (i = 0; i < NO_FAM_CONTEXTS_PER_PROC; ++i) {
     if (fam_contexts[_cur_tc->ident.proc_index][i].empty) break;
   }
@@ -201,7 +201,7 @@ fam_context_t* allocate_fam(
   fam_context_t* fc = &fam_contexts[_cur_tc->ident.proc_index][i];
   fc->empty = 0;
   fc->done.state = EMPTY;
-  pthread_spin_unlock(&fam_contexts_locks[_cur_tc->ident.proc_index]);
+  pthread_spin_unlock((pthread_spinlock_t*)&fam_contexts_locks[_cur_tc->ident.proc_index]);
 
   //find TCs
   int no_ranges = 0;
@@ -503,19 +503,12 @@ void rt_init() {
     if (pthread_spin_init((pthread_spinlock_t*)&runnable_queue_locks[i], PTHREAD_PROCESS_PRIVATE) != 0) {
       perror("pthread_spin_init:"); exit(1);
     }
-    if (pthread_spin_init(&fam_contexts_locks[i], PTHREAD_PROCESS_PRIVATE) != 0) {
+    if (pthread_spin_init((pthread_spinlock_t*)&fam_contexts_locks[i], PTHREAD_PROCESS_PRIVATE) != 0) {
       perror("pthread_spin_init:"); exit(1);
     }
     if (pthread_spin_init(((pthread_spinlock_t*)&allocate_tc_locks[i]), PTHREAD_PROCESS_PRIVATE) != 0) {
       perror("pthread_spin_init:"); exit(1);
     }
-    /*
-    for (j = 0; j < NO_FAM_CONTEXTS_PER_PROC; ++j) {
-      if (pthread_spin_init(&fam_contexts[i][j].lock, PTHREAD_PROCESS_PRIVATE) != 0) {
-        perror("pthread_spin_init:"); exit(1);
-      }
-    }
-    */
   }
   
   // init TCs
@@ -535,18 +528,6 @@ void rt_init() {
       int k = 0;
       if (pthread_spin_init(&fam_contexts[i][j].done.lock, PTHREAD_PROCESS_PRIVATE) != 0) {
         perror("pthread_spin_init:"); exit(1);
-      }
-      for (k = 0; k < MAX_ARGS_PER_FAM; ++k) {
-        /*
-        if (pthread_spin_init(&fam_contexts[i][j].shareds[k].lock, PTHREAD_PROCESS_PRIVATE) != 0) {
-          perror("pthread_spin_init:"); exit(1);
-        }
-        */
-        /*
-        if (pthread_spin_init(&fam_contexts[i][j].globals[k].lock, PTHREAD_PROCESS_PRIVATE) != 0) {
-          perror("pthread_spin_init:"); exit(1);
-        }
-        */
       }
     }
   }
