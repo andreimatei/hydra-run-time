@@ -6,8 +6,6 @@ fix atomic_increment_next_tc
 
 replace NODE_INDEX with a function which returns the current node
 
-pad the spinlocks for the runnable queues and for the family contexts
-
 support continuation creates - careful, the .parent of a TC can't be a dummy, since reading a global
 calls get_parent_ident() to find out who is going to write the global...
 
