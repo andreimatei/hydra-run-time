@@ -183,24 +183,24 @@ class TFun_2_HydraCFunctions(DefaultVisitor):
         param = self.__paramNames_2_params[getp.name]
         if not param.isShared:
             newbl.append(flatten(None, '((') + getp.decl.ctype + ')'
-                        'read_istruct(&cur_tc->globals[%d], _get_parent_ident()))' %
+                        'read_istruct(&_cur_tc->globals[%d], _get_parent_ident()))' %
                         param.index)
         else: #shared
             if self.__state == 0: #begin
                 newbl.append(flatten(None, '((') + getp.decl.ctype + ')' +
-                            'read_istruct(&cur_tc->shareds[%d], prev))' %
+                            'read_istruct(&_cur_tc->shareds[%d], prev))' %
                             param.index)
             elif self.__state == 1: #middle
                 newbl.append(flatten(None, '((') + getp.decl.ctype + ')' +
-                            'read_istruct_same_tc(&cur_tc->shareds[%d]))' %
+                            'read_istruct_same_tc(&_cur_tc->shareds[%d]))' %
                             param.index)
             elif self.__state == 2: #end
                 newbl.append(flatten(None, '((') + getp.decl.ctype + ')' +
-                            'read_istruct_same_tc(&cur_tc->shareds[%d]))' %
+                            'read_istruct_same_tc(&_cur_tc->shareds[%d]))' %
                             param.index)
             elif self.__state == 3: #generic
                 newbl.append(flatten(None, '((') + getp.decl.ctype + ')' +
-                            'read_istruct(&cur_tc->shareds[%d], prev))' %
+                            'read_istruct(&_cur_tc->shareds[%d], prev))' %
                             param.index)
             else:
                assert False
@@ -219,12 +219,12 @@ class TFun_2_HydraCFunctions(DefaultVisitor):
         if setp.decl.seen_get:  # TODO: do I need casting for b in all the branched below?
             if self.__state == 0: #begin
                 newbl.append(flatten(None,#setp.loc,
-                             'write_istruct_same_tc(&cur_tc->shareds[%d],' %
+                             'write_istruct_same_tc(&_cur_tc->shareds[%d],' %
                               param.index) + b + ')')
                 
             elif self.__state == 1: #middle
                 newbl.append(flatten(None,#setp.loc,
-                             'write_istruct_same_tc(&cur_tc->shareds[%d],' %
+                             'write_istruct_same_tc(&_cur_tc->shareds[%d],' %
                               param.index) + b + ')')
             elif self.__state == 2 or self.__state == 3: #end and generic
                 newbl.append(flatten(None,#setp.loc,  # end and generic are passed the array of shareds as an argument
@@ -320,7 +320,7 @@ class TFun_2_HydraCFunctions(DefaultVisitor):
  
         newitems = Block()   
 
-        if fundef.name <> "t_main":  # for main, we just need the generic variant
+        if fundef.name <> "__root_fam":  # for main, we just need the generic variant
             self.__state = 0  #begin
             newitems = flatten(fundef.loc, ("long %s_begin(const tc_ident_t* prev, " +
                                            "long __index) {\n") % fundef.name)
@@ -363,8 +363,8 @@ class TFun_2_HydraCFunctions(DefaultVisitor):
 
             if (__end_index - __start_index > 4) {\n
             """
-        if fundef.name <> "t_main":  # for main, we won't need this branch (and we can't generate it either
-                                     # cause we haven't generated the non-generic flavours of the thread func
+        if fundef.name <> "__root_fam":  # for main, we won't need this branch (and we can't generate it either
+                                     # cause we haven't generated the non-generic flavours of the thread func)
             newitems += fundef.name + """_begin(prev, __start_index);
                 for (__index = __start_index + 1; __index < __end_index; ++__index) {
                 """ + fundef.name + """_middle(__index); // TODO: check for break return value
@@ -383,9 +383,9 @@ class TFun_2_HydraCFunctions(DefaultVisitor):
             }
             if (_is_last_tc() && parent->node_index != -1) write_istruct(&fam_context->done, 1, parent);
 
-            cur_tc->finished = 1;
+            _cur_tc->finished = 1;
         """
-        if fundef.name <> 't_main':
+        if fundef.name <> '__root_fam':
             newitems += "_return_to_scheduler();\n"
         else:
             newitems += "end_main();"

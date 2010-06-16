@@ -109,12 +109,16 @@ typedef struct processor_t processor_t;
 #define INIT_TC_STACK_SIZE (1L<<13)
 #define INIT_TC_HEAP_SIZE (1L<<20)
 
-processor_t processor[MAX_PROCS_PER_NODE];
-extern processor_t processor[MAX_PROCS_PER_NODE];
+extern processor_t _processor[MAX_PROCS_PER_NODE];
+
+enum LOG_LEVEL {CRASH = 0, WARNING = 3, INFO = 7, VERBOSE = 10, DEBUG = 15};
+typedef enum LOG_LEVEL LOG_LEVEL;
+
+extern LOG_LEVEL _logging_level;
 
 typedef void (*thread_func)();  // type of a thread function
 
-extern __thread tc_t* cur_tc;  // pointer to the TC currently occupying the accessing processor
+extern __thread tc_t* _cur_tc;  // pointer to the TC currently occupying the accessing processor
 
 
 
@@ -166,37 +170,37 @@ long sync_fam(fam_context_t* fc, /*long* shareds_dest,*/ int no_shareds, ...);
 
 /* Used by a thread func to get it's range of indexes */
 static inline long _get_start_index() {
-  return cur_tc->index_start;
+  return _cur_tc->index_start;
 }
 static inline long _get_end_index() {
-  return cur_tc->index_stop;
+  return _cur_tc->index_stop;
 }
 static inline fam_context_t* _get_fam_context() {
-  return cur_tc->fam_context;
+  return _cur_tc->fam_context;
 }
 static inline const tc_ident_t* _get_parent_ident() {
-  return &cur_tc->parent_ident;
+  return &_cur_tc->parent_ident;
 }
 
 static inline const tc_ident_t* _get_prev_ident() {
-  return &cur_tc->prev;
+  return &_cur_tc->prev;
 }
 
 static inline const tc_ident_t* _get_next_ident() {
-  return &cur_tc->next;
+  return &_cur_tc->next;
 }
 
 static inline int _is_last_tc() {
-  return cur_tc->is_last_tc;
+  return _cur_tc->is_last_tc;
 }
 
 
 static inline void _return_to_scheduler() {
   
-  //swapcontext(&cur_tc->scratch_context, &processor[cur_tc->ident.proc_index].scheduler_context);
+  //swapcontext(&_cur_tc->scratch_context, &processor[_cur_tc->ident.proc_index].scheduler_context);
   //TODO: check that this call to setcontext is correct; the man says that the context used must be obtained
   //through getcontext() or makecontext(), which is not true in this case; it has been obtained by swapcontext()
-  setcontext(&processor[cur_tc->ident.proc_index].scheduler_context);
+  setcontext(&_processor[_cur_tc->ident.proc_index].scheduler_context);
 }
 
 
@@ -207,7 +211,7 @@ void rt_quit();
 // called by fam_main at the end, instead of the regular thread function exit code
 void end_main();
 
-typedef void (fam_main_t)(void);  // the type of fam_main()
+//typedef void (fam_main_t)(void);  // the type of fam_main()
 
 
 
@@ -248,7 +252,7 @@ void write_global(fam_context_t* ctx, int index, long val);
 // static inline long read_shared_from_child(
 //     fam_context_t* child_fam, 
 //     int shared_index) {
-//   assert(cur_tc != NULL);  // this should only fail for the parent of fam_main,
+//   assert(_cur_tc != NULL);  // this should only fail for the parent of fam_main,
 //                            // but fam_main doesn't have any shareds
 //   return read_istruct(&child_fam->shareds[shared_index],
 //                       &child_fam->ranges[child_fam->no_ranges].dest);

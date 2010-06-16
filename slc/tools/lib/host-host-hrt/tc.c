@@ -35,6 +35,7 @@
 #define NODE_INDEX 16L
 void* node_start_addr = (void*)(NODE_INDEX * VM_PER_NODE);
 int NO_PROCS = 2;  // the number of processors that will be created and used on the current node
+processor_t _processor[MAX_PROCS_PER_NODE];
 
 
 tc_t* TC_START_VM_EXTENDED(int node_index, int tc_index) {
@@ -64,20 +65,40 @@ extern inline enum istruct_state ld_acq_istruct(volatile i_struct* istruct) {
   return rez;
 }
 
-enum LOG_LEVEL {CRASH = 0, WARNING = 3, INFO = 7, VERBOSE = 10, DEBUG = 15};
-typedef enum LOG_LEVEL LOG_LEVEL;
+
+const char* log_prefix[20] = {"[CRASH] ",  // 0
+                              "[CRASH+1] ",  // 1
+                              "[CRASH+2] ",  // 2
+                              "[WARNING] ",  // 3
+                              "[WARNING + 1] ",  // 4
+                              "[WARNING + 2] ",  // 5
+                              "[WARNING + 3] ",  // 6
+                              "[INFO] ",  // 7
+                              "[INFO + 1] ",  // 8
+                              "[INFO + 2] ",  // 9
+                              "[VERBOSE] ",  // 10
+                              "[VERBOSE + 1] ",  // 11
+                              "[VERBOSE + 2] ",  // 12
+                              "[VERBOSE + 3] ",  // 13
+                              "[VERBOSE + 4] ",  // 14
+                              "[DEBUG] ",  // 15
+                              "[DEBUG + 1] ",  // 16
+                              };
 
 #ifdef LOGGING
-LOG_LEVEL logging_level = LOGGING;
+LOG_LEVEL _logging_level = LOGGING;
 #else
-LOG_LEVEL logging_level = DEBUG;
+LOG_LEVEL _logging_level = DEBUG;
 #endif
 
 void LOG(LOG_LEVEL level, char* fmt, ...) {
-  if (level <= logging_level) {
+  if (level <= _logging_level) {
     va_list args;
     va_start(args, fmt);
-    vprintf(fmt, args);
+    char s[strlen(fmt) + 20];
+    strcpy(s, log_prefix[level]);
+    strcpy(s + strlen(log_prefix[level]), fmt);
+    vfprintf(stderr, s, args);
     va_end(args);
   }
 }
@@ -100,7 +121,7 @@ padded_spinlock_t runnable_queue_locks[MAX_PROCS_PER_NODE];
 padded_spinlock_t allocate_tc_locks[MAX_PROCS_PER_NODE];
 pthread_t threads[MAX_PROCS_PER_NODE];
 pthread_attr_t threads_attr[MAX_PROCS_PER_NODE];
-__thread tc_t* cur_tc = NULL;  // pointer to the TC currently occupying the accessing processor
+__thread tc_t* _cur_tc = NULL;  // pointer to the TC currently occupying the accessing processor
               // FIXME: check out where these things are allocated... if it causes mmapings of
               // regions that we have no control over, replace it with a macro that uses the SP
               // to get access to the TC
@@ -125,6 +146,7 @@ void populate_tc(tc_t* tc,
                  tc_ident_t parent, tc_ident_t prev, tc_ident_t next,
                  int is_last_tc);
 int atomic_increment_next_tc(int proc_id);
+void write_istruct_no_checks(i_struct* istructp, long val);
 
 /*
  * Check wether a particular TC has been created on this node or not.
@@ -150,7 +172,7 @@ mapping_decision map_fam(
   rez.should_inline = 0;
   rez.no_proc_assignments = 1;
   rez.proc_assignments[0].node_index = NODE_INDEX;
-  rez.proc_assignments[0].proc_index = (cur_tc->ident.proc_index + 1) % NO_PROCS;
+  rez.proc_assignments[0].proc_index = (_cur_tc->ident.proc_index + 1) % NO_PROCS;
   rez.proc_assignments[0].no_tcs = 1;
   rez.proc_assignments[0].load_percentage = 100; // 100% of threads on this proc
 
@@ -171,15 +193,15 @@ fam_context_t* allocate_fam(
   //find an empty fam_context within the family contexts of the current proc
   //(technically, it doesn't matter where the fam context is chosen from)
   int i;
-  pthread_spin_lock(&fam_contexts_locks[cur_tc->ident.proc_index]);
+  pthread_spin_lock(&fam_contexts_locks[_cur_tc->ident.proc_index]);
   for (i = 0; i < NO_FAM_CONTEXTS_PER_PROC; ++i) {
-    if (fam_contexts[cur_tc->ident.proc_index][i].empty) break;
+    if (fam_contexts[_cur_tc->ident.proc_index][i].empty) break;
   }
   assert(i < NO_FAM_CONTEXTS_PER_PROC); //TODO: return FAIL value
-  fam_context_t* fc = &fam_contexts[cur_tc->ident.proc_index][i];
+  fam_context_t* fc = &fam_contexts[_cur_tc->ident.proc_index][i];
   fc->empty = 0;
   fc->done.state = EMPTY;
-  pthread_spin_unlock(&fam_contexts_locks[cur_tc->ident.proc_index]);
+  pthread_spin_unlock(&fam_contexts_locks[_cur_tc->ident.proc_index]);
 
   //find TCs
   int no_ranges = 0;
@@ -255,9 +277,9 @@ fam_context_t* allocate_fam(
                 fc->ranges[i].index_start,
                 fc->ranges[i].index_end,
                 fc,
-                cur_tc->ident, // parent
-                i == 0 ? cur_tc->ident : fc->ranges[i-1].dest, // prev
-                i == no_ranges - 1 ? cur_tc->ident : fc->ranges[i+1].dest, // next
+                _cur_tc->ident, // parent
+                i == 0 ? _cur_tc->ident : fc->ranges[i-1].dest, // prev
+                i == no_ranges - 1 ? _cur_tc->ident : fc->ranges[i+1].dest, // next
                 (i == no_ranges - 1)  // is_last_tc
                 );
   }
@@ -265,8 +287,8 @@ fam_context_t* allocate_fam(
   return fc;
 }
 
-/* Allocate a family for calling fam_main */
-fam_context_t* allocate_fam_main(thread_func func) {
+/* Allocate a family for thread function "root fam" */
+fam_context_t* allocate_root_fam(thread_func func, int argc, char** argv) {
 
   //find empty TCs and fam_context
   int dest_proc = 0;
@@ -277,7 +299,7 @@ fam_context_t* allocate_fam_main(thread_func func) {
   fc->ranges[0].index_start = 0;
   fc->ranges[0].index_end = 0;
   fc->ranges[0].dest.proc_index = dest_proc;
-  fc->ranges[0].dest.node_index = NODE_INDEX;//cur_tc->ident.node_index;
+  fc->ranges[0].dest.node_index = NODE_INDEX;//_cur_tc->ident.node_index;
   fc->ranges[0].dest.tc_index = atomic_increment_next_tc(dest_proc);
   assert(fc->ranges[0].dest.tc_index != -1);
   fc->ranges[0].dest.tc = (tc_t*)TC_START_VM(fc->ranges[0].dest.tc_index);
@@ -291,6 +313,12 @@ fam_context_t* allocate_fam_main(thread_func func) {
               fc->ranges[0].index_end,
               fc,
               dummy_parent, dummy_parent, dummy_parent, 1);
+
+  // transmit argc
+  write_istruct_no_checks(&(fc->ranges[0].dest.tc->globals[0]), argc);
+  // transmit argv
+  write_istruct_no_checks(&(fc->ranges[0].dest.tc->globals[1]), (long)argv);
+
   return fc;
 }
 
@@ -322,7 +350,7 @@ static inline int test_same_tc(const tc_ident_t* l,const tc_ident_t* r) {
  */
 tc_ident_t create_fam(fam_context_t* fc) {
   //assert(fc->no_ranges == 1); // TODO
-  assert(cur_tc == NULL || test_same_node(&fc->ranges[0].dest, &cur_tc->ident)); //TODO
+  assert(_cur_tc == NULL || test_same_node(&fc->ranges[0].dest, &_cur_tc->ident)); //TODO
   for (int i = 0; i < fc->no_ranges; ++i) {
     unblock_tc(fc->ranges[i].dest.tc,
                0 /*TODO: check if it is the same processor and modify this arg*/);
@@ -332,9 +360,9 @@ tc_ident_t create_fam(fam_context_t* fc) {
 
 
 long sync_fam(fam_context_t* fc, /*long* shareds_dest,*/ int no_shareds, ...) {
-  assert(test_same_node(&cur_tc->ident, &fc->ranges[fc->no_ranges-1].dest));  //TODO
-  int same_proc = test_same_proc(&cur_tc->ident, &fc->ranges[fc->no_ranges-1].dest);
-  assert(!test_same_tc(&cur_tc->ident, &fc->ranges[fc->no_ranges-1].dest));  // parent and
+  assert(test_same_node(&_cur_tc->ident, &fc->ranges[fc->no_ranges-1].dest));  //TODO
+  int same_proc = test_same_proc(&_cur_tc->ident, &fc->ranges[fc->no_ranges-1].dest);
+  assert(!test_same_tc(&_cur_tc->ident, &fc->ranges[fc->no_ranges-1].dest));  // parent and
             // child should never be in the same tc
   suspend_on_istruct(&fc->done, same_proc);
   // copy the shareds to the parent
@@ -368,9 +396,9 @@ void run_tc(int processor_index, tc_t* tc) {
   //int jumped = 0;
   assert(tc->ident.proc_index == processor_index);
 
-  cur_tc = tc;
+  _cur_tc = tc;
   LOG(DEBUG, "jumping to user code\n");
-  swapcontext(&processor[processor_index].scheduler_context, &tc->context);
+  swapcontext(&_processor[processor_index].scheduler_context, &tc->context);
   LOG(DEBUG, "back from user code\n");
 
   /*
@@ -549,11 +577,6 @@ void idle() {
   while(1) {}
 }
 
-void TC_finished() {
-  printf("TC finished! looping...\n");
-  while (1) {}
-}
-
 stack_t alloc_stack(int tc_index, int size) {
   void* stack_highaddr = (void*)TC_START_VM(tc_index + 1) - 1;  // start just before the next TC
   int num_pages = size / getpagesize();
@@ -562,14 +585,7 @@ stack_t alloc_stack(int tc_index, int size) {
   void* stack_lowaddr = stack_highaddr - size + 1;
   void* mapping =
     mmap(stack_lowaddr, size, PROT_READ | PROT_WRITE,
-         MAP_PRIVATE|MAP_FIXED|MAP_ANON|
-//#if defined(MAP_GROWSDOWN) /* linux */
-   MAP_GROWSDOWN
-//#elif defined(MAP_STACK) /* FreeBSD */
-//   MAP_STACK
-//#else
-//#error Cannot request stack-like mmap on this system.
-//#endif
+         MAP_PRIVATE|MAP_FIXED|MAP_ANON| MAP_GROWSDOWN
     , -1, 0);
   if (mapping == MAP_FAILED) {
     perror("alloc_stack"); exit(1);
@@ -579,10 +595,9 @@ stack_t alloc_stack(int tc_index, int size) {
       num_pages, stack_lowaddr, stack_highaddr);
   stack_t stack;
   stack.ss_sp = stack_lowaddr;
-
-  *((int*)stack.ss_sp) = 4;  //FIXME: remove this, just a test
-
+  stack.ss_flags = 0;
   stack.ss_size = size;
+
   return stack;
 }
 
@@ -654,7 +669,8 @@ void push_to_TC_stack_ul(stack_t* stack, unsigned long data) {
 }
 */
 
-/* prepares a TC to run a threads range. The TC is not scheduled to be run yet; that can be done manually 
+/* 
+ * Prepares a TC to run a threads range. The TC is not scheduled to be run yet; that can be done manually 
  * through unblock_tc() or, generally, through create_fam
  */
 void populate_tc(tc_t* tc,
@@ -741,9 +757,9 @@ extern void write_istruct_different_proc(
 void write_istruct(volatile i_struct* istructp, long val, const tc_ident_t* reading_tc) {
   tc_ident_t cur_ident = get_current_context_ident();
 
-  assert(cur_ident.node_index == cur_tc->ident.node_index);  //TODO: remove these
-  assert(cur_ident.proc_index == cur_tc->ident.proc_index);
-  assert(cur_ident.tc_index == cur_tc->ident.tc_index);
+  assert(cur_ident.node_index == _cur_tc->ident.node_index);  //TODO: remove these
+  assert(cur_ident.proc_index == _cur_tc->ident.proc_index);
+  assert(cur_ident.tc_index == _cur_tc->ident.tc_index);
 
   assert(reading_tc->node_index == cur_ident.node_index);  // assume same node, for now
   tc_t* dest_tc = (tc_t*)reading_tc->tc;
@@ -757,6 +773,16 @@ void write_istruct(volatile i_struct* istructp, long val, const tc_ident_t* read
       write_istruct_different_proc(istructp, val, dest_tc);
     }
   }
+}
+
+/*
+ * Write an istruct without worrying about concurrency with the reader. This is for very specific use,
+ * namely writing the arguments to the root family.
+ */
+void write_istruct_no_checks(
+  i_struct* istructp, long val) {
+  istructp->data = val;
+  istructp->state = WRITTEN;
 }
 
 /* handles same or different proc*/
@@ -778,15 +804,15 @@ long read_istruct(volatile i_struct* istructp, const tc_ident_t* writing_tc) {
   //has already been written. The called functions are also called by the user code directly, so
   //we don't want to remove this double checking.
 
-  if (!test_same_node(writing_tc, &cur_tc->ident)) {
+  if (!test_same_node(writing_tc, &_cur_tc->ident)) {
     //TODO: different node
     assert(0);
     return -1;
   }
-  if (test_same_tc(&cur_tc->ident, writing_tc)) {
+  if (test_same_tc(&_cur_tc->ident, writing_tc)) {
     return read_istruct_same_tc((i_struct*)istructp);  // cast to strip volatile
   } else {
-    return read_istruct_different_tc(istructp, test_same_proc(writing_tc, &cur_tc->ident));
+    return read_istruct_different_tc(istructp, test_same_proc(writing_tc, &_cur_tc->ident));
   }
 }
 
@@ -823,16 +849,11 @@ void suspend_on_istruct(volatile i_struct* istructp, int same_proc) {
   if (state != WRITTEN) {
     write_istruct_state(istructp, same_proc, SUSPENDED);
     // we sleep
-    block_tc_and_unlock(cur_tc, same_proc ? NULL : &istructp->lock);
+    block_tc_and_unlock(_cur_tc, same_proc ? NULL : &istructp->lock);
     // ... and we wake up
   } else {
     if (!same_proc) pthread_spin_unlock(&istructp->lock);
   }
-}
-
-void announce_runnable_not_empty(int proc_index) {
-  //FIXME
-  //assert(0);
 }
 
 #define PRINT_TC_IDENT(tc) tc.node_index, tc.proc_index, tc.tc_index
@@ -855,7 +876,6 @@ void unblock_tc(tc_t* tc, int same_processor) {
   // TODO: actually restart the target processor, if it was stopped
   if (!same_processor) {
     pthread_spin_unlock(lock);
-    //announce_runnable_not_empty(proc_index);
   }
 }
 
@@ -864,7 +884,7 @@ void yield(tc_t* yielding_tc) {
   //getcontext(&yielding_tc->context);
   //setcontext(&processor[yielding_tc->ident.proc_index].scheduler_context);
   swapcontext(&yielding_tc->context,
-               &processor[yielding_tc->ident.proc_index].scheduler_context);
+               &_processor[yielding_tc->ident.proc_index].scheduler_context);
 }
 
 void block_tc_and_unlock(tc_t* tc, pthread_spinlock_t* lock) {
@@ -922,11 +942,29 @@ void end_main() {
   _return_to_scheduler();
 }
 
-//extern fam_main_t fam_main;
-extern fam_main_t _fam_t_main;
+
+extern int __program_main(int, char**);  // the user program may supply this. If it doesn't, libslmain will
+                                         // provide one.
+
 
 /*
-  main function; sets up the runtime and creates fam_main, with one thread
+ * This family will be an ancestor to all other families. The runtime will create it as a family of
+ * one thread. The compiler will insert a call to end_main() at the end of this thread.
+ */
+sl_def(__root_fam, void, sl_glparm(int, argc), sl_glparm(char**, argv))
+{
+  LOG(VERBOSE, "in root_fam; starting...\n");
+  int argc = sl_getp(argc);
+  char** argv = sl_getp(argv);
+  LOG(DEBUG, "in root_fam; calling __program_main\n");
+  __program_main(argc, argv);
+  LOG(DEBUG, "in root_fam; back from __program_main\n");
+}
+sl_enddef
+
+
+/*
+ * main function; sets up the runtime and creates root_fam, with one thread
  */
 #undef main
 int main(int argc, char** argv) {
@@ -940,23 +978,21 @@ int main(int argc, char** argv) {
   { perror("sigaction"); exit(1); }
 
 
-  rt_init();
+  rt_init();  // init the runtime
 
-  fam_context_t* fam = allocate_fam_main(&_fam_t_main);
-  printf("creating main\n");
+  fam_context_t* fam = allocate_root_fam(&_fam___root_fam, argc, argv);
+  LOG(DEBUG, "creating root_fam\n"); 
   create_fam(fam);
   pthread_mutex_lock(&main_finished_mutex);
   while (!main_finished) {
-    LOG(DEBUG, "SLEEPING\n");
+    LOG(DEBUG, "main: sleeping until root_fam finishes\n");
     pthread_cond_wait(&main_finished_cv, &main_finished_mutex);
-    LOG(DEBUG, "WOKE UP\n");
+    LOG(DEBUG, "main: woke up. root_fam might be finished\n");
   }
   pthread_mutex_unlock(&main_finished_mutex);
-  //sync_fam(fam);
+  LOG(DEBUG,"main: root_fam finished\n");
 
-  printf("USER:\t main thread done\n");
-  //while(1) {}
-  rt_quit();
+  rt_quit();  // tear down the runtime
 
   return 0;
 }
@@ -966,7 +1002,7 @@ void write_global(fam_context_t* ctx, int index, long val) {
   // write the global to every TC that will run part of the family
   for (i = 0; i < ctx->no_ranges; ++i) {
     tc_ident_t id = ctx->ranges[i].dest;
-    assert(id.node_index == cur_tc->ident.node_index);  // TODO
+    assert(id.node_index == _cur_tc->ident.node_index);  // TODO
     tc_t* dest = (tc_t*)TC_START_VM_EXTENDED(id.node_index, id.tc_index);
     assert(dest == id.tc);  // TODO: if this assert proves to hold, remove the line above
     write_istruct(&(id.tc->globals[index]), val, &id);

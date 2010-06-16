@@ -198,7 +198,8 @@ case $slc_dialect in
             seq_naked) target=seq ;;
             mta_naked) target=mta ;;
             mta_hybrid) target=mta+seq ;;
-            hrt_naked)  target=hrt ;slc_use_libsl=no; slc_use_main=no;;
+            #hrt_naked)  target=hrt ;slc_use_libsl=no; slc_use_main=no;;
+            hrt_naked)  target=hrt ;slc_use_libsl=no; slc_use_main=yes;;
             hrt_hybrid) target=hrt+seq ;;
             *) echo "unknown variant: $slc_dialect-$slc_variant" >&2 ;;
         esac
