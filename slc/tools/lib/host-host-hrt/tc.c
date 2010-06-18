@@ -1,3 +1,4 @@
+#include <stdlib.h>
 #include <ucontext.h>
 #include <stdio.h>
 #include <unistd.h>
@@ -8,10 +9,18 @@
 #include <string.h>
 #include <stdarg.h>
 #include <signal.h>
+#include <sys/types.h>
+#include <sys/socket.h>
+#include <netdb.h>
+#include <fcntl.h>
+#include <errno.h>
 #include "sl_hrt.h"
 
 
 #define CACHE_LINE_SIZE 128  // in bytes
+
+/* the start of then address space used by the TCs of nodes */
+#define ADDR_SPACE_START ((void*)0x100000)  // 1 MB
 
 #define VM_BITS_PER_NODE 40
 #define VM_PER_NODE (1L<<VM_BITS_PER_NODE)
@@ -21,28 +30,45 @@
 #define VM_TC_CONTROL_STRUCTURES (1L<<20)  // vm for TC control structures,
                                            // available at the beginning of each TC
 
-#define NODE_START_VM (node_start_addr)
-#define TC_START_VM(index) (NODE_START_VM + VM_PER_TC + (index)*VM_PER_TC)
+/* start address for the vm of the current node */
+//#define NODE_START_VM (node_start_addr)
+#define NODE_START_VM ((void*)(ADDR_SPACE_START + NODE_INDEX * VM_PER_NODE))
+#define TC_START_VM(index) ((tc_t*)(NODE_START_VM + VM_PER_TC + (index)*VM_PER_TC))
                             // first VM_PER_TC is left for the runtime
 
-#define RT_START_VM (node_start_addr)
-#define RT_END_VM (node_start_addr + VM_PER_TC - 1)  // RT's vm is equal to a TC's vm
+//#define RT_START_VM (node_start_addr)
+#define RT_START_VM (NODE_START_VM)
+//#define RT_END_VM (node_start_addr + VM_PER_TC - 1)  // RT's vm is equal to a TC's vm
+#define RT_END_VM ((void*)(NODE_START_VM + VM_PER_TC - 1))  // RT's vm is equal to a TC's vm
 #define PROCESSOR_PTHREAD_STACK_SIZE (1<<15)
 
 #define NO_FAM_CONTEXTS_PER_PROC 1024
 
-//const long NODE_INDEX = 16L;  // TODO
-#define NODE_INDEX 16L
-void* node_start_addr = (void*)(NODE_INDEX * VM_PER_NODE);
+long NODE_INDEX = -1; //16L;  // TODO
+//#define NODE_INDEX 16L
+//void* node_start_addr = (void*)(NODE_INDEX * VM_PER_NODE);
 int NO_PROCS = 2;  // the number of processors that will be created and used on the current node
 processor_t _processor[MAX_PROCS_PER_NODE];
 
 
-tc_t* TC_START_VM_EXTENDED(int node_index, int tc_index) {
+static char primary_address[100];  // ip address of the primary node (for now, it is only populated on
+                            // that node itself)
+static int primary_port;  // see above
+
+static int tc_wholes[1000];
+static int no_tc_wholes = 0;
+
+
+tc_t* TC_START_VM_EX(int node_index, int tc_index) {
+  return ADDR_SPACE_START + (node_index * VM_PER_NODE) + (tc_index + 1) * VM_PER_TC;  // + 1 because
+                                                              // first VM_PER_TC is left for runtime 
+
+  /*
   assert(node_index == NODE_INDEX); // TODO
   //TODO: this function will have to look in some table with the start of the address space
   // for all nodes
   return TC_START_VM(tc_index); //TODO: this will have to be removed, see above
+  */
 }
 
 extern inline void st_rel_istruct(volatile i_struct* istruct, enum istruct_state value) {
@@ -243,7 +269,7 @@ fam_context_t* allocate_fam(
         fc->ranges[no_ranges].dest.node_index = as.node_index;
         fc->ranges[no_ranges].dest.proc_index = as.proc_index;
         fc->ranges[no_ranges].dest.tc_index = tc;
-        fc->ranges[no_ranges].dest.tc = (tc_t*)TC_START_VM_EXTENDED(as.node_index, tc);
+        fc->ranges[no_ranges].dest.tc = (tc_t*)TC_START_VM_EX(as.node_index, tc);
 
         ++no_ranges;
       } else {  // couldn't allocate a TC
@@ -487,9 +513,9 @@ void create_tc(int tc_index);
 
 void rt_init() {
   /* sanity checks */
-  assert(VM_PER_NODE >= NO_TCS_PER_PROC * MAX_PROCS_PER_NODE * VM_PER_TC);
+  assert(VM_PER_NODE >= (NO_TCS_PER_PROC * MAX_PROCS_PER_NODE * VM_PER_TC + VM_PER_TC));
   assert(RT_START_VM >= NODE_START_VM);
-  assert(NODE_START_VM + VM_PER_NODE > TC_START_VM(NO_TCS_PER_PROC * MAX_PROCS_PER_NODE));
+  assert(NODE_START_VM + VM_PER_NODE > (void*)TC_START_VM(NO_TCS_PER_PROC * MAX_PROCS_PER_NODE));
   
   //check that the lock within a padded lock is placed at the beginning of the union. We care, since we
   //cast the union to the lock.
@@ -513,6 +539,17 @@ void rt_init() {
   
   // init TCs
   for (i = 0; i < NO_PROCS * NO_TCS_PER_PROC; ++i) {
+    // check if we should skip this TC due to a whole in the vm
+    int skip = 0;
+    for (int j = 0; j < no_tc_wholes; ++j) {
+      if (tc_wholes[j] == i) {
+        skip = 1;
+        LOG(INFO, "skipping creating TC %d because of a whole in the virtual memory\n", i);
+        break;
+      }
+    }
+    if (skip) continue;
+
     // mmap TC control structures
     mmap_tc_ctrl_struct(i);
 
@@ -943,21 +980,496 @@ sl_def(__root_fam, void, sl_glparm(int, argc), sl_glparm(char**, argv))
 }
 sl_enddef
 
+/*
+typedef struct {
+  char* l[100], r[100];
+  int no_ranges;
+}mem_map;
+*/
+
+void parse_own_memory_map(char* map) {
+  map[0] = 0;  // so that strcat will work
+  int pid = getpid();
+  char file[100];
+  sprintf(file, "/proc/%d/maps", pid);
+  FILE* f = fopen(file, "rt");
+  char buf[500];
+  int first = 1;
+  //mem_map map;
+  //map.no_ranges = 0;
+  while (fgets(buf, 500, f)) {
+    /*
+    map[no_ranges].l = strtok(buf, "-");
+    assert(map[no_ranges].l);
+    char* map[no_ranges].r = strtok(NULL, " ");
+    assert(map[no_ranges].r);
+    ++map.no_ranges;
+    */
+    //char l[20], r[20];
+    char* l = strtok(buf, "-");
+    assert(l);
+    char* r = strtok(buf, " ");
+    assert(r);
+    if (!first) strcat(map, ";");
+    first = 0;
+    strcat(map, l);
+    strcat(map, "-");
+    strcat(map, r);
+  }
+  strcat(map, "!");
+  //return map;
+}
 
 /*
- * main function; sets up the runtime and creates root_fam, with one thread
- */
-#undef main
-int main(int argc, char** argv) {
+void mem_map_2_string(char* buf, const mem_map* map) {
+  buf[0] = 0; // so that strcat will work
+  for (int i = 0; i < map->no_ranges; ++i) {
+    char s[100];
+    sprintf(s, "%s-%s");    
+  }
+}
+*/
 
-  struct sigaction sa;
-  sa.sa_sigaction = sighandler_foo;
-  sigemptyset(&sa.sa_mask);
-  sa.sa_flags = SA_SIGINFO;
+/*
+void send_mem_map_to_primary(int socket, const mem_map* map) {
+  char buf[5000];
+  buf[0] = 0;
+  int first = 1;
+  for (int i = 0; i < map->no_ranges; ++i) {
+    char range[100];
+    if (first) {
+      sprintf(range, "%s-%s", map->l[i], map->r[i]);
+      first = 0;
+    } else {
+      sprintf(range, ";%s-%s", map->l[i], map->r[i]);
+    }
+    strcat(buf, range);
+  }
+  int sent = 0;
+  while (sent < strlen(buf)) {
+    int res = write(socket, buf + sent, strlen(buf) - sent);
+    if (res < 0) {perror("sending map"); exit(1);}
+    sent += res;
+  }
+}
+*/
 
-  if (sigaction(SIGSEGV, &sa, NULL) != 0)
-  { perror("sigaction"); exit(1); }
+typedef struct {
+  unsigned long long l, r;
+}mem_range;
 
+mem_range mem_ranges[30000];
+int no_mem_ranges = 0;
+
+int compare_mem_ranges(const void* l, const void* r) {
+  mem_range* a = (mem_range*)l;
+  mem_range* b = (mem_range*)r;
+  if (a->l < b->l) return -1;
+  if (a->l > b->l) return 1;
+  return 0; 
+}
+
+
+void parse_mem_map(char* buf) {
+  char* saveptr_range;//, *saveptr2;
+  char* range = strtok_r(buf, ";", &saveptr_range);
+  while (range) {
+    /*char* ls,rs;
+    ls = strtok_r(range, "-", &saveptr2);
+    assert(l);
+    rs = strtok_r(NULL, "-", &saveptr2);
+    assert(r);
+    */
+
+    long long l,r;
+    int res = sscanf(range, "%Lx-%Lx", &l, &r);
+    assert(res = 2);
+
+    if (l > 0x7fffffffffffLL) {  // we ignore ranges above 0x7fffffffffff; those belong to the kernel,
+                                 // and we are not concerned with those, as we'll never try to mmap memory there
+      assert(r > 0x7fffffffffffLL);
+    } else {
+      assert(r < 0x7fffffffffffLL);
+      mem_ranges[no_mem_ranges].l = l;
+      mem_ranges[no_mem_ranges].r = r;
+      ++no_mem_ranges;
+    }
+
+    range = strtok_r(NULL, ";", &saveptr_range);
+  }
+}
+
+//char slaves[500][500];
+struct slave_addr {
+  char addr[500];
+  int port_daemon;
+  int port;
+};
+typedef struct slave_addr slave_addr;
+slave_addr slaves[1000];
+int no_slaves = -1;
+
+typedef struct secondary {
+  char addr[500];
+  int port_daemon;
+  int port;
+  int socket;
+  //mem_range memory_range;
+} secondary;
+secondary secondaries[1000];
+int no_secondaries = 0;
+
+/*
+void assign_mem_ranges() {
+  unsigned long long pointer = ADDR_SPACE_START;
+  for (int i = 0; i < no_secondaries; ++i) {
+    secondaries[i].memory_range.l = pointer;
+    pointer += VM_PER_NODE;
+    secondaries[i].memory_range.l = pointer - 1;
+  }
+}
+*/
+
+int am_i_primary() {
+  // check is slaves.txt file exists
+  FILE* fp = fopen("slaves.txt", "rt");
+  if (fp) {
+    char* val = getenv("PRIMARY");  // if this is set to 0, ignore the file; I'm not the primary
+    if (val != NULL && !strcmp(val, "0")) return 0;
+    
+    no_slaves = 0;
+    char line[500];
+    int first = 1;
+    // read the file and populate slaves
+    // first line is my address and port
+    while (fgets(line, 500, fp)) {
+      char* addr = strtok(line, ":\n");
+      char* port_daemon_s = strtok(NULL, ":\n");
+      if (first) {
+        assert(addr);
+        assert(port_daemon_s);
+        LOG(DEBUG, "found own address: %s:%s\n", addr, port_daemon_s);
+        strcpy(primary_address, addr);
+        primary_port = atoi(port_daemon_s);
+        first = 0;
+        LOG(INFO, "I'm the master node (%s:%d)\n", primary_address, primary_port);
+      } else {
+        if (!addr) break;  // got '\n' or something
+        strcpy(slaves[no_slaves].addr, addr);
+        slaves[no_slaves].port_daemon = atoi(port_daemon_s);
+        ++no_slaves;
+      }
+    }
+    return 1;
+  } else {
+    return 0;
+  }
+}
+
+int am_i_secondary() {
+  char* val = getenv("SECONDARY");
+  if (val == NULL) return 0;
+  if (!strcpy(val, "0")) return 0;
+  LOG(INFO, "I'm a secondary node\n");
+  return 1;
+}
+
+void get_vm_wholes(int node_index, int* wholes, int* no_wholes) {
+  int j = 0;
+  *no_wholes = 0;
+  for (int i = 0; i < NO_TCS_PER_PROC * MAX_PROCS_PER_NODE; ++i) {  // TODO: here i should see how many procs 
+                                                  // a node has and just iterate through those, instead of
+                                                  // the maximum possible number
+    void* start_vm = TC_START_VM_EX(node_index, i);
+    void* end_vm = TC_START_VM_EX(node_index, i+1) - 1;
+    while (j < no_mem_ranges && mem_ranges[j].r < (unsigned long long)start_vm)
+      ++j;
+    if (j == no_mem_ranges) return;
+    
+    void* l = (void*)mem_ranges[j].l;
+    void* r = (void*)mem_ranges[j].r;
+    
+    if ( (start_vm <= l && l <= end_vm ) || (start_vm <= r && r <= end_vm) ) {
+      wholes[*no_wholes++] = i;
+    }
+  }
+}
+
+void start_nodes() {
+  // add ourselves to the array
+  strcpy(secondaries[0].addr, primary_address);
+  secondaries[0].port = primary_port;
+  secondaries[0].port_daemon = -1;
+  secondaries[0].socket = -1;
+  ++no_secondaries;
+
+  // contact slaves, 1 by 1, and ask for their
+  int sockets[no_slaves];
+  struct addrinfo hints;
+  memset(&hints, 0, sizeof(hints));
+  hints.ai_family = AF_UNSPEC;
+  hints.ai_socktype = SOCK_STREAM;
+
+  fd_set master, readfds;
+  FD_ZERO(&master);
+  for (int i = 0; i < no_slaves; ++i) {
+    struct addrinfo* addr;
+    char sport[10];
+    sprintf(sport, "%d", slaves[i].port_daemon);
+    if (getaddrinfo(slaves[i].addr, sport, &hints, &addr) < 0) {
+      perror("getaddrinfo:"); exit(1);
+    }
+    int s = socket(addr->ai_family, SOCK_STREAM, addr->ai_protocol);
+    sockets[i] = s;
+    if (s == -1) {perror("socket:"); exit(1);}
+
+    long arg;
+    // Set non-blocking 
+    if( (arg = fcntl(s, F_GETFL, NULL)) < 0) { 
+      fprintf(stderr, "Error fcntl(..., F_GETFL) (%s)\n", strerror(errno)); 
+      exit(0); 
+    } 
+    arg |= O_NONBLOCK; 
+    if( fcntl(s, F_SETFL, arg) < 0) { 
+      fprintf(stderr, "Error fcntl(..., F_SETFL) (%s)\n", strerror(errno)); 
+      exit(0); 
+    }
+
+    int res = connect(s, addr->ai_addr, addr->ai_addrlen);
+    if (res < 0) {
+      if (errno == EINPROGRESS){
+        FD_SET(s, &master);
+      } else {
+        perror("connect:"); exit(1);
+      }
+    }
+  }
+  struct timeval tv;
+  tv.tv_sec = 10; tv.tv_usec=0;
+  while (tv.tv_sec > 0) {
+    if (no_slaves == 0) break;
+    fd_set copy = master;
+    int res = select(no_slaves, NULL, &copy, NULL, &tv);
+    if (res < 0) { perror("select:"); exit(-1);}
+    for (int i = 0; i < no_slaves; ++i) {
+      if (FD_ISSET(sockets[i], &copy)) {
+        FD_CLR(sockets[i], &master);  // remove this socket so that we don't test it in next iterations
+        int valopt, lon = sizeof(int);
+        if (getsockopt(sockets[i], SOL_SOCKET, SO_ERROR, (void*)&valopt, &lon) < 0) {
+          perror("getsockopt:"); exit(1);
+        }
+        if (valopt) {
+          perror("delayed connect:"); exit(1);
+        }
+        // we got here => we have a connected socket for slave i
+        strcpy(secondaries[no_secondaries].addr, slaves[i].addr);
+        secondaries[no_secondaries].port_daemon = slaves[i].port_daemon;
+        secondaries[no_secondaries].port = slaves[i].port;
+        secondaries[no_secondaries].socket = sockets[i];
+        ++no_secondaries;
+      }
+    }
+    if (no_secondaries == no_slaves + 1) break;  // if we've contacted all slaves, don't wait any more
+                                                 // (add one cause we need to count ourselves also)
+  }
+  // close all sockets that haven't been connected yet
+  for (int i = 0; i < no_slaves; ++i) {
+    if (FD_ISSET(sockets[i], &master)) {
+      if (close(sockets[i])) {
+        perror("close:"); exit(1);
+      }
+    }
+  }
+
+  // set sockets to blocking again
+  for (int i = 0; i < no_secondaries; ++i) {
+    int arg;
+    if (secondaries[i].socket == -1) continue;  // nothing to do for ourselves
+    if( (arg = fcntl(secondaries[i].socket, F_GETFL, NULL)) < 0) { 
+      fprintf(stderr, "Error fcntl(..., F_GETFL) (%s)\n", strerror(errno)); 
+      exit(0); 
+    } 
+    arg &= (~O_NONBLOCK); 
+    if( fcntl(secondaries[i].socket, F_SETFL, arg) < 0) { 
+      fprintf(stderr, "Error fcntl(..., F_SETFL) (%s)\n", strerror(errno)); 
+      exit(0); 
+    } 
+  }
+
+  // read from each until we get an '!'
+  char buf[5000];
+  for (int i = 0; i < no_secondaries; ++i) {
+    if (secondaries[i].socket == -1) continue;  // nothing to do for ourselves
+    int read_bytes = 0;
+    do {
+      int res = read(secondaries[i].socket, buf + read_bytes, 5000 - read_bytes);
+      if (res < 0) {perror("read from socket"); exit(1);}
+      if (buf[read_bytes + res - 1] == '!') {
+        buf[read_bytes + res - 1] = 0;
+        parse_mem_map(buf);
+        break;
+      }
+      read_bytes += res;
+    } while (1);
+  }
+
+  // parse own memory map
+  parse_own_memory_map(buf);
+
+  // compute address ranges for all secondaries
+  qsort(mem_ranges, no_mem_ranges, sizeof(mem_range), &compare_mem_ranges);
+  //assign_mem_ranges();
+  
+  // transmit the index and all other node to each node
+  for (int i = 0; i < no_secondaries; ++i) {
+    int wholes[NO_TCS_PER_PROC * MAX_PROCS_PER_NODE];
+    int no_wholes;
+    get_vm_wholes(i, wholes, &no_wholes);
+    if (secondaries[i].socket = -1) continue;  // nothing to do for this node (ourselves)
+
+    sprintf(buf, "%d;", i);  // put the index in the buffer
+    // put all the wholes in the buffer
+    if (no_wholes == 0) {
+      strcat(buf, "-1;");  // signifies no wholes
+    } else {
+      for (int j = 0; j < no_wholes; j++) {
+        char s[no_wholes * 10];
+        if (j == no_wholes - 1)
+          sprintf(s, "%d", wholes[j]);
+        else
+          sprintf(s, "%d,", wholes[j]);
+        strcat(buf, s);
+      }
+    }
+
+    // put all the addresses in the buffer
+    for (int j = 0; j < no_secondaries; ++j) {
+      char s[100];
+      sprintf(s, "%s:%d;", secondaries[i].addr, secondaries[i].port);
+      strcat(buf, s);
+    }
+    strcat(buf, "!");
+
+    LOG(DEBUG, "sending \"%s\" to secondary %d\n", buf, i); 
+
+    int written = 0;
+    do {
+      int res = write(secondaries[i].socket, buf + written, strlen(buf) - written);
+      if (res < 0) {perror("writing range to socket"); exit(1);}
+      written += res;
+    } while (written < strlen(buf));
+  }
+  
+  // do my own (primary) initializations
+  NODE_INDEX = 0;
+  get_vm_wholes(0, tc_wholes, &no_tc_wholes);
+
+  // close all sockets
+  for (int i = 0; i < no_secondaries; ++i) {
+    if (secondaries[i].socket == -1) continue;  // nothing to do for ourselves
+    close(secondaries[i].socket);
+  }
+}
+#define handle_error(msg) \
+  do { perror(msg); exit(EXIT_FAILURE); } while (0)
+
+void sync_with_primary() {
+  int sock;
+  sock = socket(AF_INET, SOCK_STREAM, 0);
+  if (sock < 0) { perror("socket"); exit(EXIT_FAILURE); }
+  struct addrinfo hints, *addr;
+  memset(&hints, 0, sizeof(hints));
+  hints.ai_family = AF_UNSPEC;
+  hints.ai_socktype = SOCK_STREAM;
+  char port[10];
+  sprintf(port, "%d", primary_port);
+  if (getaddrinfo(primary_address, port, &hints, &addr) < 0) handle_error("getaddrinfo");
+  if (bind(sock, addr->ai_addr, addr->ai_addrlen) < 0) handle_error("bind");
+  if (listen(sock, 5) < 0) handle_error("listen");
+  
+  int cfd = accept(sock, NULL, NULL);
+  if (cfd < 0) handle_error("accept"); 
+ 
+  char map[3000];
+  parse_own_memory_map(map);
+
+  /* send mem map to primary */
+
+  LOG(INFO, "sending memory map to primary\n");
+  int sent = 0;
+  while (sent < strlen(map)) {
+    int res = write(cfd, map + sent, strlen(map) - sent);
+    if (res < 0) {perror("sending map"); exit(1);}
+    sent += res;
+  }
+  
+  /* get index, wholes, and addresses of other nodes from primary */
+  LOG(INFO, "expecting information about peers from primary\n");
+  int read_bytes = 0;
+  char buf[5000];
+  do {
+    int res = read(sock, buf + read_bytes, 5000 - read_bytes);
+    if (res < 0) {perror("read from socket"); exit(1);}
+    if (buf[read_bytes + res - 1] == '!') {
+      buf[read_bytes + res - 1] = 0;
+      break;
+    }
+    read_bytes += res;
+  } while (1);
+  LOG(INFO, "got information about virtual memory wholes and peers from primary");
+
+  /* parse what we got from the primary; should be <own index>;addr:port;add:port,...; */
+  char* saveptr_buf, *saveptr2;
+  char* tok = strtok_r(buf, ";", &saveptr_buf);
+  NODE_INDEX = atoi(tok);
+  tok = strtok_r(buf, ";", &saveptr_buf);
+  if (strcmp(buf, "-1")) {  // "-1" would signify no whole
+    // we have received some wholes
+    char* tok2 = strtok_r(tok, ",", &saveptr2);
+    while (tok2) {
+      tc_wholes[no_tc_wholes++] = atoi(tok2);
+      tok2 = strtok_r(NULL, ",", &saveptr2);
+    }
+  }
+  do {
+    tok = strtok_r(NULL, ";", &saveptr_buf);
+    if (tok == NULL) break;
+    char* addr = strtok_r(tok, ":", &saveptr2);
+    char* port = strtok_r(NULL, ":", &saveptr2);
+    strcpy(secondaries[no_secondaries].addr, addr);
+    secondaries[no_secondaries].port = atoi(port);
+    secondaries[no_secondaries].socket = -1;
+    ++no_secondaries;
+  } while (1);
+  LOG(INFO, "got information about %d nodes, including myself\n", no_secondaries);
+}
+
+int start(int argc, char** argv);
+
+int start_standalone(int argc, char** argv) {
+  return start(argc, argv);
+}
+
+int start_secondary(int argc, char** argv) {
+  assert(0); // FIXME
+  // TODO: start a delegation interface
+  
+  rt_init();
+
+  // TODO: wait for quit message
+  sleep(60);  // FIXME
+
+  rt_quit();
+  return 0;
+}
+
+int start_primary(int argc, char** argv) {
+  return start(argc, argv);
+}
+
+int start(int argc, char** argv) {
+  NODE_INDEX = 0;
+  get_vm_wholes(0, tc_wholes, &no_tc_wholes);
 
   rt_init();  // init the runtime
 
@@ -978,13 +1490,41 @@ int main(int argc, char** argv) {
   return 0;
 }
 
+/*
+ * main function; sets up the runtime and creates root_fam, with one thread
+ */
+#undef main
+int main(int argc, char** argv) {
+
+  struct sigaction sa;
+  sa.sa_sigaction = sighandler_foo;
+  sigemptyset(&sa.sa_mask);
+  sa.sa_flags = SA_SIGINFO;
+
+  if (sigaction(SIGSEGV, &sa, NULL) != 0)
+  { perror("sigaction"); exit(1); }
+
+  LOG(DEBUG, "starting\n");
+
+  if (am_i_secondary()) {
+    sync_with_primary();
+    return start_secondary(argc, argv);
+  } else if (am_i_primary()) {
+    start_nodes();
+    start_primary(argc, argv);
+  } else { // I'm running on my own, no peers
+    LOG(INFO, "running in standalone mode; no peers\n");
+    return start_standalone(argc, argv);  
+  }
+}
+
 void write_global(fam_context_t* ctx, int index, long val) {
   int i;
   // write the global to every TC that will run part of the family
   for (i = 0; i < ctx->no_ranges; ++i) {
     tc_ident_t id = ctx->ranges[i].dest;
     assert(id.node_index == _cur_tc->ident.node_index);  // TODO
-    tc_t* dest = (tc_t*)TC_START_VM_EXTENDED(id.node_index, id.tc_index);
+    tc_t* dest = (tc_t*)TC_START_VM_EX(id.node_index, id.tc_index);
     assert(dest == id.tc);  // TODO: if this assert proves to hold, remove the line above
     write_istruct(&(id.tc->globals[index]), val, &id);
   }

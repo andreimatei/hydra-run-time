@@ -6,17 +6,14 @@ int main(int argc, char** argv) {
   FILE* file = fopen("output.txt", "wt");
   fprintf(file, "blah\n");
   fclose(file);
-//  return 0;
-//  *((char*)0x00) = 'a';
-//  printf("TESTTESTTESTTEST\n");
-  FILE* pipe_out = fopen("/tmp/fifo-to-daemon", "w"); 
+  //FILE* pipe_out = fopen("/tmp/fifo-to-daemon", "w"); 
+  FILE* pipe_out = fopen(argv[2], "w"); 
   printf("PROGRAM: writing to pipe: %s\n", argv[2]);
-  //fprintf(pipe_out, "muie\n");
-  fprintf(pipe_out, argv[2]);
+  fprintf(pipe_out, "kewl");
   fprintf(pipe_out, "\n");
   fclose(pipe_out);
   sleep(2);
-  printf("PROGRAM: exiting\n");
+  //printf("PROGRAM: exiting\n");
   
   /*
   printf("Program loaded... announcing on pipe %s\n", argv[1]);
