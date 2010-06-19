@@ -55,6 +55,9 @@ static char primary_address[100];  // ip address of the primary node (for now, i
                             // that node itself)
 static int primary_port;  // see above
 
+static int my_port;  // local port used by the runtime (not the "daemon" part)
+static int my_socket;
+
 static int tc_wholes[1000];
 static int no_tc_wholes = 0;
 
@@ -173,6 +176,9 @@ void populate_tc(tc_t* tc,
                  int is_last_tc);
 int atomic_increment_next_tc(int proc_id);
 void write_istruct_no_checks(i_struct* istructp, long val);
+
+#define handle_error(msg) \
+  do { perror(msg); exit(EXIT_FAILURE); } while (0)
 
 /*
  * Check wether a particular TC has been created on this node or not.
@@ -1157,6 +1163,7 @@ int am_i_primary() {
         if (!addr) break;  // got '\n' or something
         strcpy(slaves[no_slaves].addr, addr);
         slaves[no_slaves].port_daemon = atoi(port_daemon_s);
+        LOG(DEBUG, "found info about secondary: %s:%d\n", slaves[no_slaves].addr, slaves[no_slaves].port_daemon);
         ++no_slaves;
       }
     }
@@ -1195,16 +1202,55 @@ void get_vm_wholes(int node_index, int* wholes, int* no_wholes) {
   }
 }
 
+/*
+ * Creates a socket where this node will listen for delegation requests;
+ */
+void create_delegation_socket() {
+  int sock;
+  sock = socket(AF_INET, SOCK_STREAM, 0);
+  if (sock < 0) handle_error("socket");
+  struct addrinfo hints, *addr;
+  memset(&hints, 0, sizeof(hints));
+  hints.ai_family = AF_INET;
+  hints.ai_socktype = SOCK_STREAM;
+  char port[10];
+  char* s;
+  if (s = getenv("PORT")) {
+    my_port = atoi(s);
+  } else {  // TODO: if the envvar wasn't set, we choose a random port... obviously it could be in use
+            // how the hell do I get the OS to give me one?
+    my_port = (rand() % 20000) + 2000;
+  }
+  sprintf(port, "%d", my_port);
+
+  int res;
+  if ((res = getaddrinfo(NULL, port, &hints, &addr)) < 0) {
+    LOG(CRASH, "getaddrinfo failed: %s\n", gai_strerror(res)); exit(EXIT_FAILURE);
+  }
+  if (bind(sock, addr->ai_addr, addr->ai_addrlen) < 0) handle_error("bind");
+  my_socket = sock;
+  //char buf[1000];
+  //int len = 1000;
+  //if (getsockname(sock, (struct sockaddr*)buf, &len) < 0) handle_error("getsockname");
+
+  //assert(((struct sockaddr*)buf)->sa_family == AF_INET);  // test that we got an IPv4 address
+  //*port = ntohs(((struct sockaddr_in*)buf)->sin_port);
+  //return sock;
+}
+
+
 void start_nodes() {
+
   // add ourselves to the array
   strcpy(secondaries[0].addr, primary_address);
-  secondaries[0].port = primary_port;
-  secondaries[0].port_daemon = -1;
+  secondaries[0].port = my_port;
+  secondaries[0].port_daemon = primary_port;
   secondaries[0].socket = -1;
   ++no_secondaries;
 
   // contact slaves, 1 by 1, and ask for their
   int sockets[no_slaves];
+  int max_socket = -1;
   struct addrinfo hints;
   memset(&hints, 0, sizeof(hints));
   hints.ai_family = AF_UNSPEC;
@@ -1212,55 +1258,61 @@ void start_nodes() {
 
   fd_set master, readfds;
   FD_ZERO(&master);
+  LOG(INFO, "attempting connection to %d secondaries\n", no_slaves);
   for (int i = 0; i < no_slaves; ++i) {
     struct addrinfo* addr;
     char sport[10];
     sprintf(sport, "%d", slaves[i].port_daemon);
-    if (getaddrinfo(slaves[i].addr, sport, &hints, &addr) < 0) {
-      perror("getaddrinfo:"); exit(1);
-    }
+    if (getaddrinfo(slaves[i].addr, sport, &hints, &addr) < 0) handle_error("getaddrinfo");
     int s = socket(addr->ai_family, SOCK_STREAM, addr->ai_protocol);
+    if (s > max_socket) max_socket = s;
     sockets[i] = s;
     if (s == -1) {perror("socket:"); exit(1);}
 
     long arg;
     // Set non-blocking 
-    if( (arg = fcntl(s, F_GETFL, NULL)) < 0) { 
-      fprintf(stderr, "Error fcntl(..., F_GETFL) (%s)\n", strerror(errno)); 
-      exit(0); 
-    } 
+    if( (arg = fcntl(s, F_GETFL, NULL)) < 0) handle_error("fcntl"); 
     arg |= O_NONBLOCK; 
-    if( fcntl(s, F_SETFL, arg) < 0) { 
-      fprintf(stderr, "Error fcntl(..., F_SETFL) (%s)\n", strerror(errno)); 
-      exit(0); 
-    }
+    if( fcntl(s, F_SETFL, arg) < 0) handle_error("fcntl");
 
+    LOG(DEBUG, "attempting connection to secondary %s:%d\n", slaves[i].addr, slaves[i].port_daemon); 
     int res = connect(s, addr->ai_addr, addr->ai_addrlen);
     if (res < 0) {
-      if (errno == EINPROGRESS){
+      if (errno == EINPROGRESS) { 
         FD_SET(s, &master);
-      } else {
-        perror("connect:"); exit(1);
-      }
+      } else { handle_error("connect"); }
     }
   }
+
   struct timeval tv;
   tv.tv_sec = 10; tv.tv_usec=0;
   while (tv.tv_sec > 0) {
     if (no_slaves == 0) break;
-    fd_set copy = master;
-    int res = select(no_slaves, NULL, &copy, NULL, &tv);
-    if (res < 0) { perror("select:"); exit(-1);}
+    fd_set copy_read = master;
+    fd_set copy_write = master;
+    fd_set copy_exception = master;
+    LOG(DEBUG, "calling select\n");
+    // TODO: the first argument of select should be
+    // "the highest-numbered file descriptor in any of the three sets, plus 1." This will be certainly true
+    // for the fist iteration, but then I may change the sets and max_socket might no reflect this. Is this an
+    // issue? select is the API from hell.
+    int res = select(max_socket + 1, NULL, &copy_write, NULL, &tv);
+    //int res = select(max_socket + 1, &copy_read, &copy_write, &copy_exception, &tv);
+    LOG(DEBUG, "select returned\n");
+    if (res < 0) { handle_error("select"); }
+
     for (int i = 0; i < no_slaves; ++i) {
-      if (FD_ISSET(sockets[i], &copy)) {
+      if (FD_ISSET(sockets[i], &copy_write)) {
         FD_CLR(sockets[i], &master);  // remove this socket so that we don't test it in next iterations
         int valopt, lon = sizeof(int);
-        if (getsockopt(sockets[i], SOL_SOCKET, SO_ERROR, (void*)&valopt, &lon) < 0) {
-          perror("getsockopt:"); exit(1);
-        }
+        if (getsockopt(sockets[i], SOL_SOCKET, SO_ERROR, (void*)&valopt, &lon) < 0) handle_error("getsockopt");
         if (valopt) {
-          perror("delayed connect:"); exit(1);
+          LOG(INFO, "connection to secondary %s:%d didn't succeed\n", slaves[i].addr, slaves[i].port_daemon); 
+          continue;
+          //perror("delayed connect:"); exit(1);
         }
+        LOG(INFO, "connection to secondary %s:%d succeeded (socket %d)\n", 
+            slaves[i].addr, slaves[i].port_daemon, sockets[i]); 
         // we got here => we have a connected socket for slave i
         strcpy(secondaries[no_secondaries].addr, slaves[i].addr);
         secondaries[no_secondaries].port_daemon = slaves[i].port_daemon;
@@ -1272,9 +1324,11 @@ void start_nodes() {
     if (no_secondaries == no_slaves + 1) break;  // if we've contacted all slaves, don't wait any more
                                                  // (add one cause we need to count ourselves also)
   }
-  // close all sockets that haven't been connected yet
+  LOG(INFO, "done waiting for connections to secondaries to succeed\n"); 
+  // close all soc kets that haven't been connected yet
   for (int i = 0; i < no_slaves; ++i) {
     if (FD_ISSET(sockets[i], &master)) {
+      LOG(INFO, "connection to secondary %s:%d didn't succeed in the timeout\n", slaves[i].addr, slaves[i].port_daemon); 
       if (close(sockets[i])) {
         perror("close:"); exit(1);
       }
@@ -1300,18 +1354,32 @@ void start_nodes() {
   char buf[5000];
   for (int i = 0; i < no_secondaries; ++i) {
     if (secondaries[i].socket == -1) continue;  // nothing to do for ourselves
+    LOG(INFO, "waiting for memory map from secondary %s\n", secondaries[i].addr); 
     int read_bytes = 0;
     do {
       int res = read(secondaries[i].socket, buf + read_bytes, 5000 - read_bytes);
       if (res < 0) {perror("read from socket"); exit(1);}
       if (buf[read_bytes + res - 1] == '!') {
         buf[read_bytes + res - 1] = 0;
+        // remove port number - first token
+        char* port = strtok(buf, ";");
+        assert(port);
+        secondaries[i].port = atoi(port);
+        LOG(DEBUG, "got port %d from secondary %s:%d\n", secondaries[i].port, secondaries[i].addr, secondaries[i].port_daemon);
         parse_mem_map(buf);
         break;
       }
       read_bytes += res;
     } while (1);
+    LOG(INFO, "got port number and memory map from secondary %s:%d\n", 
+        secondaries[i].addr, secondaries[i].port_daemon); 
   }
+  
+  LOG(DEBUG, "Running with nodes:\n");
+  for (int i = 0; i < no_secondaries; ++i) {
+    LOG(DEBUG, "%s:%d\n", secondaries[i].addr, secondaries[i].port);
+  }
+
 
   // parse own memory map
   parse_own_memory_map(buf);
@@ -1321,11 +1389,12 @@ void start_nodes() {
   //assign_mem_ranges();
   
   // transmit the index and all other node to each node
+  LOG(INFO, "transmitting data to %d secondaries...\n", no_secondaries - 1);
   for (int i = 0; i < no_secondaries; ++i) {
     int wholes[NO_TCS_PER_PROC * MAX_PROCS_PER_NODE];
     int no_wholes;
     get_vm_wholes(i, wholes, &no_wholes);
-    if (secondaries[i].socket = -1) continue;  // nothing to do for this node (ourselves)
+    if (secondaries[i].socket == -1) continue;  // nothing to do for this node (ourselves)
 
     sprintf(buf, "%d;", i);  // put the index in the buffer
     // put all the wholes in the buffer
@@ -1342,10 +1411,12 @@ void start_nodes() {
       }
     }
 
+    LOG(DEBUG, "preparing buffer for secondary %s:%d\n", secondaries[i].addr, secondaries[i].port_daemon);
+
     // put all the addresses in the buffer
     for (int j = 0; j < no_secondaries; ++j) {
       char s[100];
-      sprintf(s, "%s:%d;", secondaries[i].addr, secondaries[i].port);
+      sprintf(s, "%s:%d;", secondaries[j].addr, secondaries[j].port);
       strcat(buf, s);
     }
     strcat(buf, "!");
@@ -1355,10 +1426,13 @@ void start_nodes() {
     int written = 0;
     do {
       int res = write(secondaries[i].socket, buf + written, strlen(buf) - written);
+      LOG(DEBUG, "written %d bytes to secondary %s:%d\n", res, secondaries[i].addr, secondaries[i].port_daemon);
       if (res < 0) {perror("writing range to socket"); exit(1);}
       written += res;
     } while (written < strlen(buf));
+    LOG(DEBUG, "done sending data to secondary %s:%d\n", secondaries[i].addr, secondaries[i].port_daemon);
   }
+  LOG(INFO, "done transmitting data to secondaries\n");
   
   // do my own (primary) initializations
   NODE_INDEX = 0;
@@ -1367,38 +1441,51 @@ void start_nodes() {
   // close all sockets
   for (int i = 0; i < no_secondaries; ++i) {
     if (secondaries[i].socket == -1) continue;  // nothing to do for ourselves
-    close(secondaries[i].socket);
+    if (close(secondaries[i].socket) < 0) handle_error("close");
   }
 }
-#define handle_error(msg) \
-  do { perror(msg); exit(EXIT_FAILURE); } while (0)
 
-void sync_with_primary() {
+void sync_with_primary(void) {
   int sock;
   sock = socket(AF_INET, SOCK_STREAM, 0);
   if (sock < 0) { perror("socket"); exit(EXIT_FAILURE); }
   struct addrinfo hints, *addr;
   memset(&hints, 0, sizeof(hints));
-  hints.ai_family = AF_UNSPEC;
+  hints.ai_family = AF_INET;
   hints.ai_socktype = SOCK_STREAM;
   char port[10];
-  sprintf(port, "%d", primary_port);
-  if (getaddrinfo(primary_address, port, &hints, &addr) < 0) handle_error("getaddrinfo");
+  
+  int daemon_port = 33333;
+  char *s;
+  if (s = getenv("DAEMON_PORT")) {
+    daemon_port = atoi(s);
+  }
+
+  sprintf(port, "%d", daemon_port);
+  if (getaddrinfo(NULL, port, &hints, &addr) < 0) handle_error("getaddrinfo");
+  int on = 1;
+  if (setsockopt(sock, SOL_SOCKET, SO_REUSEADDR, &on, sizeof(on)) < 0) handle_error("setsockopt");
   if (bind(sock, addr->ai_addr, addr->ai_addrlen) < 0) handle_error("bind");
   if (listen(sock, 5) < 0) handle_error("listen");
+
+  LOG(INFO, "waiting for connection from primary, on port %s\n", port);
   
   int cfd = accept(sock, NULL, NULL);
   if (cfd < 0) handle_error("accept"); 
+  LOG(INFO, "got connection from primary, on port %s\n", port);
  
   char map[3000];
   parse_own_memory_map(map);
 
-  /* send mem map to primary */
+  /* send own port number and mem map to primary */
 
-  LOG(INFO, "sending memory map to primary\n");
+  LOG(INFO, "sending own port (%d) and memory map to primary\n", my_port);
+  char buf2[3010];
+  sprintf(buf2, "%d;", my_port);
+  strcat(buf2, map);
   int sent = 0;
-  while (sent < strlen(map)) {
-    int res = write(cfd, map + sent, strlen(map) - sent);
+  while (sent < strlen(buf2)) {
+    int res = write(cfd, buf2 + sent, strlen(buf2) - sent);
     if (res < 0) {perror("sending map"); exit(1);}
     sent += res;
   }
@@ -1408,7 +1495,8 @@ void sync_with_primary() {
   int read_bytes = 0;
   char buf[5000];
   do {
-    int res = read(sock, buf + read_bytes, 5000 - read_bytes);
+    int res = read(cfd, buf + read_bytes, 5000 - read_bytes);
+    LOG(DEBUG, "got %d bytes from primary\n", res);
     if (res < 0) {perror("read from socket"); exit(1);}
     if (buf[read_bytes + res - 1] == '!') {
       buf[read_bytes + res - 1] = 0;
@@ -1416,20 +1504,25 @@ void sync_with_primary() {
     }
     read_bytes += res;
   } while (1);
-  LOG(INFO, "got information about virtual memory wholes and peers from primary");
-
+  LOG(INFO, "got information about virtual memory wholes and peers from primary\n");
+  
+  LOG(DEBUG, "got data \"%s\" from primary\n", buf);
   /* parse what we got from the primary; should be <own index>;addr:port;add:port,...; */
   char* saveptr_buf, *saveptr2;
   char* tok = strtok_r(buf, ";", &saveptr_buf);
   NODE_INDEX = atoi(tok);
-  tok = strtok_r(buf, ";", &saveptr_buf);
-  if (strcmp(buf, "-1")) {  // "-1" would signify no whole
+  LOG(INFO, "my node index is %d\n", NODE_INDEX);
+  tok = strtok_r(NULL, ";", &saveptr_buf);
+  if (strcmp(tok, "-1")) {  // "-1" would signify no whole
     // we have received some wholes
+    LOG(DEBUG, "received info about some memory wholes\n");
     char* tok2 = strtok_r(tok, ",", &saveptr2);
     while (tok2) {
       tc_wholes[no_tc_wholes++] = atoi(tok2);
       tok2 = strtok_r(NULL, ",", &saveptr2);
     }
+  } else {
+    LOG(DEBUG, "there are no wholes in my address space\n");
   }
   do {
     tok = strtok_r(NULL, ";", &saveptr_buf);
@@ -1442,6 +1535,10 @@ void sync_with_primary() {
     ++no_secondaries;
   } while (1);
   LOG(INFO, "got information about %d nodes, including myself\n", no_secondaries);
+  LOG(DEBUG, "Running with nodes:\n");
+  for (int i = 0; i < no_secondaries; ++i) {
+    LOG(DEBUG, "%s:%d\n", secondaries[i].addr, secondaries[i].port);
+  }
 }
 
 int start(int argc, char** argv);
@@ -1451,10 +1548,12 @@ int start_standalone(int argc, char** argv) {
 }
 
 int start_secondary(int argc, char** argv) {
+
+  rt_init();
+  
   assert(0); // FIXME
   // TODO: start a delegation interface
   
-  rt_init();
 
   // TODO: wait for quit message
   sleep(60);  // FIXME
@@ -1505,13 +1604,24 @@ int main(int argc, char** argv) {
   { perror("sigaction"); exit(1); }
 
   LOG(DEBUG, "starting\n");
+  srand(getpid());
 
   if (am_i_secondary()) {
+    LOG(DEBUG, "creating a socket for delegation...\n");
+    create_delegation_socket();
+    LOG(INFO, "bound a socket for the delegation interface; got socket %d, port %d\n", my_socket, my_port);
+    
     sync_with_primary();
     return start_secondary(argc, argv);
+  
   } else if (am_i_primary()) {
+    LOG(DEBUG, "creating a socket for delegation...\n");
+    create_delegation_socket();
+    LOG(INFO, "bound a socket for the delegation interface; got socket %d, port %d\n", my_socket, my_port);
+    
     start_nodes();
     start_primary(argc, argv);
+  
   } else { // I'm running on my own, no peers
     LOG(INFO, "running in standalone mode; no peers\n");
     return start_standalone(argc, argv);  
