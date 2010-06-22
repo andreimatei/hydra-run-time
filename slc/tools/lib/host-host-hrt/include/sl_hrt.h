@@ -204,8 +204,8 @@ static inline void _return_to_scheduler() {
 }
 
 
-void rt_init();
-void rt_quit();
+//void rt_init();
+//void rt_quit();
 
 
 // called by fam_main at the end, instead of the regular thread function exit code

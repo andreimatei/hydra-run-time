@@ -11,6 +11,8 @@
 #include <signal.h>
 #include <sys/types.h>
 #include <sys/socket.h>
+#include <netinet/in.h>
+#include <netinet/sctp.h>
 #include <netdb.h>
 #include <fcntl.h>
 #include <errno.h>
@@ -37,10 +39,10 @@
                             // first VM_PER_TC is left for the runtime
 
 //#define RT_START_VM (node_start_addr)
-#define RT_START_VM (NODE_START_VM)
+#define RT_START_VM ((void*)NODE_START_VM)
 //#define RT_END_VM (node_start_addr + VM_PER_TC - 1)  // RT's vm is equal to a TC's vm
 #define RT_END_VM ((void*)(NODE_START_VM + VM_PER_TC - 1))  // RT's vm is equal to a TC's vm
-#define PROCESSOR_PTHREAD_STACK_SIZE (1<<15)
+#define PROCESSOR_PTHREAD_STACK_SIZE ((unsigned long long)1<<15)
 
 #define NO_FAM_CONTEXTS_PER_PROC 1024
 
@@ -55,7 +57,8 @@ static char primary_address[100];  // ip address of the primary node (for now, i
                             // that node itself)
 static int primary_port;  // see above
 
-static int my_port;  // local port used by the runtime (not the "daemon" part)
+static int port_sctp;  // local port used for everything except memory requests (not the "daemon" part)
+static int port_tcp;   // local port used for incoming memory requests
 static int my_socket;
 
 static int tc_wholes[1000];
@@ -95,10 +98,10 @@ extern inline enum istruct_state ld_acq_istruct(volatile i_struct* istruct) {
 }
 
 
-const char* log_prefix[20] = {"[CRASH] ",  // 0
+const char* log_prefix[20] = {"[CRASH]!!!!!!!!!!!!!!!!!!!! ",  // 0
                               "[CRASH+1] ",  // 1
                               "[CRASH+2] ",  // 2
-                              "[WARNING] ",  // 3
+                              "[WARNING]~~~~~~~~~~~~~~~~~~ ",  // 3
                               "[WARNING + 1] ",  // 4
                               "[WARNING + 2] ",  // 5
                               "[WARNING + 3] ",  // 6
@@ -160,8 +163,11 @@ __thread tc_t* _cur_tc = NULL;  // pointer to the TC currently occupying the acc
 
 fam_context_t fam_contexts[MAX_PROCS_PER_NODE][NO_FAM_CONTEXTS_PER_PROC];
 /* locks for allocating fam contexts; one per processor */
-// TODO: pad to one per cache line
 padded_spinlock_t fam_contexts_locks[MAX_PROCS_PER_NODE];
+
+int tc_valid[NO_TCS_PER_PROC * MAX_PROCS_PER_NODE];  // 1 if a TC has been created, 0 if not (due to a
+                                                        // memory whole)
+
 
 void unblock_tc(tc_t* tc, int same_processor);
 void block_tc_and_unlock(tc_t* tc, pthread_spinlock_t* lock);
@@ -176,6 +182,7 @@ void populate_tc(tc_t* tc,
                  int is_last_tc);
 int atomic_increment_next_tc(int proc_id);
 void write_istruct_no_checks(i_struct* istructp, long val);
+static void* delegation_interface(void*);
 
 #define handle_error(msg) \
   do { perror(msg); exit(EXIT_FAILURE); } while (0)
@@ -188,8 +195,7 @@ void write_istruct_no_checks(i_struct* istructp, long val);
  * *) some TCs might not have been created due to wholes in the address space.
  */
 int tc_is_valid(int tc_index) {
-  //TODO: actually check that the TC has been created
-  return 1;
+  return tc_valid[tc_index];
 }
 
 mapping_decision map_fam(
@@ -494,14 +500,36 @@ void* mmap_processor_stack(int processor_index) {
   void* mapping = mmap(low_addr, PROCESSOR_PTHREAD_STACK_SIZE, PROT_READ | PROT_WRITE,
                        MAP_PRIVATE|MAP_FIXED|MAP_ANON, -1, 0);
   //TODO: add a guard page between stacks
-  if (mapping == MAP_FAILED) {
-    perror("mmap"); exit(1);
-  }
+  if (mapping == MAP_FAILED) handle_error("mmap");
   assert(mapping == low_addr);
   return low_addr;
 }
 
-void init_processors() {
+
+// TODO: find a better way to allocate a stack for this thread
+static const int delegation_if_stack_size = 1 << 15;
+static char delegation_if_stack[1<<15];
+/*
+ * Map a stack for the pthread handling the delegation interface. The stack will be located
+ * right before the stacks for the processors.
+ */
+void* mmap_delegation_interface_stack(size_t* size) {
+  *size = delegation_if_stack_size;
+  return delegation_if_stack;
+}
+
+static int get_no_CPUs() {
+  int res = sysconf(_SC_NPROCESSORS_ONLN);
+  if (res < 1) {
+    LOG(WARNING, "couldn't read the number of CPUs. Running with only 1.\n");
+    return 1;
+  } else {
+    LOG(INFO, "running on %d CPUs\n", res);
+  }
+  return res;
+}
+
+static void init_processors() {
   unsigned long i;
   for (i = 0; i < NO_PROCS; ++i) {
     pthread_attr_init(&threads_attr[i]);
@@ -515,13 +543,17 @@ void init_processors() {
   }
 }
 
-void create_tc(int tc_index);
+static void create_tc(int tc_index);
 
-void rt_init() {
+static void rt_init() {
   /* sanity checks */
   assert(VM_PER_NODE >= (NO_TCS_PER_PROC * MAX_PROCS_PER_NODE * VM_PER_TC + VM_PER_TC));
   assert(RT_START_VM >= NODE_START_VM);
   assert(NODE_START_VM + VM_PER_NODE > (void*)TC_START_VM(NO_TCS_PER_PROC * MAX_PROCS_PER_NODE));
+  // assert there's enough space for the processor stacks
+  unsigned long x = 
+      ( ((unsigned long long)(MAX_PROCS_PER_NODE)) * PROCESSOR_PTHREAD_STACK_SIZE);
+  assert(((unsigned long long)RT_END_VM - (unsigned long long)RT_START_VM) >= x);
   
   //check that the lock within a padded lock is placed at the beginning of the union. We care, since we
   //cast the union to the lock.
@@ -529,7 +561,7 @@ void rt_init() {
   assert((void*)&allocate_tc_locks[0].lock == (void*)&allocate_tc_locks[0]);
 
 
-  //init runnable_queue_locks
+  // init runnable_queue_locks
   int i, j;
   for (i = 0; i < NO_PROCS; ++i) {
     if (pthread_spin_init((pthread_spinlock_t*)&runnable_queue_locks[i], PTHREAD_PROCESS_PRIVATE) != 0) {
@@ -550,6 +582,7 @@ void rt_init() {
     for (int j = 0; j < no_tc_wholes; ++j) {
       if (tc_wholes[j] == i) {
         skip = 1;
+        tc_valid[i] = 0;
         LOG(INFO, "skipping creating TC %d because of a whole in the virtual memory\n", i);
         break;
       }
@@ -560,6 +593,7 @@ void rt_init() {
     mmap_tc_ctrl_struct(i);
 
     // init tc fields
+    tc_valid[i] = 1;
     create_tc(i);
   }
 
@@ -955,8 +989,11 @@ void sighandler_foo(int sig, siginfo_t *si, void *ucontext);
 
 pthread_mutex_t main_finished_mutex;
 pthread_cond_t main_finished_cv;
-volatile int main_finished;
-
+int main_finished = 0;
+static pthread_mutex_t delegation_if_finished_mutex;
+static pthread_cond_t delegation_if_finished_cv;
+static int delegation_if_finished = 0;
+static pthread_t delegation_if_thread;
 
 void end_main() {
   pthread_mutex_lock(&main_finished_mutex);
@@ -1077,6 +1114,8 @@ int compare_mem_ranges(const void* l, const void* r) {
 
 
 void parse_mem_map(char* buf) {
+  LOG(DEBUG, "parsing mem map: %s\n", buf);
+
   char* saveptr_range;//, *saveptr2;
   char* range = strtok_r(buf, ";", &saveptr_range);
   while (range) {
@@ -1109,7 +1148,7 @@ void parse_mem_map(char* buf) {
 struct slave_addr {
   char addr[500];
   int port_daemon;
-  int port;
+  //int port;
 };
 typedef struct slave_addr slave_addr;
 slave_addr slaves[1000];
@@ -1118,8 +1157,9 @@ int no_slaves = -1;
 typedef struct secondary {
   char addr[500];
   int port_daemon;
-  int port;
+  int port_sctp, port_tcp;
   int socket;
+  int no_procs;
   //mem_range memory_range;
 } secondary;
 secondary secondaries[1000];
@@ -1202,33 +1242,167 @@ void get_vm_wholes(int node_index, int* wholes, int* no_wholes) {
   }
 }
 
+
+static int tcp_incoming_sockets[1000];
+static int no_tcp_incoming_sockets = 0;
+
 /*
- * Creates a socket where this node will listen for delegation requests;
+ * This function does not block.
  */
-void create_delegation_socket() {
-  int sock;
-  sock = socket(AF_INET, SOCK_STREAM, 0);
-  if (sock < 0) handle_error("socket");
-  struct addrinfo hints, *addr;
+static int handle_new_tcp_connection(int listening_sock) {
+  int conn = accept(listening_sock, NULL, NULL);
+  tcp_incoming_sockets[no_tcp_incoming_sockets++] = conn;
+  return conn; 
+}
+
+/*
+ * This function does not block.
+ */
+static void handle_sctp_request(int sock) {
+  char buf[1000];
+  struct sctp_sndrcvinfo sndrcvinfo;
+  int flags;
+  int read = sctp_recvmsg(sock, buf, sizeof(buf), NULL, 0, &sndrcvinfo, &flags);
+  assert(read < sizeof(buf));
+  buf[read] = 0;  // NULL-terminate the string
+
+  // FIXME: handle the request
+}
+
+/*
+ * This function does not block.
+ */
+static void handle_incoming_mem_chunk(int sock) {
+  char buf[10000];
+  while (1) {
+    int r = read(sock, buf, 10000);
+    assert(r > 0);
+
+    //FIXME: actually handle the read data
+
+    if (r == 10000) {  // maybe there's more data
+      //poll with 0 timeout to return immediately
+      fd_set set;
+      FD_ZERO(&set);
+      FD_SET(sock, &set);
+      struct timeval tv;
+      tv.tv_sec = 0; tv.tv_usec=0;
+      int res = select(sock, &set, NULL, NULL, &tv);
+      if (res < 0) handle_error("select");
+      if (FD_ISSET(sock, &set)) {
+        continue;
+      } else {
+        break;
+      }
+    } else {
+      break;
+    }
+  }
+}
+
+struct delegation_interface_params_t {
+  int sock_sctp, sock_tcp;
+}delegation_if_arg;
+
+static void create_delegation_socket() {
+  struct addrinfo hints, *addr_sctp, *addr_tcp;
   memset(&hints, 0, sizeof(hints));
   hints.ai_family = AF_INET;
   hints.ai_socktype = SOCK_STREAM;
-  char port[10];
+  char port1[10], port2[10];
   char* s;
-  if (s = getenv("PORT")) {
-    my_port = atoi(s);
+  if (s = getenv("SCTP_PORT")) {
+    port_sctp = atoi(s);
   } else {  // TODO: if the envvar wasn't set, we choose a random port... obviously it could be in use
             // how the hell do I get the OS to give me one?
-    my_port = (rand() % 20000) + 2000;
+    port_sctp = (rand() % 20000) + 2000;
   }
-  sprintf(port, "%d", my_port);
+  if (s = getenv("TCP_PORT")) {
+    port_tcp = atoi(s);
+  } else {  // TODO: if the envvar wasn't set, we choose a random port... obviously it could be in use
+            // how the hell do I get the OS to give me one?
+    port_tcp = (rand() % 20000) + 2000;
+  }
+  sprintf(port1, "%d", port_sctp);
+  sprintf(port2, "%d", port_tcp);
+  LOG(DEBUG, "starting delegation interface on ports %d, %d\n", port_sctp, port_tcp);
 
   int res;
-  if ((res = getaddrinfo(NULL, port, &hints, &addr)) < 0) {
+  if ((res = getaddrinfo(NULL, port1, &hints, &addr_sctp)) < 0) {
     LOG(CRASH, "getaddrinfo failed: %s\n", gai_strerror(res)); exit(EXIT_FAILURE);
   }
-  if (bind(sock, addr->ai_addr, addr->ai_addrlen) < 0) handle_error("bind");
-  my_socket = sock;
+  if ((res = getaddrinfo(NULL, port2, &hints, &addr_tcp)) < 0) {
+    LOG(CRASH, "getaddrinfo failed: %s\n", gai_strerror(res)); exit(EXIT_FAILURE);
+  }
+  
+  int sock_sctp, sock_tcp;
+  sock_sctp = socket(AF_INET, SOCK_STREAM, IPPROTO_SCTP);
+  if (sock_sctp < 0) handle_error("socket");
+  sock_tcp = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+  if (sock_tcp < 0) handle_error("socket");
+
+
+  /* Enable receipt of SCTP Snd/Rcv Data via sctp_recvmsg */
+  struct sctp_event_subscribe events;
+  memset( (void *)&events, 0, sizeof(events) );
+  events.sctp_data_io_event = 1;
+  setsockopt( sock_sctp, SOL_SCTP, SCTP_EVENTS, (const void *)&events, sizeof(events) );
+  
+  if (bind(sock_sctp, addr_sctp->ai_addr, addr_sctp->ai_addrlen) < 0) handle_error("bind");
+  if (bind(sock_tcp, addr_tcp->ai_addr, addr_tcp->ai_addrlen) < 0) handle_error("bind");
+
+  if (listen(sock_sctp, 5) < 0) handle_error("listen");  // TODO: think about the backlog argument here...
+  if (listen(sock_tcp, 5) < 0) handle_error("listen");  // TODO: think about the backlog argument here...
+  
+  // spawn a thread for the interface 
+  pthread_attr_t attr;
+  pthread_attr_init(&attr);
+  size_t stack_size;
+  void* stack_low_addr = mmap_delegation_interface_stack(&stack_size);
+  if (pthread_attr_setstack(&attr, stack_low_addr, PROCESSOR_PTHREAD_STACK_SIZE) != 0) 
+    handle_error("attr_setstack");
+  delegation_if_arg.sock_sctp = sock_sctp; delegation_if_arg.sock_tcp = sock_tcp;
+  if (pthread_create(&delegation_if_thread, &attr, &delegation_interface, &delegation_if_arg))
+    handle_error("pthread_create"); 
+}
+
+/*
+ * Creates a socket where this node will listen for delegation requests;
+ */
+static void* delegation_interface(void* parm) {
+  int sock_tcp = ((struct delegation_interface_params_t*)parm)->sock_tcp;
+  int sock_sctp = ((struct delegation_interface_params_t*)parm)->sock_sctp;
+  fd_set all_sockets;
+  FD_ZERO(&all_sockets);
+  FD_SET(sock_sctp, &all_sockets);
+  FD_SET(sock_tcp, &all_sockets);
+  //int max_socket = sock_tcp > sock_sctp ? sock_tcp : sock_sctp;
+  while (1) {
+    fd_set copy = all_sockets;
+    int res = select(FD_SETSIZE, &copy, NULL, NULL, NULL);
+    if (res < 0) handle_error("select");
+
+    if (FD_ISSET(sock_sctp, &copy)) {
+      handle_sctp_request(sock_sctp);
+    } else if (FD_ISSET(sock_tcp, &copy)) {
+      int newsock = handle_new_tcp_connection(sock_tcp);
+      assert(newsock < FD_SETSIZE);
+      FD_SET(newsock, &all_sockets);
+    } else {
+      // go through all tcp sockets
+      for (int i = 0; i < no_tcp_incoming_sockets; ++i) {
+        if (FD_ISSET(tcp_incoming_sockets[i], &copy)) {
+          handle_incoming_mem_chunk(tcp_incoming_sockets[i]);
+          break;
+        }
+      }
+
+      assert(0);  // TODO: if we got here, it means that some socket received an error.. I think... treat it
+    }
+
+  }
+  return NULL;
+
   //char buf[1000];
   //int len = 1000;
   //if (getsockname(sock, (struct sockaddr*)buf, &len) < 0) handle_error("getsockname");
@@ -1243,7 +1417,8 @@ void start_nodes() {
 
   // add ourselves to the array
   strcpy(secondaries[0].addr, primary_address);
-  secondaries[0].port = my_port;
+  secondaries[0].port_sctp = port_sctp;
+  secondaries[0].port_tcp = port_tcp;
   secondaries[0].port_daemon = primary_port;
   secondaries[0].socket = -1;
   ++no_secondaries;
@@ -1286,46 +1461,40 @@ void start_nodes() {
 
   struct timeval tv;
   tv.tv_sec = 10; tv.tv_usec=0;
-  while (tv.tv_sec > 0) {
+  int waiting_for = no_slaves;  // number of peers we're waiting for
+  while ((waiting_for > 0) && (tv.tv_sec > 0)) {
     if (no_slaves == 0) break;
     fd_set copy_read = master;
     fd_set copy_write = master;
     fd_set copy_exception = master;
-    LOG(DEBUG, "calling select\n");
-    // TODO: the first argument of select should be
-    // "the highest-numbered file descriptor in any of the three sets, plus 1." This will be certainly true
-    // for the fist iteration, but then I may change the sets and max_socket might no reflect this. Is this an
-    // issue? select is the API from hell.
     int res = select(max_socket + 1, NULL, &copy_write, NULL, &tv);
     //int res = select(max_socket + 1, &copy_read, &copy_write, &copy_exception, &tv);
-    LOG(DEBUG, "select returned\n");
     if (res < 0) { handle_error("select"); }
 
     for (int i = 0; i < no_slaves; ++i) {
       if (FD_ISSET(sockets[i], &copy_write)) {
+        --waiting_for;
         FD_CLR(sockets[i], &master);  // remove this socket so that we don't test it in next iterations
         int valopt, lon = sizeof(int);
         if (getsockopt(sockets[i], SOL_SOCKET, SO_ERROR, (void*)&valopt, &lon) < 0) handle_error("getsockopt");
         if (valopt) {
           LOG(INFO, "connection to secondary %s:%d didn't succeed\n", slaves[i].addr, slaves[i].port_daemon); 
-          continue;
-          //perror("delayed connect:"); exit(1);
+        } else {
+          LOG(INFO, "connection to secondary %s:%d succeeded (socket %d)\n", 
+              slaves[i].addr, slaves[i].port_daemon, sockets[i]); 
+          // we got here => we have a connected socket for slave i
+          strcpy(secondaries[no_secondaries].addr, slaves[i].addr);
+          secondaries[no_secondaries].port_daemon = slaves[i].port_daemon;
+          secondaries[no_secondaries].port_sctp = secondaries[no_secondaries].port_tcp;  
+          secondaries[no_secondaries].socket = sockets[i];
+          ++no_secondaries;
         }
-        LOG(INFO, "connection to secondary %s:%d succeeded (socket %d)\n", 
-            slaves[i].addr, slaves[i].port_daemon, sockets[i]); 
-        // we got here => we have a connected socket for slave i
-        strcpy(secondaries[no_secondaries].addr, slaves[i].addr);
-        secondaries[no_secondaries].port_daemon = slaves[i].port_daemon;
-        secondaries[no_secondaries].port = slaves[i].port;
-        secondaries[no_secondaries].socket = sockets[i];
-        ++no_secondaries;
       }
     }
-    if (no_secondaries == no_slaves + 1) break;  // if we've contacted all slaves, don't wait any more
-                                                 // (add one cause we need to count ourselves also)
   }
   LOG(INFO, "done waiting for connections to secondaries to succeed\n"); 
-  // close all soc kets that haven't been connected yet
+
+  // close all sockets that haven't been connected yet
   for (int i = 0; i < no_slaves; ++i) {
     if (FD_ISSET(sockets[i], &master)) {
       LOG(INFO, "connection to secondary %s:%d didn't succeed in the timeout\n", slaves[i].addr, slaves[i].port_daemon); 
@@ -1361,12 +1530,26 @@ void start_nodes() {
       if (res < 0) {perror("read from socket"); exit(1);}
       if (buf[read_bytes + res - 1] == '!') {
         buf[read_bytes + res - 1] = 0;
-        // remove port number - first token
-        char* port = strtok(buf, ";");
-        assert(port);
-        secondaries[i].port = atoi(port);
-        LOG(DEBUG, "got port %d from secondary %s:%d\n", secondaries[i].port, secondaries[i].addr, secondaries[i].port_daemon);
-        parse_mem_map(buf);
+        LOG(DEBUG, "got data from secondary: \"%s\"\n", buf);
+
+        // remove sctp port number - first token
+        char* s = strtok(buf, ";");
+        assert(s);
+        secondaries[i].port_sctp = atoi(s);
+        // remove tcp port number - second token
+        s = strtok(NULL, ";");
+        assert(s);
+        secondaries[i].port_tcp = atoi(s);
+        // remove number of processors - third token
+        s = strtok(NULL, ";");
+        assert(s);
+        secondaries[i].no_procs = atoi(s);
+        LOG(DEBUG, "got info from secondary %s:%d -> %d, %d, %d\n", 
+            secondaries[i].addr, secondaries[i].port_daemon, 
+            secondaries[i].port_sctp, secondaries[i].port_tcp, secondaries[i].no_procs);
+
+        s = strtok(NULL, "");  // get the rest of the string - the mem map
+        parse_mem_map(s);
         break;
       }
       read_bytes += res;
@@ -1377,7 +1560,7 @@ void start_nodes() {
   
   LOG(DEBUG, "Running with nodes:\n");
   for (int i = 0; i < no_secondaries; ++i) {
-    LOG(DEBUG, "%s:%d\n", secondaries[i].addr, secondaries[i].port);
+    LOG(DEBUG, "%s:%d\n", secondaries[i].addr, secondaries[i].port_daemon);
   }
 
 
@@ -1416,7 +1599,7 @@ void start_nodes() {
     // put all the addresses in the buffer
     for (int j = 0; j < no_secondaries; ++j) {
       char s[100];
-      sprintf(s, "%s:%d;", secondaries[j].addr, secondaries[j].port);
+      sprintf(s, "%s:%d:%d;", secondaries[j].addr, secondaries[j].port_sctp, secondaries[j].port_tcp);
       strcat(buf, s);
     }
     strcat(buf, "!");
@@ -1434,10 +1617,6 @@ void start_nodes() {
   }
   LOG(INFO, "done transmitting data to secondaries\n");
   
-  // do my own (primary) initializations
-  NODE_INDEX = 0;
-  get_vm_wholes(0, tc_wholes, &no_tc_wholes);
-
   // close all sockets
   for (int i = 0; i < no_secondaries; ++i) {
     if (secondaries[i].socket == -1) continue;  // nothing to do for ourselves
@@ -1479,10 +1658,12 @@ void sync_with_primary(void) {
 
   /* send own port number and mem map to primary */
 
-  LOG(INFO, "sending own port (%d) and memory map to primary\n", my_port);
+  LOG(INFO, "sending own ports (%d, %d), number of processors (%d) and memory map to primary\n", 
+      port_sctp, port_tcp, NO_PROCS);
   char buf2[3010];
-  sprintf(buf2, "%d;", my_port);
+  sprintf(buf2, "%d;%d;%d;", port_sctp, port_tcp, NO_PROCS);
   strcat(buf2, map);
+  LOG(DEBUG, "sending data to primary: \"%s\"\n", buf2); 
   int sent = 0;
   while (sent < strlen(buf2)) {
     int res = write(cfd, buf2 + sent, strlen(buf2) - sent);
@@ -1507,7 +1688,7 @@ void sync_with_primary(void) {
   LOG(INFO, "got information about virtual memory wholes and peers from primary\n");
   
   LOG(DEBUG, "got data \"%s\" from primary\n", buf);
-  /* parse what we got from the primary; should be <own index>;addr:port;add:port,...; */
+  /* parse what we got from the primary; should be <own index>;<info about wholes>;addr:port1:port2;add:port:port1:port2,...; */
   char* saveptr_buf, *saveptr2;
   char* tok = strtok_r(buf, ";", &saveptr_buf);
   NODE_INDEX = atoi(tok);
@@ -1528,46 +1709,70 @@ void sync_with_primary(void) {
     tok = strtok_r(NULL, ";", &saveptr_buf);
     if (tok == NULL) break;
     char* addr = strtok_r(tok, ":", &saveptr2);
-    char* port = strtok_r(NULL, ":", &saveptr2);
+    char* port1 = strtok_r(NULL, ":", &saveptr2);
+    char* port2 = strtok_r(NULL, ":", &saveptr2);
     strcpy(secondaries[no_secondaries].addr, addr);
-    secondaries[no_secondaries].port = atoi(port);
+    secondaries[no_secondaries].port_sctp = atoi(port1);
+    secondaries[no_secondaries].port_tcp = atoi(port2);
     secondaries[no_secondaries].socket = -1;
     ++no_secondaries;
   } while (1);
   LOG(INFO, "got information about %d nodes, including myself\n", no_secondaries);
   LOG(DEBUG, "Running with nodes:\n");
   for (int i = 0; i < no_secondaries; ++i) {
-    LOG(DEBUG, "%s:%d\n", secondaries[i].addr, secondaries[i].port);
+    LOG(DEBUG, "%s:%d:%d\n", secondaries[i].addr, secondaries[i].port_sctp, secondaries[i].port_tcp);
   }
 }
 
-int start(int argc, char** argv);
+static int start(int argc, char** argv);
 
+/*
 int start_standalone(int argc, char** argv) {
   return start(argc, argv);
 }
+*/
 
-int start_secondary(int argc, char** argv) {
+/*
+static void start_delegation_interface() {
+  // create a socket
+  int sock = socket(AF_INET, SOCK_STREAM, IPPROTO_SCTP);
+  if (sock < 0) handle_error("socket");
+  struct sockaddr_in servaddr;
+  bzero(&servaddr, sizeof(servaddr));
+  servaddr.sin_family = AF_INET;
+  servaddr.sin_addr.s_addr = htonl(INADDR_ANY);
+  server.sin_port = htons(my_port);
 
-  rt_init();
   
-  assert(0); // FIXME
-  // TODO: start a delegation interface
-  
+}
+*/
 
-  // TODO: wait for quit message
-  sleep(60);  // FIXME
+static int start_secondary(int argc, char** argv) {
+
+  rt_init();  // FIXME: the delegation interface should check on incoming messages that
+              // the runtime initialization has finished
+ 
+  // wait until the delegation interface gets the exit message 
+  pthread_mutex_lock(&delegation_if_finished_mutex);
+  while (!delegation_if_finished) {
+    LOG(INFO, "delegation if: sleeping until the delegation interface gets the quit message\n");
+    pthread_cond_wait(&delegation_if_finished_cv, &delegation_if_finished_mutex);
+    LOG(INFO, "delegation if: woke up; the delegation interface might have gotten the quit message\n");
+  }
+  pthread_mutex_unlock(&delegation_if_finished_mutex);
+  LOG(INFO,"delegation if: done waiting. exiting.\n");
 
   rt_quit();
   return 0;
 }
 
+/*
 int start_primary(int argc, char** argv) {
   return start(argc, argv);
 }
+*/
 
-int start(int argc, char** argv) {
-  NODE_INDEX = 0;
+static int start(int argc, char** argv) {
   get_vm_wholes(0, tc_wholes, &no_tc_wholes);
 
   rt_init();  // init the runtime
@@ -1605,11 +1810,15 @@ int main(int argc, char** argv) {
 
   LOG(DEBUG, "starting\n");
   srand(getpid());
+  
+  // read the number of CPUs on the system
+  NO_PROCS = get_no_CPUs();
 
   if (am_i_secondary()) {
     LOG(DEBUG, "creating a socket for delegation...\n");
     create_delegation_socket();
-    LOG(INFO, "bound a socket for the delegation interface; got socket %d, port %d\n", my_socket, my_port);
+    LOG(INFO, "bound sockets for the delegation interface; STCP port: %d\t TCP port: %d\n", 
+        port_sctp, port_tcp);
     
     sync_with_primary();
     return start_secondary(argc, argv);
@@ -1617,14 +1826,19 @@ int main(int argc, char** argv) {
   } else if (am_i_primary()) {
     LOG(DEBUG, "creating a socket for delegation...\n");
     create_delegation_socket();
-    LOG(INFO, "bound a socket for the delegation interface; got socket %d, port %d\n", my_socket, my_port);
+    LOG(INFO, "bound sockets for the delegation interface; STCP port: %d\t TCP port: %d\n", 
+        port_sctp, port_tcp);
     
     start_nodes();
-    start_primary(argc, argv);
+    NODE_INDEX = 0;
+    return start(argc, argv);
+    //start_primary(argc, argv);
   
   } else { // I'm running on my own, no peers
     LOG(INFO, "running in standalone mode; no peers\n");
-    return start_standalone(argc, argv);  
+    //return start_standalone(argc, argv);  
+    NODE_INDEX = 0;
+    return start(argc, argv);
   }
 }
 

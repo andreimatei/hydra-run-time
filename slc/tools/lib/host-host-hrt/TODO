@@ -1,3 +1,9 @@
+take care to close all sockets; in particular the "daemon" one on the primary and secondaries
+
+investigate why we need -O0
+
+warning: Using 'getaddrinfo' in statically linked applications requires at runtime the shared libraries from the glibc version used for linking
+
 in write_istruct and read_istruct, the generic version, handle the case where the reader/writer is inexistent (node_index == -1); this will happen for continuation creates, because the parent is inexistent?
 
 discuss with Raphael about schemes for distibuting the threads in a fam, and what aditional concurrency some schemes might produce. When assigning multiple chunks to a TC, does a block size != 1 make any sense?

@@ -370,7 +370,7 @@ case $slc_arch-$slc_os in
 	;;
     host-host-hrt)
         slc_ppflags+=(-D_GNU_SOURCE -D_XOPEN_SOURCE -Dmain=__program_main)
-        slc_ldflags+=($PTHREAD_LIBS -static)
+        slc_ldflags+=($PTHREAD_LIBS -lsctp -static)
         slc_cflags+=(-O0)
         ;;
 esac
