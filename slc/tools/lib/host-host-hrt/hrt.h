@@ -25,6 +25,7 @@ extern int no_secondaries;
 extern volatile int rt_init_done;
 extern pthread_spinlock_t rt_init_done_lock;
 
+extern int NODE_INDEX;
 
 #define handle_error(msg) \
   do { perror(msg); exit(EXIT_FAILURE); } while (0)
@@ -33,6 +34,7 @@ void LOG(LOG_LEVEL level, char* fmt, ...);
 
 void* mmap_delegation_interface_stack(size_t* size);
 void parse_own_memory_map(char* map);
+int atomic_increment_next_tc(int proc_id);
 
 #endif
 

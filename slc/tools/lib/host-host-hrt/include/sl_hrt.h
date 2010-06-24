@@ -45,6 +45,13 @@ struct i_struct {
 };
 typedef struct i_struct i_struct;
 
+/*
+typedef struct i_struct_fat_pointer {
+  int node_index;  // node where the istruct resides (the istruct pointer is valid on that node)
+  i_struct* istruct;
+}i_struct_fat_pointer;
+*/
+
 struct heap_t {
   void* lowaddr;
   int size;
@@ -59,14 +66,16 @@ struct thread_range_t {
 struct fam_context_t {
   int empty;  // 1 if the fam_context is available for reuse (nobody is going to sync on it)
   i_struct done;  // written on family termination
-  //pthread_spinlock_t lock;  // protects .done
-  tc_ident_t* blocked_tc;
+  //tc_ident_t* blocked_tc;
   struct thread_range_t ranges[100];  //TODO: replace this with something else 
   int no_ranges;
-  //i_struct shareds[MAX_ARGS_PER_FAM];  // shareds written by the last thread in fam
-  long shareds[MAX_ARGS_PER_FAM];  // shareds written by the last thread in the fam. They don't need to
+  i_struct shareds[MAX_ARGS_PER_FAM];  // shareds written by the last thread in the fam. Technically, 
+                            //they don't need to be istructs, since they will only be read after the sync,
+                            //but we made them istructs anyway to use the infrastructure for writing them
+                            //remotely.
+
+  //long shareds[MAX_ARGS_PER_FAM];  // shareds written by the last thread in the fam. They don't need to
                                    // be i-structs since they will only be read after the sync
-  //i_struct globals[MAX_ARGS_PER_FAM];  // globals share the storage (on each node that runs a family)
 };
 typedef struct fam_context_t fam_context_t;
 
@@ -94,6 +103,11 @@ struct tc_t {
                           // will be the parent
   int is_last_tc;   // 1 if this is the TC where the last chunk of threads in a fam was allocated,
                     // 0 otherwise
+
+  i_struct* done;  // pointer to the done istruct from the FC (this might be on a different node)
+  i_struct* final_shareds;  // pointer to the shareds in the FC (this might be on a different node).
+                            // used by the last thread in a family to write shareds for the parent
+
   heap_t heap;
 };//TCS[NO_TCS];
 typedef struct tc_t tc_t;
@@ -146,8 +160,8 @@ struct mapping_decision {
 typedef struct mapping_decision mapping_decision;
 
 fam_context_t* allocate_fam(
-    thread_func func, 
-    int num_shareds, int num_globals,
+    //thread_func func, 
+    //int num_shareds, int num_globals,
     long start_index, 
     long end_index,
     long step,
@@ -161,7 +175,11 @@ mapping_decision map_fam(
     //long end_index,
     struct mapping_node_t* parent_id);
 
-tc_ident_t create_fam(fam_context_t* fc);
+//tc_ident_t create_fam(fam_context_t* fc);
+tc_ident_t create_fam(fam_context_t* fc, 
+                      thread_func func
+                      //int no_threads
+                      );
 
 long sync_fam(fam_context_t* fc, /*long* shareds_dest,*/ int no_shareds, ...);
 //TODO: release was removed, as it appears there's nothing for it to do. Recheck the
@@ -175,9 +193,11 @@ static inline long _get_start_index() {
 static inline long _get_end_index() {
   return _cur_tc->index_stop;
 }
+/*
 static inline fam_context_t* _get_fam_context() {
   return _cur_tc->fam_context;
 }
+*/
 static inline const tc_ident_t* _get_parent_ident() {
   return &_cur_tc->parent_ident;
 }
@@ -188,6 +208,14 @@ static inline const tc_ident_t* _get_prev_ident() {
 
 static inline const tc_ident_t* _get_next_ident() {
   return &_cur_tc->next;
+}
+
+static inline i_struct* _get_final_shareds_pointer() {
+  return _cur_tc->final_shareds;
+}
+
+static inline i_struct* _get_done_pointer() {
+  return _cur_tc->done;
 }
 
 static inline int _is_last_tc() {
@@ -229,10 +257,16 @@ void write_istruct_different_proc(
     volatile i_struct* istructp,
     long val,
     tc_t* potentially_blocked_tc);
+/*
 void write_istruct(volatile i_struct* istructp, 
                    long val, 
                    const tc_ident_t* reading_tc);
-
+*/
+void write_istruct(//volatile i_struct_fat_pointer istructp, 
+                   int node_index,
+                   volatile i_struct* istructp,
+                   long val, 
+                   const tc_ident_t* reading_tc);
 
 static inline long read_istruct_same_tc(i_struct* istruct) {
   assert(istruct->state == WRITTEN);

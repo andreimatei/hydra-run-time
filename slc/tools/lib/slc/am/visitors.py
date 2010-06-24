@@ -45,7 +45,8 @@ class Create_2_HydraCall(ScopedVisitor):
         if seta.decl.type.startswith("sh"):
             # find my own index
             index = self.get_arg_index(arg = seta.decl, shared = True)
-            setter = (flatten(seta.loc, "write_istruct(&") +
+            setter = (flatten(seta.loc, "write_istruct(") + 
+		self.__first_tc + ".node_index, &" +
                 self.__first_tc + ('.tc->shareds[%d], ' % index) + '(long)(' + b + ')' +
                 ', &' + self.__first_tc + ');\n')
         else:
@@ -122,8 +123,8 @@ class Create_2_HydraCall(ScopedVisitor):
         no_shareds = str(self.get_no_shareds())
         no_globals = str(self.get_no_globals())
        
-        rrhs = flatten(cr.loc_end, 'allocate_fam(&') + gen_loop_fun_name(funvar) + ', ' \
-                + no_shareds + ', ' +  no_globals + ', ' + start + ', ' \
+        rrhs = flatten(cr.loc_end, 'allocate_fam(') \
+                + start + ', ' \
                 + end_index + ', ' + step + ', 0, &' + CVarUse(decl = mapping_decision_var) + ')'
         allocate_call = CVarSet(decl = fam_context_var, 
                                rhs = rrhs)
@@ -135,8 +136,8 @@ class Create_2_HydraCall(ScopedVisitor):
         self.cur_scope.decls += first_tc_var
 
         create_call = CVarSet(decl = first_tc_var,
-                        rhs = flatten(cr.loc_end, 'create_fam(') + CVarUse(decl =
-                                fam_context_var) + ')');
+                        rhs = flatten(cr.loc_end, 'create_fam(')
+                            + CVarUse(decl = fam_context_var) + ',&' + gen_loop_fun_name(funvar) + ')');
         newbl.append(create_call + ';\n')
 
         self.__first_tc = CVarUse(decl = first_tc_var)
@@ -227,11 +228,9 @@ class TFun_2_HydraCFunctions(DefaultVisitor):
                              'write_istruct_same_tc(&_cur_tc->shareds[%d],' %
                               param.index) + b + ')')
             elif self.__state == 2 or self.__state == 3: #end and generic
-                newbl.append(flatten(None,#setp.loc,  # end and generic are passed the array of shareds as an argument
-                             'if (_is_last_tc()) {shareds[%d] = ' % param.index) \
-                             + b \
-                             + ';} else {write_istruct(&next->tc->shareds[%d], ' % param.index \
-                             + b + ', next);}')
+                newbl.append(flatten(setp.loc,  # end and generic are passed the array of shareds as an argument
+                             'write_istruct(next->node_index, &shareds[%d],' % param.index) \
+                             + b + ', next);')
             else:
                 assert(0)
         else:  # no need to write to anything; just generate the rhs
@@ -335,7 +334,7 @@ class TFun_2_HydraCFunctions(DefaultVisitor):
 
             self.__state = 2  #end
             newitems += flatten(fundef.loc, ("long %s_end(const tc_ident_t* next, " +
-                                "long* shareds, long __index) {\n") % fundef.name)
+                                "i_struct* shareds, long __index) {\n") % fundef.name)
             newitems += end_body.accept(self)
             newitems += flatten(fundef.loc_end, "return 0; \n}")
 
@@ -343,23 +342,23 @@ class TFun_2_HydraCFunctions(DefaultVisitor):
         self.__state = 3  #generic
         newitems += flatten(fundef.loc, ("long %s_generic(const tc_ident_t* " +
                             "prev, const tc_ident_t* next, " +
-                            "long* shareds, long __index) {\n") % fundef.name)
+                            "i_struct* shareds, long __index) {\n") % fundef.name)
         newitems += generic_body.accept(self)
         newitems += flatten(fundef.loc_end, "return 0; \n}")
        
         # generate loop function
 
         newitems += flatten(fundef.loc, "void ") + \
-                    gen_loop_fun_name(fundef.name) + "()" +" {\n"
+                    gen_loop_fun_name(fundef.name) + "(void)" +" {\n"
         newitems += "long __index, __start_index = _get_start_index(), " +\
             "__end_index = _get_end_index();\n"
         newitems += """
-            fam_context_t* fam_context = _get_fam_context();
+            //fam_context_t* fam_context = _get_fam_context();
             const tc_ident_t* parent = _get_parent_ident();
             const tc_ident_t* prev = _get_prev_ident();
             const tc_ident_t* next = _get_next_ident();
-            
-
+            i_struct* shareds = _get_final_shareds_pointer();
+            i_struct* done = _get_done_pointer();       
 
             if (__end_index - __start_index > 4) {\n
             """
@@ -370,18 +369,73 @@ class TFun_2_HydraCFunctions(DefaultVisitor):
                 """ + fundef.name + """_middle(__index); // TODO: check for break return value
                 }
             """ \
-            + fundef.name + """_end(next, &fam_context->shareds[0], __end_index);"""
+            + fundef.name + """_end(next, shareds, __end_index);"""
+            #+ fundef.name + """_end(next, &fam_context->shareds[0], __end_index);"""
         else:
             newitems += "exit(1);  // main should never be created as a family of more than one thread"
 
         newitems += """
             } else {
                 for (__index = __start_index; __index <= __end_index; ++__index) {
-                """ + fundef.name + """_generic(prev, next, 
-                        &fam_context->shareds[0], __index); // TODO: check for break value
+                    /*
+                    printf("USER: will call generic version of thread func\\n");
+                    const tc_ident_t* p = prev;
+                    if (__index > __start_index) {
+                        p = &_cur_tc->ident;
+                        printf("USER: updated p\\n");
+                    }
+                    const tc_ident_t* n = next;
+                    if (__index < __end_index) {
+                        n = &_cur_tc->ident;
+                        printf("USER: updated n\\n");
+                    }
+                    i_struct* s = _cur_tc->shareds;
+                    //printf("1: shareds: %p\\n", s);
+                    if (_is_last_tc()) {
+                        s = shareds;
+                        printf("USER: updated shareds to the parent\\n");
+                    }
+                    else { 
+                        if (__index == __end_index) {
+                            s = next->tc->shareds;
+                            printf("USER: updated shareds to next tc\\n");
+                        }
+                    }
+                    //printf("2: shareds: %p\\n", s);
+                    */
+                    const tc_ident_t* p, *n;
+                    i_struct* s = _cur_tc->shareds;
+                    if (__index == __start_index) {
+                        p = _get_prev_ident();
+                    } else {
+                        p = &_cur_tc->ident;
+                    }
+                    if (__index == __end_index) {
+                        n = _get_next_ident();
+                        if (_is_last_tc()) {
+                            // write to the family context
+                            s = _get_final_shareds_pointer();
+                        } else {
+                            // write to the next tc
+                            s = next->tc->shareds;
+                        }
+                    } else {
+                        n = &_cur_tc->ident;
+                    }
+                    """ + fundef.name + """_generic(p, n, s, __index); // TODO: check for break value
                 }
+
+                //for (__index = __start_index; __index <= __end_index; ++__index) {
+                //""" + fundef.name + """_generic(prev, next, 
+                //        shareds, __index); // TODO: check for break value
+                //}
             }
-            if (_is_last_tc() && parent->node_index != -1) write_istruct(&fam_context->done, 1, parent);
+            printf("USER: about to finish loop function. last tc: %d\\t parent node: %d\\t\\n",
+                   _is_last_tc(), parent->node_index);
+            if (_is_last_tc() && parent->node_index != -1) {
+                printf("USER: I am the last thread in a family. Unblocking parent.\\n");
+                write_istruct(parent->node_index, done, 1, parent);
+            }
 
             _cur_tc->finished = 1;
         """

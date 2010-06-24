@@ -9,11 +9,39 @@
 #include "sl_hrt.h"
 #include "network.h"
 
-typedef enum request_type {REQ_QUIT} request_type;
+typedef enum request_type {
+  REQ_QUIT, 
+  REQ_ALLOCATE,
+  RESP_ALLOCATE  // response for an allocation request
+}request_type;
 
 typedef struct net_request_t {
   request_type type;
+  int node_index;  // originating node
+  int identifier;
+  int response_identifier;
 }net_request_t;
+
+typedef struct req_allocate {
+  request_type type;
+  int node_index;  // originating node
+  int identifier;
+  int response_identifier;
+
+  int proc_index;
+  int no_tcs;
+}req_allocate;
+
+typedef struct resp_allocate {
+  request_type type;
+  int node_index;  // originating node
+  int identifier;
+  int response_identifier;
+
+  int tcs[100];  // TODO: think about how many TC's we should support
+  int no_tcs;
+}resp_allocate;
+
 
 struct delegation_interface_params_t delegation_if_arg;
 static int tcp_incoming_sockets[1000];
@@ -35,11 +63,14 @@ static void terminate_delegation_interface() {
   pthread_mutex_unlock(&delegation_if_finished_mutex);
 }
 
+static void send_sctp_msg(int node_index, void* buf, int len);
+static void handle_req_allocate(const req_allocate* req);
+
 /*
  * This function does not block.
  */
 static void handle_sctp_request(int sock) {
-  char buf[1000];
+  char buf[5000];
   struct sctp_sndrcvinfo sndrcvinfo;
   int flags;
   int read = sctp_recvmsg(sock, buf, sizeof(buf), NULL, 0, &sndrcvinfo, &flags);
@@ -58,10 +89,31 @@ static void handle_sctp_request(int sock) {
     case REQ_QUIT:
       terminate_delegation_interface();
       break;
+    case REQ_ALLOCATE:
+      assert(read == sizeof(req_allocate));
+      handle_req_allocate((req_allocate*)req);
+      break;
     default:
       LOG(CRASH, "SCTP REQUEST: invalid request type: %d\n", req->type);
       exit(EXIT_FAILURE);
   }
+}
+
+static void handle_req_allocate(const req_allocate* req) {
+  resp_allocate resp;
+  resp.identifier = req->response_identifier;
+  resp.no_tcs = 0;
+
+  for (int i = 0; i < req->no_tcs; ++i) {
+    int tc = atomic_increment_next_tc(req->proc_index);
+    if (tc != -1) {
+      resp.tcs[resp.no_tcs++] = tc;
+    } else {  // couldn't allocate a TC
+      break;
+    }
+  }
+
+  send_sctp_msg(req->node_index, &resp, sizeof(resp));
 }
 
 /*
@@ -370,4 +422,17 @@ void send_quit_message_to_secondaries() {
   }
 
 }
+
+static void send_sctp_msg(int node_index, void* buf, int len) {
+  assert(node_index != NODE_INDEX);  // we don't want to send to ourselves
+  ((net_request_t*)buf)->node_index = NODE_INDEX;  // fill in sender
+  int res = sctp_sendmsg(secondaries[node_index].socket_sctp, 
+      buf, 
+      len, 
+      secondaries[node_index].addr_sctp->ai_addr, 
+      secondaries[node_index].addr_sctp->ai_addrlen,
+      1, 0, 0,0,0);
+  if (res < 0) handle_error("sctp_sendmsg");
+}
+
 
