@@ -9,38 +9,12 @@
 #include "sl_hrt.h"
 #include "network.h"
 
-typedef enum request_type {
-  REQ_QUIT, 
-  REQ_ALLOCATE,
-  RESP_ALLOCATE  // response for an allocation request
-}request_type;
 
-typedef struct net_request_t {
-  request_type type;
-  int node_index;  // originating node
-  int identifier;
-  int response_identifier;
-}net_request_t;
+#define MAX_NO_PENDING_REQUESTS 1000
+pending_request_t pending_requests[MAX_NO_PENDING_REQUESTS];
+pthread_spinlock_t pending_requests_lock;
 
-typedef struct req_allocate {
-  request_type type;
-  int node_index;  // originating node
-  int identifier;
-  int response_identifier;
 
-  int proc_index;
-  int no_tcs;
-}req_allocate;
-
-typedef struct resp_allocate {
-  request_type type;
-  int node_index;  // originating node
-  int identifier;
-  int response_identifier;
-
-  int tcs[100];  // TODO: think about how many TC's we should support
-  int no_tcs;
-}resp_allocate;
 
 
 struct delegation_interface_params_t delegation_if_arg;
@@ -65,6 +39,9 @@ static void terminate_delegation_interface() {
 
 static void send_sctp_msg(int node_index, void* buf, int len);
 static void handle_req_allocate(const req_allocate* req);
+static void handle_resp_allocate(const resp_allocate* req);
+static void handle_req_write_istruct(const req_write_istruct* req);
+static void handle_req_create(const req_create* req);
 
 /*
  * This function does not block.
@@ -93,6 +70,18 @@ static void handle_sctp_request(int sock) {
       assert(read == sizeof(req_allocate));
       handle_req_allocate((req_allocate*)req);
       break;
+    case RESP_ALLOCATE:
+      assert(read == sizeof(resp_allocate));
+      handle_resp_allocate((resp_allocate*)req);
+      break;
+    case REQ_CREATE:
+      assert(read == sizeof(req_create));
+      handle_req_create((req_create*)req);
+      break;
+    case REQ_WRITE_ISTRUCT:
+      assert(read == sizeof(req_write_istruct));
+      handle_req_write_istruct((req_write_istruct*)req);
+      break;
     default:
       LOG(CRASH, "SCTP REQUEST: invalid request type: %d\n", req->type);
       exit(EXIT_FAILURE);
@@ -102,8 +91,15 @@ static void handle_sctp_request(int sock) {
 static void handle_req_allocate(const req_allocate* req) {
   resp_allocate resp;
   resp.identifier = req->response_identifier;
+  resp.type = RESP_ALLOCATE;
+  resp.node_index = NODE_INDEX;
+  resp.response_identifier = -1;
   resp.no_tcs = 0;
 
+  LOG(DEBUG, "network: handle_req_allocate: got a request for %d tcs\n", req->no_tcs);
+  allocate_local_tcs(req->proc_index, req->no_tcs, resp.tcs, &resp.no_tcs);
+
+  /*
   for (int i = 0; i < req->no_tcs; ++i) {
     int tc = atomic_increment_next_tc(req->proc_index);
     if (tc != -1) {
@@ -112,8 +108,26 @@ static void handle_req_allocate(const req_allocate* req) {
       break;
     }
   }
+  */
 
+  LOG(DEBUG, "network: handle_req_allocate: seding allocation reply. Giving them %d tcs.\n",
+      resp.no_tcs);
   send_sctp_msg(req->node_index, &resp, sizeof(resp));
+}
+
+static void handle_resp_allocate(const resp_allocate* req) {
+  int index = req->identifier;
+  LOG(DEBUG, "network: handle_resp_allocate: got response with id %d giving us %d tcs\n", 
+      index, req->no_tcs);
+  pending_request_t* pending = &pending_requests[index];
+
+  //copy the response to the pending slot
+  memcpy(pending->buf, req, sizeof(*req));
+  LOG(DEBUG, "network: handle_resp_allocate: after memcpy: %d tcs\n", 
+      ((resp_allocate*)pending->buf)->no_tcs);
+
+  LOG(DEBUG, "network: handle_resp_allocate: unblocking tc %p\n", pending->blocking_tc);
+  write_istruct_different_proc(&pending->istruct, 1, pending->blocking_tc);
 }
 
 /*
@@ -436,3 +450,145 @@ static void send_sctp_msg(int node_index, void* buf, int len) {
 }
 
 
+void init_network() {
+  // init pending requests
+  if (pthread_spin_init(&pending_requests_lock, PTHREAD_PROCESS_PRIVATE) != 0) handle_error("pthread_spin_init");
+  for (int i = 0; i < MAX_NO_PENDING_REQUESTS; ++i) {
+    if (pthread_spin_init(&pending_requests[i].istruct.lock, PTHREAD_PROCESS_PRIVATE) != 0) handle_error("pthread_spin_init");
+    pending_requests[i].free = 1;
+    pending_requests[i].id = i;
+  }
+
+}
+
+/*
+ * Allocate a slot from the pending_requests array. Also initializes the slot.
+ * blocking_tc - [IN] - the tc that will eventually read the istruct in the allocated slot and possibly block
+ *                      on it.
+ */
+pending_request_t* get_pending_request_slot(tc_t* blocking_tc) {
+  pthread_spin_lock(&pending_requests_lock);
+  int i;
+  for (i = 0; i < MAX_NO_PENDING_REQUESTS; ++i) {
+    if (pending_requests[i].free) {
+      break;
+    }
+  }
+  if (i < MAX_NO_PENDING_REQUESTS) {
+    pending_requests[i].free = 0;
+    pthread_spin_unlock(&pending_requests_lock);
+    pending_requests[i].istruct.state = EMPTY;
+    pending_requests[i].blocking_tc = blocking_tc;
+    return &pending_requests[i];
+  } else {
+    assert(0); //TODO: handle this in callers
+    pthread_spin_unlock(&pending_requests_lock);
+    return NULL;
+  }
+}
+
+void free_pending_request_slot(pending_request_t* p) {
+  pthread_spin_lock(&pending_requests_lock);
+  p->free = 1;
+  pthread_spin_unlock(&pending_requests_lock);
+}
+
+pending_request_t* request_remote_tcs(int node_index, int proc_index, int no_tcs) {
+  req_allocate req;
+  req.type = REQ_ALLOCATE;
+  req.node_index = NODE_INDEX;
+  req.identifier = -1;
+  req.proc_index = proc_index;
+  pending_request_t* pending_request = get_pending_request_slot(_cur_tc);
+  req.response_identifier = pending_request->id;
+  req.no_tcs = no_tcs;
+  send_sctp_msg(node_index, &req, sizeof(req));
+  return pending_request;
+}
+
+/*
+ * Blocks until a response for a particular pending request slot comes in.
+ * resp - [OUT] - the response
+ */
+void block_for_allocate_response(pending_request_t* req, resp_allocate* resp) {
+  tc_ident_t writer; 
+  writer.node_index = NODE_INDEX; writer.proc_index = -1; // will be written by the network thread
+  read_istruct(&req->istruct, &writer);
+  LOG(DEBUG, "block_for_allocate_response: unblocking. Got %d tcs.\n", ((resp_allocate*)req->buf)->no_tcs);
+  memcpy(resp, req->buf, sizeof(*resp));
+  LOG(DEBUG, "block_for_allocate_response: after memcpy. Got %d tcs.\n", resp->no_tcs);
+  free_pending_request_slot(req);
+}
+
+void allocate_remote_tcs(int node_index, int proc_index, int no_tcs, int* tcs, int* no_allocated_tcs) {
+  pending_request_t* req = request_remote_tcs(node_index, proc_index, no_tcs);
+  resp_allocate resp;
+  LOG(DEBUG, "allocate_remote_tcs: blocking for reply; asked for %d tcs\n", no_tcs);
+  block_for_allocate_response(req, &resp);
+  LOG(DEBUG, "allocate_remote_tcs: got reply; obtained %d tcs\n", resp.no_tcs);
+  assert(resp.no_tcs <= no_tcs); // we shouldn't get more tcs than we asked for
+  *no_allocated_tcs = resp.no_tcs;
+  for (int i = 0; i < resp.no_tcs; ++i) {
+    LOG(DEBUG, "allocate_remote_tcs: got tc %d\n", resp.tcs[i]);
+    tcs[i] = resp.tcs[i];
+  }
+}
+
+void populate_remote_tcs(
+    int node_index,  // destination node
+    int* tcs,  // indexes of the TC's on the destination node
+    struct thread_range_t* ranges,
+    int no_tcs,
+    thread_func func,
+    tc_ident_t parent, tc_ident_t prev, tc_ident_t next,
+    int final_ranges,  // 1 if these tcs are the last ones of the family
+    i_struct* final_shareds, // pointer to the shareds in the FC (NULL if !final_ranges)
+    i_struct* done          // pointer to done in the FC, valid on the parent node (NULL if !final_ranges)
+    ) {
+  req_create req;
+  req.type = REQ_CREATE;
+  req.node_index = NODE_INDEX;
+  req.identifier = -1;
+  req.response_identifier = -1;
+
+  memcpy(req.tcs, tcs, no_tcs * sizeof(req.tcs[0]));
+  req.no_tcs = no_tcs;
+  memcpy(req.ranges, ranges, no_tcs * sizeof(req.ranges[0]));
+  req.func = func;
+  req.parent = parent; req.prev = prev; req.next = next;
+  req.final_ranges = final_ranges;
+  req.final_shareds = final_shareds;
+  req.done = done;
+  send_sctp_msg(node_index, &req, sizeof(req));
+}
+
+void write_remote_istruct(int node_index, i_struct* istructp, long val, const tc_t* reader) {
+  req_write_istruct req;
+  req.type = REQ_WRITE_ISTRUCT;
+  req.identifier = -1;
+  req.node_index = NODE_INDEX;
+  req.response_identifier = -1;
+
+  req.istruct = istructp;
+  req.val = val;
+  req.reader_tc = (tc_t*)reader;
+  send_sctp_msg(node_index, &req, sizeof(req));
+}
+
+static void handle_req_write_istruct(const req_write_istruct* req) {
+  LOG(DEBUG, "network: handle_req_write_istruct: got istruct write request\n");
+  write_istruct_different_proc(req->istruct, req->val, req->reader_tc);
+}
+
+static void handle_req_create(const req_create* req) {
+  LOG(DEBUG, "network: handle_req_create: got create request\n");
+  populate_local_tcs(req->tcs,
+                     req->ranges,
+                     req->no_tcs,
+                     req->func,
+                     req->parent, req->prev, req->next,
+                     req->final_ranges,
+                     req->final_shareds,
+                     req->done);
+  LOG(DEBUG, "network: handle_req_create: finished populating local TC's\n");
+}

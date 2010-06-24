@@ -183,7 +183,9 @@ void populate_tc(tc_t* tc,
                  //fam_context_t* fam_context,
                  tc_ident_t parent, tc_ident_t prev, tc_ident_t next,
                  int is_last_tc,
-                 i_struct* final_shareds, i_struct* done);
+                 i_struct* final_shareds, 
+                 i_struct* done,
+                 const tc_ident_t* current_tc);
 /*
 void populate_tc(tc_t* tc,
                  thread_func func,
@@ -215,15 +217,28 @@ mapping_decision map_fam(
     //long start_index,
     //long end_index,
     struct mapping_node_t* parent_id) {
+  static int first_mapping = 1;
+
   assert(parent_id == NULL); // TODO
   mapping_decision rez;
 
-  rez.should_inline = 0;
-  rez.no_proc_assignments = 1;
-  rez.proc_assignments[0].node_index = NODE_INDEX;
-  rez.proc_assignments[0].proc_index = (_cur_tc->ident.proc_index + 1) % NO_PROCS;
-  rez.proc_assignments[0].no_tcs = 1;
-  rez.proc_assignments[0].load_percentage = 100; // 100% of threads on this proc
+  if (first_mapping) {
+    rez.should_inline = 0;
+    rez.no_proc_assignments = 1;
+    rez.proc_assignments[0].node_index = NODE_INDEX;
+    rez.proc_assignments[0].proc_index = (_cur_tc->ident.proc_index + 1) % NO_PROCS;
+    rez.proc_assignments[0].no_tcs = 1;
+    rez.proc_assignments[0].load_percentage = 100; // 100% of threads on this proc
+
+    first_mapping = 0;
+  } else {
+    rez.should_inline = 0;
+    rez.no_proc_assignments = 1;
+    rez.proc_assignments[0].node_index = (no_secondaries > 1 ? 1 - NODE_INDEX : NODE_INDEX);
+    rez.proc_assignments[0].proc_index = 0;//(_cur_tc->ident.proc_index + 1) % NO_PROCS;
+    rez.proc_assignments[0].no_tcs = 1;
+    rez.proc_assignments[0].load_percentage = 100; // 100% of threads on this proc
+  }
 
   return rez;
 }
@@ -243,6 +258,24 @@ void allocate_local_tcs(int proc_index, int no_tcs, int* tcs, int* no_allocated_
   LOG(DEBUG, "allocate_local_tcs: allocated %d TC's out of the %d requested.\n", 
       *no_allocated_tcs, no_tcs);
 }
+
+/*--------------------------------------------------
+* void allocate_remote_tcs(int node_index, int proc_index, int no_tcs, int* tcs, int* no_allocated_tcs) {
+*   pending_request_t* req = request_remote_tcs(node_index, proc_index, no_tcs);
+*   resp_allocate resp;
+*   LOG(DEBUG, "allocate_remote_tcs: blocking for reply; asked for %d tcs\n", no_tcs);
+*   block_for_allocate_response(req, &resp);
+*   LOG(DEBUG, "allocate_remote_tcs: got reply; obtained %d tcs\n", resp.no_tcs);
+*   assert(resp.no_tcs <= no_tcs); // we shouldn't get more tcs than we asked for
+*   *no_allocated_tcs = resp.no_tcs;
+*   for (int i = 0; i < resp.no_tcs; ++i) {
+*     LOG(DEBUG, "allocate_remote_tcs: got tc %d\n", resp.tcs[i]);
+*     tcs[i] = resp.tcs[i];
+*   }
+* }
+*--------------------------------------------------*/
+
+
 /*
 int allocate_local_tcs(int proc_index, 
                        int no_tcs, 
@@ -351,21 +384,24 @@ fam_context_t* allocate_fam(
 
       LOG(DEBUG, "allocate_fam: requesting %d local TC's\n", as.no_tcs);
       allocate_local_tcs(as.proc_index, as.no_tcs, allocated_tcs[i].tcs, &allocated_tcs[i].allocated_tcs);
-      if (allocated_tcs[i].allocated_tcs == 0) {
-        load_to_redistribute += as.load_percentage;
-        LOG(DEBUG, "failed to allocate TC's on node %d processor %d\n", 
-            NODE_INDEX, as.proc_index);
-      } else {
-        last_allocated_proc_index = i;
-        ++allocated_procs;
-        LOG(DEBUG, "allocated %d TC's on node %d processor %d\n", 
-            allocated_tcs[i].allocated_tcs, NODE_INDEX, as.proc_index);
-      }
-
     } else {
-      //FIXME: TODO
+      LOG(DEBUG, "allocate_fam: requesting %d remote TC's\n", as.no_tcs);
+      allocate_remote_tcs(as.node_index, as.proc_index, as.no_tcs, 
+                          allocated_tcs[i].tcs, 
+                          &allocated_tcs[i].allocated_tcs);
+      LOG(DEBUG, "allocate_fam: back from remote allocation\n");
     }
 
+    if (allocated_tcs[i].allocated_tcs == 0) {
+      load_to_redistribute += as.load_percentage;
+      LOG(DEBUG, "failed to allocate TC's on node %d processor %d\n", 
+          NODE_INDEX, as.proc_index);
+    } else {
+      last_allocated_proc_index = i;
+      ++allocated_procs;
+      LOG(DEBUG, "allocated %d TC's on node %d processor %d\n", 
+          allocated_tcs[i].allocated_tcs, NODE_INDEX, as.proc_index);
+    }
   }
 
   if (last_allocated_proc_index == -1) {
@@ -578,13 +614,13 @@ static inline int test_same_tc(const tc_ident_t* l,const tc_ident_t* r) {
 
 
 void populate_local_tcs(
-    int* tcs, 
-    struct thread_range_t* ranges, 
+    const int* tcs, 
+    const struct thread_range_t* ranges, 
     int no_tcs, 
     thread_func func,
     //int no_shareds, int no_globals, 
     tc_ident_t parent, tc_ident_t prev, tc_ident_t next,
-    int final_ranges,
+    int final_ranges,  // 1 if these tcs are the last ones of the family
     i_struct* final_shareds, // pointer to the shareds in the FC (NULL if !final_ranges)
     i_struct* done          // pointer to done in the FC (NULL if !final_ranges)
     ) {
@@ -602,10 +638,12 @@ void populate_local_tcs(
                 i == no_tcs - 1 ? next : ranges[i+1].dest, // next
                 final_ranges && (i==(no_tcs-1)), //(i == no_ranges - 1)  // is_last_tc
                 (final_ranges && i == (no_tcs - 1)) ? final_shareds : NULL,
-                done
+                done,
+                _cur_tc != NULL ? &_cur_tc->ident : NULL
                 );
   }
 }
+
 
 /* 
  * Populates and unblocks all the tc-s that have been assigned chunks of the family.
@@ -616,7 +654,7 @@ tc_ident_t create_fam(fam_context_t* fc,
                       //int no_threads
                       ) {
   //assert(fc->no_ranges == 1); // TODO
-  assert(_cur_tc == NULL || test_same_node(&fc->ranges[0].dest, &_cur_tc->ident)); //TODO
+  //assert(_cur_tc == NULL || test_same_node(&fc->ranges[0].dest, &_cur_tc->ident)); //TODO
 
   int tcs[MAX_NO_TCS_PER_ALLOCATION];
   int no_tcs = 0;
@@ -633,7 +671,27 @@ tc_ident_t create_fam(fam_context_t* fc,
     no_tcs = 0;
     for (; i < fc->no_ranges && fc->ranges[i].dest.node_index == cur_node_index; ++i) {
       tcs[no_tcs++] = fc->ranges[i].dest.tc_index;
+    }  
+    // attention: i is now 1 more than the last range that's part of the current node
+    tc_ident_t parent, prev, next;
+    if (_cur_tc != NULL) {
+      parent = _cur_tc->ident;
+    } else {
+      // this means we're allocating root_fam. The parent shouldn't matter.
+      assert(func == _fam___root_fam);
+      parent.node_index = -1; parent.tc = NULL; parent.proc_index = -1; parent.tc_index = -1;
     }
+    if (start_index == 0) {
+      prev = parent;
+    } else {
+      prev = fc->ranges[start_index - 1].dest;
+    }
+    if (i == fc->no_ranges) {
+      next = parent;
+    } else {
+      next = fc->ranges[i].dest;
+    }
+
     if (cur_node_index == NODE_INDEX) {
       if (_cur_tc != NULL) {  // this will be NULL when creating root_fam
         LOG(DEBUG, "create_fam: %d\n", fc->no_ranges);
@@ -641,9 +699,10 @@ tc_ident_t create_fam(fam_context_t* fc,
             &fc->ranges[start_index], 
             no_tcs, 
             func, 
-            _cur_tc->ident,  // parent
-            i > 0 ? fc->ranges[i-1].dest : _cur_tc->ident,  // prev
-            i < fc->no_ranges-1 ? fc->ranges[i+1].dest : _cur_tc->ident,  // next
+            parent, prev, next,
+            //_cur_tc->ident,  // parent
+            //i > 0 ? fc->ranges[i-1].dest : _cur_tc->ident,  // prev
+            //i < fc->no_ranges-1 ? fc->ranges[i+1].dest : _cur_tc->ident,  // next
             i == (fc->no_ranges),  // final ranges
             fc->shareds,
             &fc->done
@@ -654,9 +713,8 @@ tc_ident_t create_fam(fam_context_t* fc,
         // set up a dummy parent; it needs to point to the same node, but different proc and different
         // TC than the reader, because we want the reader to use read_istruct_different_proc
         dummy_parent.node_index = NODE_INDEX; // no parent
-        dummy_parent.proc_index = -1;
-        dummy_parent.tc_index = -1;
-        dummy_parent.tc = NULL;
+        dummy_parent.proc_index = -1; dummy_parent.tc_index = -1; dummy_parent.tc = NULL; 
+        
         populate_local_tcs(tcs, 
             &fc->ranges[start_index], 
             no_tcs, 
@@ -664,26 +722,43 @@ tc_ident_t create_fam(fam_context_t* fc,
             dummy_parent,  // parent
             dummy_parent,  // prev
             dummy_parent,  // next
-            i == fc->no_ranges - 1,  // final ranges
+            i == fc->no_ranges,  // final ranges
             fc->shareds,
             &fc->done
             );
       }
-    } else {
-      assert(0); //FIXME: TODO
+    } else {  // we have a remote allocation
+      assert(_cur_tc != NULL);  // this should only be null for root_fam, and that shouldn't be allocated remotely
+      populate_remote_tcs(cur_node_index,  // destination node
+                          tcs,
+                          &fc->ranges[start_index],
+                          no_tcs,
+                          func,
+                          parent, prev, next,
+                          //_cur_tc->ident,  // parent
+                          //i > 0 ? fc->ranges[i-1].dest : _cur_tc->ident,  // prev
+                          //i < fc->no_ranges-1 ? fc->ranges[i+1].dest : _cur_tc->ident,  // next
+                          i == (fc->no_ranges),  // final ranges
+                          fc->shareds,
+                          &fc->done
+                          );  
+      LOG(DEBUG, "create_fam: sent remote create request\n");
     }
   }
 
+  /*
   for (int i = 0; i < fc->no_ranges; ++i) {
     unblock_tc(fc->ranges[i].dest.tc,
-              0 /*TODO: check if it is the same processor and modify this arg*/);
+              0); //TODO: check if it is the same processor and modify this arg
   }
+  */
   return fc->ranges[0].dest;
 }
 
 
 long sync_fam(fam_context_t* fc, /*long* shareds_dest,*/ int no_shareds, ...) {
-  assert(test_same_node(&_cur_tc->ident, &fc->ranges[fc->no_ranges-1].dest));  //TODO
+  //assert(test_same_node(&_cur_tc->ident, &fc->ranges[fc->no_ranges-1].dest));  //TODO
+
   int same_proc = test_same_proc(&_cur_tc->ident, &fc->ranges[fc->no_ranges-1].dest);
   assert(!test_same_tc(&_cur_tc->ident, &fc->ranges[fc->no_ranges-1].dest));  // parent and
   // child should never be in the same tc
@@ -849,6 +924,8 @@ static void rt_init() {
   assert((void*)&allocate_tc_locks[0].lock == (void*)&allocate_tc_locks[0].c[0]);
   assert((void*)&allocate_tc_locks[0].lock == (void*)&allocate_tc_locks[0]);
 
+
+  init_network();
 
   // init runnable_queue_locks
   int i, j;
@@ -1028,8 +1105,9 @@ void push_to_TC_stack_ul(stack_t* stack, unsigned long data) {
 */
 
 /* 
- * Prepares a TC to run a threads range. The TC is not scheduled to be run yet; that can be done manually 
- * through unblock_tc() or, generally, through create_fam
+ * Prepares a TC to run a threads range. The TC is then scheduled to run.
+ * // The TC is not scheduled to be run yet; that can be done manually 
+ * // through unblock_tc() or, generally, through create_fam
  */
 void populate_tc(tc_t* tc,
                  thread_func func,
@@ -1039,7 +1117,10 @@ void populate_tc(tc_t* tc,
                  //fam_context_t* fam_context,
                  tc_ident_t parent, tc_ident_t prev, tc_ident_t next,
                  int is_last_tc,
-                 i_struct* final_shareds, i_struct* done) {
+                 i_struct* final_shareds, 
+                 i_struct* done,
+                 const tc_ident_t* current_tc // the TC of the caller; can be passed a dummy or NULL
+                 ) {
   LOG(VERBOSE, "populate_tc - thread function: %p\n", func);
   tc->context.uc_stack = tc->initial_thread_stack;  // TODO: is this necessary? would this have been modified
                                                     // by savecontext() calls?
@@ -1065,8 +1146,9 @@ void populate_tc(tc_t* tc,
   //for (int i = 0; i < num_shareds; ++i) tc->shareds[i].state = EMPTY;
   //for (int i = 0; i < num_globals; ++i) tc->globals[i].state = EMPTY;
   tc->finished = 0;
-}
 
+  unblock_tc(tc, current_tc != NULL ? test_same_proc(&tc->ident, current_tc) : 0);
+}
 
 
 /* writer and reader are running on the same proc, but on different TCs.
@@ -1119,11 +1201,11 @@ extern void write_istruct_different_proc(
    reading_tc corresponds to the TC that will (or already has) read the istruct
  */
 void write_istruct(//i_struct_fat_pointer istruct, 
-                   int node_index, 
+                   int node_index,  // destination node, if we're writing a remote istruct
                    volatile i_struct* istructp, 
                    long val, 
                    const tc_ident_t* reading_tc) {
-  LOG(DEBUG, "write_istruct: writing istruct %p (my tc:%d)\n", istructp, _cur_tc->ident.tc_index);
+  //LOG(DEBUG, "write_istruct: writing istruct %p (my tc:%d)\n", istructp, _cur_tc->ident.tc_index);
   //if (istruct.node_index == NODE_INDEX) {
   if (node_index == NODE_INDEX) {
     //volatile i_struct* istructp;
@@ -1146,7 +1228,8 @@ void write_istruct(//i_struct_fat_pointer istruct,
       }
     }
   } else {  // writing to different node
-    assert(0); // FIXME:
+    LOG(DEBUG, "write_istruct: writing a remote istruct on node %d\n", node_index);
+    write_remote_istruct(node_index, (i_struct*)istructp, val, reading_tc->tc);  // cast to strip volatile
   }
 }
 
@@ -1169,7 +1252,8 @@ long read_istruct_different_tc(volatile i_struct* istruct, int same_proc) {
 }
 
 long read_istruct(volatile i_struct* istructp, const tc_ident_t* writing_tc) {
-  LOG(DEBUG, "read_istruct: reading istruct %p (tc:%d)\n", istructp, _cur_tc->ident.tc_index);
+  assert(_cur_tc != NULL);
+  //LOG(DEBUG, "read_istruct: reading istruct %p (tc:%d)\n", istructp, _cur_tc->ident.tc_index);
   istruct_state state = ld_acq_istruct(istructp);
   if (state == WRITTEN) {  // fast path: the istruct has been filled already
     //istructp->state = EMPTY;
@@ -1181,8 +1265,8 @@ long read_istruct(volatile i_struct* istructp, const tc_ident_t* writing_tc) {
   //we don't want to remove this double checking.
 
   if (!test_same_node(writing_tc, &_cur_tc->ident)) {
-    //TODO: different node
-    assert(0);
+    //assert(0);
+    return read_istruct_different_tc(istructp, 0); 
   }
   if (test_same_tc(&_cur_tc->ident, writing_tc)) {
     return read_istruct_same_tc((i_struct*)istructp);  // cast to strip volatile
@@ -1848,7 +1932,7 @@ void write_global(fam_context_t* ctx, int index, long val) {
   // write the global to every TC that will run part of the family
   for (i = 0; i < ctx->no_ranges; ++i) {
     tc_ident_t id = ctx->ranges[i].dest;
-    assert(id.node_index == _cur_tc->ident.node_index);  // TODO
+    //assert(id.node_index == _cur_tc->ident.node_index);  // TODO
     tc_t* dest = (tc_t*)TC_START_VM_EX(id.node_index, id.tc_index);
     assert(dest == id.tc);  // TODO: if this assert proves to hold, remove the line above
     //i_struct_fat_pointer p;
