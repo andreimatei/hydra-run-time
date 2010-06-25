@@ -458,7 +458,7 @@ class Create(Item):
     def __init__(self, label = None, place = None, 
                  start = None, step = None, limit = None, block = None,
                  sync_type = None, fun = None, body = None,
-                 result_lvalue = None, extras = None,
+                 result_lvalue = None, mapping = None, extras = None,
                  args = None,
                  *a, **kwargs):
         super(Create, self).__init__(*a, **kwargs)
@@ -478,6 +478,9 @@ class Create(Item):
         if extras is None:
             extras = Extras()
         self.extras = extras
+        if mapping is None:
+            mapping = Extras()
+        self.mapping = mapping
 
     @property
     def label(self): return self._label
