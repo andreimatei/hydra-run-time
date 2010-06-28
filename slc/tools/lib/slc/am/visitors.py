@@ -75,6 +75,17 @@ class Create_2_HydraCall(ScopedVisitor):
     def visit_lowcreate(self, lc):
         cr = self.cur_scope.creates[lc.label]
 
+        import sys
+        print >>sys.stderr, "EXTRAS create ", cr.fun, cr.extras
+        n = cr.mapping.get_attr("gencallee", None)
+        if n is not None:
+            print >>sys.stderr, "found gencallee"
+        print >>sys.stderr, "MAPPING create ", cr.fun, cr.mapping
+        n = cr.mapping.get_attr("localize", None)
+        if n is not None:
+            print >>sys.stderr, "found localize: ", n
+        #Create place: cr.cvar_place  (CVarUse(decl = cr.cvar_place))
+
         if lc.target_next is not None:
             warn("alternative %s not used)" %
                  lc.target_next.name, lc)
@@ -309,6 +320,11 @@ class TFun_2_HydraCFunctions(DefaultVisitor):
 
     def visit_fundef(self, fundef):
         # make copies of the body for begin, middle and end
+        import sys
+        print >>sys.stderr, "EXTRAS fundef ", fundef.name, fundef.extras
+        n = fundef.extras.get_attr('gencallee', None)
+        if n is not None:
+            print >>sys.stderr, "got gencallee"
 
         begin_body = copy.deepcopy(fundef.body)
         middle_body = copy.deepcopy(fundef.body)

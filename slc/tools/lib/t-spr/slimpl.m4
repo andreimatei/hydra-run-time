@@ -42,6 +42,7 @@ m4_define([[sl_glparm_mutable]], [[_sl_doparm([[glparm_mutable]],[[$1]],[[$2]])]
 
 m4_define([[sl__static]], [[[[""", {'type':'attr', 'name':'static'}, r"""]]]])
 m4_define([[sl__naked]], [[[[""", {'type':'attr', 'name':'naked', 'flavor':r""" $1 """}, r"""]]]])
+m4_define([[sl__gencallee]], [[[[""", {'type':'attr', 'name':'gencallee'}, r"""]]]])
 
 m4_define([[sl_def]],[[m4_dnl
 m4_ifdef([[_sl_increate]],[[m4_fatal(missing sync after create)]])m4_dnl
@@ -87,6 +88,29 @@ m4_define([[sl_index]], [[m4_dnl
 [[""", {'loc':r"""]]__file__:__line__[[""",'type':'indexdecl','name':"""$1"""}, r"""]]m4_dnl
 ]])
 
+
+m4_define([[sl_mf_localize]], [[[[{'type':'attr', 'name':'localize', 'place':[r""" $1 """], 'hints':[ ]]m4_shift($@)[[ ]},]]]])
+
+m4_define([[sl_create_ext]], [[m4_dnl
+m4_pushdef([[_sl_increate]],1)m4_dnl
+m4_step([[_sl_crcnt]])m4_dnl
+m4_pushdef([[_sl_lbl]],F[[]]_sl_crcnt)m4_dnl
+[[""",]]m4_dnl
+[[{'type':'create',]]m4_dnl
+[['loc':r"""]]__file__:__line__[[""",]]m4_dnl
+[['block':[r"""0"""],'mapping':[ $1 ],]]m4_dnl
+[['extras':[r""" $6 """],]]m4_dnl
+[['fun':[r""" $7 """],]]m4_dnl
+[['lbl':']]_sl_lbl[[',]]m4_dnl
+[['place':[r""" ]]m4_ifblank([[$2]],0,[[$2]])[[ """],]]m4_dnl
+[['start':[r""" ]]m4_ifblank([[$3]],0,[[$3]])[[ """],]]m4_dnl
+[['limit':[r""" ]]m4_ifblank([[$4]],1,[[$4]])[[ """],]]m4_dnl
+[['step':[r""" ]]m4_ifblank([[$5]],1,[[$5]])[[ """],]]m4_dnl
+[['args':[]]m4_shiftn(7,$@)[[],]]m4_dnl
+[['body': [r"""]]
+]])
+
+
 m4_define([[sl_create]], [[m4_dnl
 m4_pushdef([[_sl_increate]],1)m4_dnl
 m4_step([[_sl_crcnt]])m4_dnl
@@ -101,7 +125,7 @@ m4_pushdef([[_sl_lbl]],F[[]]_sl_crcnt)m4_dnl
 [['start':[r""" ]]m4_ifblank([[$3]],0,[[$3]])[[ """],]]m4_dnl
 [['limit':[r""" ]]m4_ifblank([[$4]],1,[[$4]])[[ """],]]m4_dnl
 [['step':[r""" ]]m4_ifblank([[$5]],1,[[$5]])[[ """],]]m4_dnl
-[['block':[r""" ]]m4_ifblank([[$6]],0,[[$6]])[[ """],]]m4_dnl
+[['mapping':[],'block':[r""" ]]m4_ifblank([[$6]],0,[[$6]])[[ """],]]m4_dnl
 [['args':[]]m4_shiftn(8,$@)[[],]]m4_dnl
 [['body': [r"""]]
 ]])

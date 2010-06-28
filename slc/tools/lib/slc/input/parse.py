@@ -22,6 +22,7 @@ def parse_create(item):
                  limit = parse_block(item['limit']),
                  step = parse_block(item['step']),
                  block = parse_block(item['block']),
+                 mapping = parse_extras(item['mapping']),
                  extras = parse_extras(item['extras']),
                  sync_type = item['sync'],
                  fun = parse_block(item['fun']),
@@ -51,7 +52,8 @@ def parse_attr(item):
       del item['name']
 
       for k in item:
-            item[k] = item[k].strip()
+            if type(item[k]) == str:                  
+               item[k] = item[k].strip()
 
       return Attr(name = n, 
                   payload = item)
