@@ -9,9 +9,31 @@
 #include <signal.h>
 #include <assert.h>
 
+extern int NODE_INDEX;
+
 void exit(int);
 
 struct tc_t;
+
+#define MAX_RANGES_PER_MEM 16
+
+typedef struct mem_range {
+  void *p;
+  int len;
+  //struct mem_range* next;
+}mem_range_t;
+
+typedef struct mem {
+  mem_range_t ranges[MAX_RANGES_PER_MEM];
+  int no_ranges;
+  //int pending_remote_readers;
+}mem_t;
+
+typedef struct mem_pointer {
+  short node_index;
+  short slot_index;
+  int fc_index;
+}mem_pointer_t;
 
 struct tc_ident_t {
   int node_index;
@@ -73,6 +95,9 @@ struct fam_context_t {
                             //they don't need to be istructs, since they will only be read after the sync,
                             //but we made them istructs anyway to use the infrastructure for writing them
                             //remotely.
+  int index;  // the index of this fam_context among all the fam_contexts allocated on it's node
+
+  mem_t mems[MAX_ARGS_PER_FAM];
 
   //long shareds[MAX_ARGS_PER_FAM];  // shareds written by the last thread in the fam. They don't need to
                                    // be i-structs since they will only be read after the sync
@@ -268,6 +293,30 @@ void write_istruct(//volatile i_struct_fat_pointer istructp,
                    volatile i_struct* istructp,
                    long val, 
                    const tc_ident_t* reading_tc);
+
+void* _activate(mem_pointer_t p);
+
+static inline mem_pointer_t _create_mem_pointer(const mem_t* mem, int slot_index, fam_context_t* fc) {
+  mem_pointer_t p;
+  p.node_index = NODE_INDEX;
+  p.fc_index = fc->index;
+  p.slot_index = slot_index;
+  fc->mems[slot_index] = *mem;
+  return p;
+}
+
+static inline void* _activate_from_istruct(long x) {
+  mem_pointer_t* p = (mem_pointer_t*)&x;
+  // FIXME: pull from remote node
+  mem_t mem;
+  return mem.ranges[0].p;
+}
+
+static inline mem_t create_mem(void* p, int len) {
+  mem_t r; r.no_ranges = 1; r.ranges[0].p = p; r.ranges[0].len = len;
+  return r;
+}
+
 
 static inline long read_istruct_same_tc(i_struct* istruct) {
   assert(istruct->state == WRITTEN);

@@ -32,30 +32,42 @@ class Create_2_HydraCall(ScopedVisitor):
             if (a == arg):
                 return index
             else:
-                if shared and a.type.startswith("sh"):
+                if shared is None:
                     index += 1
                 else:
-                    if (not(shared)) and (not(a.type.startswith("sh"))):
+                    if shared and a.type.startswith("sh"):
                         index += 1
+                    else:
+                        if (not(shared)) and (not(a.type.startswith("sh"))):
+                            index += 1
         assert(0)
 
     def visit_seta(self, seta):
         b = seta.rhs.accept(self)
         setter = None
+
+        print 'visit_seta: seeing ctype:' 
+        print seta.decl.ctype[0].text
+
+        if seta.decl.ctype[0].text == 'mem_t':
+            index = self.get_arg_index(arg = seta.decl, shared = False)
+            b = flatten(None, '_create_mem_pointer(&') + b + ', %d, ' % index + \
+                        CVarUse(decl = self.__cur_fam_context) + ')'
+
         if seta.decl.type.startswith("sh"):
             # find my own index
             index = self.get_arg_index(arg = seta.decl, shared = True)
             setter = (flatten(seta.loc, "write_istruct(") + 
-		self.__first_tc + ".node_index, &" +
-                self.__first_tc + ('.tc->shareds[%d], ' % index) + '(long)(' + b + ')' +
-                ', &' + self.__first_tc + ');\n')
+                    self.__first_tc + ".node_index, &" +
+                    self.__first_tc + ('.tc->shareds[%d], ' % index) + '(long)(' + b + ')' +
+                    ', &' + self.__first_tc + ');\n')
         else:
             # find my own index
             index = self.get_arg_index(arg = seta.decl, shared = False)
             # setting a global is done by first writing to a local var (so that the parent get read it
             # back if it does a geta) and the calling "write_global" with the value of the local var (so
             # that we don't execute the rhs again)
-            setter = CVarSet(loc = seta.loc, decl = seta.decl.cvar, rhs = b) + ';'
+            setter = CVarSet(loc = seta.loc, decl = seta.decl.cvar, rhs = b) + ';  // setting local copy'
             setter += (flatten(seta.loc, "write_global(") +
                 self.__fam_context + ', %s' % index + ', (long)' + CVarUse(decl = seta.decl.cvar) + ');\n')
 
@@ -130,6 +142,7 @@ class Create_2_HydraCall(ScopedVisitor):
         fam_context_var = CVarDecl(loc = cr.loc_end, name = 'alloc$%s' % lbl,
                                    ctype = 'fam_context_t*')
         self.cur_scope.decls += fam_context_var
+        self.__cur_fam_context = fam_context_var  # to be used when visiting arguments of type mem_t
 
         no_shareds = str(self.get_no_shareds())
         no_globals = str(self.get_no_globals())
@@ -193,6 +206,26 @@ class TFun_2_HydraCFunctions(DefaultVisitor):
     def visit_getp(self, getp):
         newbl = []
         param = self.__paramNames_2_params[getp.name]
+        
+        if not param.isShared:
+            read_cmd = 'read_istruct(&_cur_tc->globals[%d], _get_parent_ident())' % param.index
+        else: #shared
+            if self.__state == 0: #begin
+                read_cmd = 'read_istruct(&_cur_tc->shareds[%d], prev)' % param.index
+            elif self.__state == 1: #middle
+                read_cmd = 'read_istruct_same_tc(&_cur_tc->shareds[%d])' % param.index
+            elif self.__state == 2: #end
+                read_cmd = 'read_istruct_same_tc(&_cur_tc->shareds[%d]))' % param.index
+            elif self.__state == 3: #generic
+                read_cmd = 'read_istruct(&_cur_tc->shareds[%d], prev)' % param.index
+        
+        #print 'getp - "' + getp.decl.ctype[0].text + '"'
+        #print getp.decl.ctype[0].text == 'mem_pointer_t' 
+        if getp.decl.ctype[0].text == ' mem_pointer_t ':
+            print '!!!!!! found reading a mem_pointer_t    ' + read_cmd
+            newbl.append(flatten(None, '_activate_from_istruct(') + '(long)(%s))' % read_cmd)
+            return newbl
+
         if not param.isShared:
             newbl.append(flatten(None, '((') + getp.decl.ctype + ')'
                         'read_istruct(&_cur_tc->globals[%d], _get_parent_ident()))' %

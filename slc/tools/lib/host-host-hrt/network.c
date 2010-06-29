@@ -98,20 +98,9 @@ static void handle_req_allocate(const req_allocate* req) {
 
   LOG(DEBUG, "network: handle_req_allocate: got a request for %d tcs\n", req->no_tcs);
   allocate_local_tcs(req->proc_index, req->no_tcs, resp.tcs, &resp.no_tcs);
-
-  /*
-  for (int i = 0; i < req->no_tcs; ++i) {
-    int tc = atomic_increment_next_tc(req->proc_index);
-    if (tc != -1) {
-      resp.tcs[resp.no_tcs++] = tc;
-    } else {  // couldn't allocate a TC
-      break;
-    }
-  }
-  */
-
   LOG(DEBUG, "network: handle_req_allocate: seding allocation reply. Giving them %d tcs.\n",
       resp.no_tcs);
+
   send_sctp_msg(req->node_index, &resp, sizeof(resp));
 }
 

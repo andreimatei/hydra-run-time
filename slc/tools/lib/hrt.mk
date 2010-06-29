@@ -5,7 +5,8 @@ nobase_dist_pkgdata_DATA += \
 
 EXTRA_DIST += \
 	host-host-hrt/tc.c \
-	host-host-hrt/network.c
+	host-host-hrt/network.c \ 
+	host-host-hrt/mem-comm.c
 
 if ENABLE_SLC_HRT
 
@@ -13,14 +14,15 @@ if ENABLE_SLC_HRT
 
 nobase_pkglib_DATA += \
 	hrt_naked-host-host-hrt/slrt.o \
-	hrt_naked-host-host-hrt/network.o
+	hrt_naked-host-host-hrt/network.o \
+	hrt_naked-host-host-hrt/mem-comm.o
 
 nobase_pkglib_LIBRARIES += \
 	hrt_naked-host-host-hrt/libslc.a \
 	hrt_naked-host-host-hrt/libslmain.a 
 
 hrt_naked_host_host_hrt_libslc_a_SOURCES = # empty for now
-hrt_naked_host_host_hrt_libslc_a_LIBADD = hrt_naked-host-host-hrt/network.o hrt_naked-host-host-hrt/tc.o hrt_naked-host-host-hrt/bindx.o hrt_naked-host-host-hrt/addrs.o hrt_naked-host-host-hrt/connectx.o  hrt_naked-host-host-hrt/opt_info.o  hrt_naked-host-host-hrt/peeloff.o  hrt_naked-host-host-hrt/recvmsg.o  hrt_naked-host-host-hrt/sendmsg.o
+hrt_naked_host_host_hrt_libslc_a_LIBADD = hrt_naked-host-host-hrt/network.o hrt_naked-host-host-hrt/mem-comm.o hrt_naked-host-host-hrt/tc.o hrt_naked-host-host-hrt/bindx.o hrt_naked-host-host-hrt/addrs.o hrt_naked-host-host-hrt/connectx.o  hrt_naked-host-host-hrt/opt_info.o  hrt_naked-host-host-hrt/peeloff.o  hrt_naked-host-host-hrt/recvmsg.o  hrt_naked-host-host-hrt/sendmsg.o
 hrt_naked_host_host_hrt_libslmain_a_SOURCES = # empty for now
 hrt_naked_host_host_hrt_libslmain_a_LIBADD = hrt_naked-host-host-hrt/main.o
 
@@ -41,6 +43,7 @@ hrt_naked-host-host-hrt/%.o: $(srcdir)/%.c
 CLEANFILES += \
 	hrt_naked-host-host-hrt/tc.o \
 	hrt_naked-host-host-hrt/network.o \
+	hrt_naked-host-host-hrt/mem-comm.o \
 	hrt_naked-host-host-hrt/main.o \
 	hrt_naked-host-host-hrt/slrt.o
 

@@ -18,6 +18,7 @@
 #include <errno.h>
 #include "hrt.h"
 #include "network.h"
+#include "mem-comm.h"
 #include "sl_hrt.h"
 
 
@@ -926,6 +927,7 @@ static void rt_init() {
 
 
   init_network();
+  init_mem_comm();
 
   // init runnable_queue_locks
   int i, j;
@@ -967,10 +969,12 @@ static void rt_init() {
   }
 
   //init fam_contexts
+  int fc_index = 0;
   for (i = 0; i < NO_PROCS; ++i) {
     for (j = 0; j < NO_FAM_CONTEXTS_PER_PROC; ++j) {
       fam_contexts[i][j].empty = 1;
       fam_contexts[i][j].done.state = EMPTY;
+      fam_contexts[i][j].index = fc_index++;
       int k = 0;
       if (pthread_spin_init(&fam_contexts[i][j].done.lock, PTHREAD_PROCESS_PRIVATE) != 0) {
         perror("pthread_spin_init:"); exit(1);
