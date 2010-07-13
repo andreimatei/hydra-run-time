@@ -8,10 +8,15 @@
 #include <stdarg.h>
 #include <string.h>
 
+
+#define MAX_NODES 1000  // maximum number of nodes supported
+
+#define MIN(a,b) (((a)<(b))?(a):(b))
+
 typedef struct pending_request {
   volatile i_struct istruct;
   tc_t* blocking_tc;
-  int id;
+  int id;  // index of a pending_request within the array of pending requests
   char buf[1000];
   int buf_len;
   int free;
@@ -26,6 +31,8 @@ typedef struct secondary {
   int socket;  // socket to daemon
 
   struct addrinfo* addr_sctp;  // address of the delegation interface
+  struct addrinfo* addr_tcp;  // address of the tcp interface
+  int socket_tcp;  // socket to the tcp interface
   int socket_sctp;  // socket to the delegation interface
 } secondary;
 extern secondary secondaries[1000];
@@ -47,7 +54,7 @@ void parse_own_memory_map(char* map);
 void allocate_local_tcs(int proc_index, int no_tcs, int* tcs, int* no_allocated_tcs);
 void populate_local_tcs(
     const int* tcs, 
-    const struct thread_range_t* ranges, 
+    const thread_range_t* ranges, 
     int no_tcs, 
     thread_func func,
     //int no_shareds, int no_globals, 

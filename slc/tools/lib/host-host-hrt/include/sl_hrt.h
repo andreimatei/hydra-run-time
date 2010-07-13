@@ -18,22 +18,76 @@ struct tc_t;
 #define MAX_RANGES_PER_MEM 16
 
 typedef struct mem_range {
-  void *p;
-  int len;
+  void *p, *orig_p;
+  int no_elements;
+  int sizeof_element;
   //struct mem_range* next;
 }mem_range_t;
 
-typedef struct mem {
+//--------------------------------------------------
+// enum memdesc_type {
+//                    REGULAR = 0, 
+//                    RESTRICT  /* a descriptor which is the result of a memrestrict operation */
+//                   };
+//-------------------------------------------------- 
+
+typedef struct memdesc {
+  //enum memdesc_type type;
+  //memdesc_stub_t orig_stub;  // valid only if type == RESTRICT
+  //unsigned int start_element, no_elements;  // valid only if type == RESTRICT
+
   mem_range_t ranges[MAX_RANGES_PER_MEM];
   int no_ranges;
-  //int pending_remote_readers;
-}mem_t;
+}memdesc_t;
 
-typedef struct mem_pointer {
+/*
+typedef struct memdesc_stub {
   short node_index;
   short slot_index;
   int fc_index;
-}mem_pointer_t;
+}memdesc_stub_t;
+*/
+
+/*
+ * 11 bits for node
+ * 1 bit for S
+ * 52 bits for pointer
+ */
+//typedef unsigned long memdesc_stub_t;
+
+typedef struct {
+  // inde of the node where .pointer is valid (the node that has the descriptor)
+  unsigned node :10;
+  unsigned have_data :1;  // valid only if data_provider != NODE_INDEX
+  // index of the node that has a consistent view of the data described by this descriptor
+  unsigned data_provider: 10;
+  // pointer to the memdesc, valid on the node inticated by .node
+  long pointer :43;  // the pointer is 43 bits, when we would normally need 47. So memdescs have to
+                     // be alligned so that the last 4 bits are 0 => alligned on a 16 byte boundary 
+} memdesc_stub_t;
+
+static inline unsigned int get_stub_node(memdesc_stub_t stub) {
+  //return stub >> 53;
+  return stub.node;
+}
+
+//--------------------------------------------------
+// static inline int get_stub_S(memdesc_stub_t stub) {
+//   //return (stub & 0010000000000000L) > 0;
+//   return stub.S;
+// }
+//-------------------------------------------------- 
+
+static inline memdesc_t* get_stub_pointer(memdesc_stub_t stub) {
+  //return (memdesc_t*)(stub & 0x000FFFFFFFFFFFFFL); 
+  return (memdesc_t*)(long)(stub.pointer << 4);
+}
+
+static inline void set_stub_pointer(memdesc_stub_t* stub, const memdesc_t* desc) {
+  // assert that the desc is alligned properly
+  assert(((unsigned long)desc & 0xF) == 0);
+  stub->pointer = ((unsigned long)desc >> 4);
+}
 
 struct tc_ident_t {
   int node_index;
@@ -80,16 +134,16 @@ struct heap_t {
 };
 typedef struct heap_t heap_t;
 
-struct thread_range_t {
+typedef struct {
   long index_start, index_end;  // inclusive
   tc_ident_t dest;
-};
+}thread_range_t;
 
-struct fam_context_t {
+typedef struct {
   int empty;  // 1 if the fam_context is available for reuse (nobody is going to sync on it)
   i_struct done;  // written on family termination
   //tc_ident_t* blocked_tc;
-  struct thread_range_t ranges[100];  //TODO: replace this with something else 
+  thread_range_t ranges[100];  //TODO: replace this with something else 
   int no_ranges;
   i_struct shareds[MAX_ARGS_PER_FAM];  // shareds written by the last thread in the fam. Technically, 
                             //they don't need to be istructs, since they will only be read after the sync,
@@ -97,12 +151,11 @@ struct fam_context_t {
                             //remotely.
   int index;  // the index of this fam_context among all the fam_contexts allocated on it's node
 
-  mem_t mems[MAX_ARGS_PER_FAM];
+  memdesc_t mems[MAX_ARGS_PER_FAM];  // FIXME: allign these
 
   //long shareds[MAX_ARGS_PER_FAM];  // shareds written by the last thread in the fam. They don't need to
                                    // be i-structs since they will only be read after the sync
-};
-typedef struct fam_context_t fam_context_t;
+} fam_context_t;
 
 struct tc_t {
   tc_ident_t ident;  // identity of this TC
@@ -212,6 +265,57 @@ long sync_fam(fam_context_t* fc, /*long* shareds_dest,*/ int no_shareds, ...);
 //decision.
 //void release_fam(fam_context_t* fc);
 
+void _memdesc(memdesc_t* memdesc, void* p, unsigned int no_elements, unsigned int sizeof_element);
+
+/*
+ * Create a new descriptor referring to part of the first range of an existing descriptor.
+ * The new descriptor, upon activation, will return the same pointer as the original one.
+ */
+memdesc_stub_t _memrestrict(memdesc_stub_t orig_stub, memdesc_t* new_desc, //memdesc_stub_t* new_stub, 
+                  mem_range_t first_range,  // first range from new_desc
+                  int start_elem, int no_elems);
+
+/*
+ * Adds objects to a descriptor (everything that was part of stub_to_copy)
+ * no_ranges[OUT] -> will be set to the new number of ranges in stub.
+ */
+void _memextend(memdesc_stub_t stub, memdesc_stub_t stub_to_copy, int* no_ranges);
+
+/*
+ * Pulls data and descriptor for a stub. Updates orig to make it LL, and also returns the new value.
+ */
+memdesc_stub_t _memlocalize(memdesc_t* new_desc, //memdesc_stub_t* new_stub,
+                            memdesc_stub_t* orig,
+                            mem_range_t first_range,  // first range of the original descriptor
+                            unsigned int no_ranges  // no ranges from the original descriptor
+                            );
+/*
+ * Create a consistent view upon the object described by stub.
+ * Return a pointer to the first range of the descriptor.
+ */
+void* _memactivate(memdesc_stub_t* stub, mem_range_t first_range, unsigned int no_ranges);
+
+/*
+ * Propagate local changes back to the data provider.
+ */
+void _mempropagate(memdesc_stub_t stub);
+
+/*
+ * Propagate local changes to the parent (as opposed to the data provider)
+ */
+void _mempropagate_up(memdesc_stub_t stub, int parent_node);
+
+/*
+ * Scatters the first range of a descriptor so that each thread i in a family gets a consistent view on
+ * elements [a*i + a, a*i + b].
+ */
+void _memscatter_affine(fam_context_t* fc, memdesc_stub_t stub, int a, int b, int c);
+
+/*
+ * Gathers from a descriptor that was scattered with _memscatter_affine(.. a,b,c)
+ */
+void _gathermem_affine(fam_context_t* fc, memdesc_stub_t stub, int a, int b, int c);
+
 /* Used by a thread func to get it's range of indexes */
 static inline long _get_start_index() {
   return _cur_tc->index_start;
@@ -294,28 +398,34 @@ void write_istruct(//volatile i_struct_fat_pointer istructp,
                    long val, 
                    const tc_ident_t* reading_tc);
 
-void* _activate(mem_pointer_t p);
+//void* _activate(mem_pointer_t p);
 
-static inline mem_pointer_t _create_mem_pointer(const mem_t* mem, int slot_index, fam_context_t* fc) {
-  mem_pointer_t p;
-  p.node_index = NODE_INDEX;
-  p.fc_index = fc->index;
-  p.slot_index = slot_index;
-  fc->mems[slot_index] = *mem;
-  return p;
-}
+/*
+ * Create a stub for a local descriptor
+ */
+static inline memdesc_stub_t _create_memdesc_stub(const memdesc_t* desc,
+                                                  int data_provider, // node that has the data
+                                                  int have_data);    // value for the .have_data member of the stub
 
-static inline void* _activate_from_istruct(long x) {
-  mem_pointer_t* p = (mem_pointer_t*)&x;
-  // FIXME: pull from remote node
-  mem_t mem;
-  return mem.ranges[0].p;
-}
+//--------------------------------------------------
+// static inline void* _activate_from_istruct(long x) {
+//   mem_pointer_t* p = (mem_pointer_t*)&x;
+//   // FIXME: pull from remote node
+//   memdesc_t mem;
+//   return mem.ranges[0].p;
+// }
+//-------------------------------------------------- 
 
-static inline mem_t create_mem(void* p, int len) {
-  mem_t r; r.no_ranges = 1; r.ranges[0].p = p; r.ranges[0].len = len;
-  return r;
-}
+//--------------------------------------------------
+// /*
+//  * Create a descriptor for a memory range
+//  * len: in bytes
+//  */
+// static inline memdesc_t create_memdesc(void* p, int len) {
+//   memdesc_t r; r.no_ranges = 1; r.ranges[0].p = p; r.ranges[0].len = len;
+//   return r;
+// }
+//-------------------------------------------------- 
 
 
 static inline long read_istruct_same_tc(i_struct* istruct) {

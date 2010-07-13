@@ -10,7 +10,10 @@ typedef enum request_type {
   REQ_ALLOCATE,
   RESP_ALLOCATE,  // response for an allocation request
   REQ_CREATE,
-  REQ_WRITE_ISTRUCT
+  REQ_WRITE_ISTRUCT,
+  REQ_CONFIRMATION,
+  REQ_PULL_DATA,
+  REQ_PULL_DATA_DESCRIBED
 }request_type;
 
 typedef struct net_request_t {
@@ -48,7 +51,7 @@ typedef struct req_create {
 
   int tcs[100];
   int no_tcs;
-  struct thread_range_t ranges[100];
+  thread_range_t ranges[100];
   thread_func func;
   tc_ident_t parent, prev, next;
   int final_ranges;  // 1 if these tcs are the last ones of the family
@@ -67,6 +70,37 @@ typedef struct req_write_istruct {
   tc_t* reader_tc;  // the tc that's potentially blocked on the istruct (valid on the destination node)
 }req_write_istruct;
 
+typedef struct req_confirmation {
+  request_type type;
+  int node_index;  // originating node
+  int identifier;  // index of the pending request slot to unblock
+  int response_identifier;
+}req_confirmation;
+
+/*
+ * Request to pull data from a descriptor on this node
+ */
+typedef struct {
+  request_type type;
+  int node_index;  // originating node
+  int identifier;  // index of the pending request slot that needs to be written when the data is received
+  int response_identifier;
+ 
+  memdesc_t* desc; 
+}req_pull_data;
+
+/*
+ * Request to pull data from a descriptor which is specified in the request (actually, a single range for now).
+ */
+typedef struct {
+  request_type type;
+  int node_index;  // originating node
+  int identifier;  // index of the pending request slot that needs to be written when the data is received
+  int response_identifier;
+ 
+  mem_range_t range; 
+}req_pull_data_described;
+
 extern struct delegation_interface_params_t delegation_if_arg;
 extern pthread_mutex_t delegation_if_finished_mutex;
 extern pthread_cond_t delegation_if_finished_cv;  // TODO: do I need to init this?
@@ -84,7 +118,7 @@ void block_for_allocate_response(pending_request_t* req, resp_allocate* resp);
 void populate_remote_tcs(
     int node_index,  // destination node
     int* tcs,  // indexes of the TC's on the destination node
-    struct thread_range_t* ranges,
+    thread_range_t* ranges,
     int no_tcs,
     thread_func func,
     tc_ident_t parent, tc_ident_t prev, tc_ident_t next,
@@ -94,6 +128,13 @@ void populate_remote_tcs(
     );
 void allocate_remote_tcs(int node_index, int proc_index, int no_tcs, int* tcs, int* no_allocated_tcs);
 void write_remote_istruct(int node_index, i_struct* istructp, long val, const tc_t* reader_tc);
+pending_request_t* get_pending_request_slot(tc_t* blocking_tc);
+void send_sctp_msg(int node_index, void* buf, int len);
+
+/*
+ * Block the current TC until the istruct in req has been written to.
+ */
+void block_for_confirmation(pending_request_t* req);
 
 
 #endif

@@ -5,26 +5,67 @@
 #include <netdb.h>
 #include <fcntl.h>
 #include <errno.h>
-#include "hrt.h"
 #include "sl_hrt.h"
+#include "hrt.h"
 #include "network.h"
 
 
 #define MAX_NO_PENDING_REQUESTS 1000
+secondary secondaries[MAX_NODES];
+int no_secondaries = 0;
+
 pending_request_t pending_requests[MAX_NO_PENDING_REQUESTS];
 pthread_spinlock_t pending_requests_lock;
 
 
-
-
 struct delegation_interface_params_t delegation_if_arg;
-static int tcp_incoming_sockets[1000];
-static int no_tcp_incoming_sockets = 0;
+static int tcp_incoming_sockets[MAX_NODES];
+static int no_tcp_incoming_sockets = 0;  // TODO: add some locking for this
+
+typedef struct {
+ memdesc_t desc;
+ int node_index;  // index of the node that is sending us data; useful if we need to send a confirmation
+ int cur_range;
+ int offset_within_range;
+ int pending_req_index;  // the index of a pending request slot to write to when all the data
+                         // is received. This can be a local slot or a remote slot.
+                         // -1 if no operation is needed.
+ int remote_confirm;   // 1 if the pending_req_index refers to a remote slot; 0 if it refers to a local slot
+}tcp_incoming_state_t;
+
+static tcp_incoming_state_t incoming_state[MAX_NODES];
+
+typedef struct{
+  mem_range_t ranges[100];
+  int no_ranges;
+  int pending_req_index;
+  int remote_confirm_needed;
+}push_request_t;
+
+typedef struct{
+  int active;  // 0 if there is no sending state for this remote node
+  push_request_t req;
+  int header_sent;  // 1 if the header (describing the ranges, etc.) has been fully sent. 0 otherwise.
+  int cur_range;    // index of the range that is currently in the process of being sent
+  int bytes_sent;   // bytes already sent from cur_range
+}tcp_sending_state_t;
+
+static tcp_sending_state_t outgoing_state[MAX_NODES];
+
+#define MAX_PUSH_REQUESTS_PER_NODE 100
+
+/*
+ * queues of memory push requests for each remote node
+ */
+static push_request_t push_requests[MAX_NODES][MAX_PUSH_REQUESTS_PER_NODE];
+static int no_push_requests[MAX_NODES];
+static pthread_spinlock_t push_requests_locks[MAX_NODES];
 
 static int port_sctp;  // local port used for everything except memory requests (not the "daemon" part)
 static int port_tcp;   // local port used for incoming memory requests
 
 static pthread_t delegation_if_thread;  // identifier of the thread running sockets of the delegation interface
+static pthread_t sending_if_thread;  // identifier of the thread running sockets of the sending interface
 
 pthread_mutex_t delegation_if_finished_mutex;
 pthread_cond_t delegation_if_finished_cv;  // TODO: do I need to init this?
@@ -37,11 +78,17 @@ static void terminate_delegation_interface() {
   pthread_mutex_unlock(&delegation_if_finished_mutex);
 }
 
-static void send_sctp_msg(int node_index, void* buf, int len);
 static void handle_req_allocate(const req_allocate* req);
 static void handle_resp_allocate(const resp_allocate* req);
 static void handle_req_write_istruct(const req_write_istruct* req);
 static void handle_req_create(const req_create* req);
+static void handle_req_confirmation(const req_confirmation* req);
+static void handle_req_pull_data(const req_pull_data* req);
+static void handle_req_pull_data_described(const req_pull_data_described* req);
+
+static int push_queue_not_empty(int node_index);
+static int dequeue_push_request(int node_index, push_request_t* req);
+
 
 /*
  * This function does not block.
@@ -82,6 +129,18 @@ static void handle_sctp_request(int sock) {
       assert(read == sizeof(req_write_istruct));
       handle_req_write_istruct((req_write_istruct*)req);
       break;
+    case REQ_CONFIRMATION:
+      assert(read == sizeof(req_confirmation));
+      handle_req_confirmation((req_confirmation*)req);
+      break;
+    case REQ_PULL_DATA:
+      assert(read == sizeof(req_pull_data));
+      handle_req_pull_data((req_pull_data*)req);
+      break;
+    case REQ_PULL_DATA_DESCRIBED:
+      assert(read == sizeof(req_pull_data_described));
+      handle_req_pull_data_described((req_pull_data_described*)req);
+      break;
     default:
       LOG(CRASH, "SCTP REQUEST: invalid request type: %d\n", req->type);
       exit(EXIT_FAILURE);
@@ -119,6 +178,16 @@ static void handle_resp_allocate(const resp_allocate* req) {
   write_istruct_different_proc(&pending->istruct, 1, pending->blocking_tc);
 }
 
+static void handle_req_confirmation(const req_confirmation* req) {
+  int index = req->identifier;
+  LOG(DEBUG, "network: handle_req_confirmation: got response with index %d\n", 
+      index);
+  pending_request_t* pending = &pending_requests[index];
+
+  LOG(DEBUG, "network: handle_resp_allocate: unblocking tc %p\n", pending->blocking_tc);
+  write_istruct_different_proc(&pending->istruct, 1, pending->blocking_tc);
+}
+
 /*
  * This function does not block.
  */
@@ -129,15 +198,111 @@ static int handle_new_tcp_connection(int listening_sock) {
 }
 
 /*
+ *
+ */
+char* parse_memchunk_header(char* buf, int len, int incoming_index) {
+  // TODO: handle the case where the header is split and the read() call only returns a part
+
+  assert(incoming_state[incoming_index].cur_range == -1); // assert we weren't in the middle of receiving another object
+
+  memdesc_t res;
+  char* tmp;
+  char* tok = strtok_r(buf, ";", &tmp);  // node_index
+  assert(tok);
+  incoming_state[incoming_index].node_index = atoi(tok);
+  tok = strtok_r(buf, ";", &tmp);  // no_ranges
+  assert(tok);
+  res.no_ranges = atoi(tok);
+  tok = strtok_r(buf, ";", &tmp);  // pending_req_index
+  assert(tok);
+  incoming_state[incoming_index].pending_req_index = atoi(tok);
+  tok = strtok_r(buf, ";", &tmp);  // is the pending_req_index referring to a remote slot (or 0 for a local slot)?
+  assert(tok);
+  incoming_state[incoming_index].remote_confirm = atoi(tok);
+  for (int i = 0; i < res.no_ranges; ++i) {
+    tok = strtok_r(NULL, ";", &tmp);  // pointer
+    assert(tok);
+    res.ranges[i].p = (void*)atol(tok);
+    tok = strtok_r(NULL, ";", &tmp);  // no_elements
+    assert(tok);
+    res.ranges[i].no_elements = atoi(tok);
+    tok = strtok_r(NULL, ";", &tmp);  // sizeof_elemement
+    assert(tok);
+    res.ranges[i].sizeof_element = atoi(tok);
+  }
+  incoming_state[incoming_index].desc = res;
+  incoming_state[incoming_index].cur_range = 0;
+  incoming_state[incoming_index].offset_within_range = 0;
+
+  return tmp;  // TODO: check that this is indeed a pointer to the next unconsumed char
+}
+    
+/*
+ * Returns 1 
+ */
+static int parse_incoming_memchunk(int incoming_index, char* buf, int len) {
+  memdesc_t* desc = &incoming_state[incoming_index].desc;
+  void* mem_dest = desc->ranges[incoming_state[incoming_index].cur_range].p +
+                   incoming_state[incoming_index].offset_within_range;
+  int bytes_needed;
+  int i;
+  for (i = incoming_state[incoming_index].cur_range; i < desc->no_ranges; ++i) {
+    if (i > incoming_state[incoming_index].cur_range) {
+      mem_dest = desc->ranges[incoming_state[incoming_index].cur_range].p;
+      incoming_state[incoming_index].offset_within_range = 0;
+    }
+    bytes_needed = desc->ranges[i].no_elements * desc->ranges[i].sizeof_element - 
+                   incoming_state[incoming_index].offset_within_range;
+    memcpy(desc->ranges[i].p, mem_dest, MIN(bytes_needed, len));
+    bytes_needed -= MIN(bytes_needed, len);
+    len -= MIN(bytes_needed, len);
+    if (len == 0) break;
+    incoming_state[incoming_index].offset_within_range += MIN(bytes_needed, len);
+  }
+  incoming_state[incoming_index].cur_range = bytes_needed? i : i+1;
+  if (incoming_state[incoming_index].cur_range == desc->no_ranges + 1) {
+    assert(len == 0);
+    return 1;
+  } else {
+    return 0;
+  }
+}
+
+/*
  * This function does not block.
  */
-static void handle_incoming_mem_chunk(int sock) {
+static void handle_incoming_mem_chunk(int incoming_index) {
   char buf[10000];
+  char* tmp = buf;
+  int sock = tcp_incoming_sockets[incoming_index];
   while (1) {
     int r = read(sock, buf, 10000);
     assert(r > 0);
+    if (incoming_state[incoming_index].cur_range == -1) {
+      tmp = parse_memchunk_header(buf, r, incoming_index);
+    }
+    int finished = parse_incoming_memchunk(incoming_index, tmp, r - (tmp - buf));
+    if (finished) {  // we've got all the data
+      // clear the state
+      incoming_state[incoming_index].cur_range = -1;
+      int slot_index;
+      if ((slot_index = incoming_state[incoming_index].pending_req_index) != -1) {
+        if (incoming_state[incoming_index].remote_confirm) {
+          // send a confirmation
+          req_confirmation req;
+          req.type = REQ_CONFIRMATION;
+          req.node_index = NODE_INDEX;
+          req.identifier = incoming_state[incoming_index].pending_req_index;
+          req.response_identifier = -1;
+          send_sctp_msg(incoming_state[incoming_index].node_index, &req, sizeof(req));
+        } else {
+          // the pending slot was local; write to it
+          pending_request_t* pending = &pending_requests[slot_index];
+          write_istruct_different_proc(&pending->istruct, 1, pending->blocking_tc);
+        }
+      }  
+    }
 
-    //FIXME: actually handle the read data
 
     if (r == 10000) {  // maybe there's more data
       //poll with 0 timeout to return immediately
@@ -159,6 +324,103 @@ static void handle_incoming_mem_chunk(int sock) {
   }
 }
 
+void open_tcp_conn(int node_index) {
+  assert(secondaries[node_index].socket_tcp == -1);
+  secondaries[node_index].socket_tcp = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+  struct addrinfo hints, *addr;
+  memset(&hints, 0, sizeof(hints));
+  hints.ai_family = AF_INET;
+  hints.ai_socktype = SOCK_STREAM;
+
+  int res;
+  char port[10];
+  sprintf(port, "%d", secondaries[node_index].port_tcp);
+  if ((res = getaddrinfo(secondaries[node_index].addr, 
+          port, 
+          &hints, 
+          &addr)) < 0) {
+    LOG(CRASH, "getaddrinfo failed: %s\n", gai_strerror(res)); exit(EXIT_FAILURE);
+  }
+
+  if (connect(secondaries[node_index].socket_tcp,
+              addr->ai_addr,
+              addr->ai_addrlen) < 0) handle_error("connect tcp");
+  //// set the socket to non-blocking mode
+  // O_NONBLOCK or O_NDELAY ?
+  //if (fcntl(secondaries[node_index].socket_tcp, F_SETFL, O_NDELAY) < 0) handle_error("setting non-blocking");
+}
+
+fd_set get_sending_sockets() {
+  fd_set res;
+  FD_ZERO(&res);
+  for (int i = 0; i < no_secondaries; ++i) {
+    if (outgoing_state[i].active || push_queue_not_empty(i)) {
+      if (secondaries[i].socket_tcp == -1) {
+        // open a connection
+        open_tcp_conn(i);
+      }
+      if (!outgoing_state[i].active) {
+        //dequeue a send request
+        int got_req = dequeue_push_request(i, &outgoing_state[i].req);
+        assert(got_req);
+        outgoing_state[i].active = 1;
+        outgoing_state[i].header_sent = 0;
+        outgoing_state[i].cur_range = 0;
+        outgoing_state[i].bytes_sent = 0;
+      }
+
+      assert(secondaries[i].socket_tcp < FD_SETSIZE);
+      FD_SET(secondaries[i].socket_tcp, &res);
+    }
+  }
+  return res;
+}
+
+/*
+ * Build the header for a push request.
+ */
+void build_push_header(const tcp_sending_state_t* s, char* c, int buf_size, int* len) {
+  assert(0); //FIXME TODO
+}
+
+void push_data(int node_index) {
+  assert(outgoing_state[node_index].active);
+  tcp_sending_state_t* s = &outgoing_state[node_index];
+  int sock = secondaries[node_index].socket_tcp;
+  int res;
+
+  if (!s->header_sent) {
+    // send the header in a blocking fashion
+    char c[1000];
+    int len;
+    build_push_header(s, c, 1000, &len);
+    res = send(sock, c, len, 0);
+    assert(res == len);
+    s->cur_range = 0;
+  }
+  // send data in non-blocking mode
+  assert(s->cur_range < s->req.no_ranges);
+  mem_range_t r = s->req.ranges[s->cur_range];
+  int tot_send = r.no_elements * r.sizeof_element;
+  int to_send = tot_send - s->bytes_sent;
+  assert(to_send > 0);
+  res = send(sock, r.p + s->bytes_sent, to_send, MSG_DONTWAIT);
+  if (res == -1) {
+    assert(errno == EWOULDBLOCK || errno == EAGAIN);
+    res = 0;
+    LOG(WARNING, "network: push_data: send returned -1 and errno was EWOULDBLOCK or EAGAIN\n");
+  }
+  if (res == to_send) {
+    s->cur_range++;
+    s->bytes_sent = 0;
+    if (s->cur_range == s->req.no_ranges)
+      s->active = 0;
+  } else {
+    s->bytes_sent += res;
+    // TODO: check if we can send more now; use MSG_MORE 
+  }
+}
+
 /*
  * Creates a socket where this node will listen for delegation requests;
  */
@@ -169,6 +431,11 @@ void* delegation_interface(void* parm) {
   FD_ZERO(&all_sockets);
   FD_SET(sock_sctp, &all_sockets);
   FD_SET(sock_tcp, &all_sockets);
+  int old_tcp_incoming_sockets = 0;  // used to check if new sockets are added to the array over time
+  for (int i = 0; i < no_tcp_incoming_sockets; ++i) {
+    FD_SET(tcp_incoming_sockets[i], &all_sockets);
+    old_tcp_incoming_sockets++;
+  }
   
   // spin until the runtime has finished initializing, if necessary
   pthread_spin_lock(&rt_init_done_lock);
@@ -180,9 +447,28 @@ void* delegation_interface(void* parm) {
   pthread_spin_unlock(&rt_init_done_lock);
   
   while (1) {
+    if (no_tcp_incoming_sockets != old_tcp_incoming_sockets) {
+      // if we have new incoming sockets, add them to the collection
+      assert(no_tcp_incoming_sockets > old_tcp_incoming_sockets);
+      // TODO: add some locking for no_tcp_incoming_sockets
+      for (int i = old_tcp_incoming_sockets; i < no_tcp_incoming_sockets; ++i) {
+        assert(tcp_incoming_sockets[i] < FD_SETSIZE);
+        FD_SET(tcp_incoming_sockets[i], &all_sockets);
+        old_tcp_incoming_sockets++;
+      }
+    }
+
     fd_set copy = all_sockets;
-    int res = select(FD_SETSIZE, &copy, NULL, NULL, NULL);
+
+    fd_set sending = get_sending_sockets();
+    struct timeval time;
+    time.tv_sec = 0;
+    time.tv_usec = 5000;  // 5 miliseconds
+    int res = select(FD_SETSIZE, &copy, &sending, NULL, &time);
     if (res < 0) handle_error("select");
+    if (res = 0) {
+      continue;  // this is done to rebuild the sending sockets collection
+    }
 
     if (FD_ISSET(sock_sctp, &copy)) {
       handle_sctp_request(sock_sctp);
@@ -191,14 +477,27 @@ void* delegation_interface(void* parm) {
       assert(newsock < FD_SETSIZE);
       FD_SET(newsock, &all_sockets);
     } else {
+      int found = 0;
       // go through all tcp sockets
       for (int i = 0; i < no_tcp_incoming_sockets; ++i) {
         if (FD_ISSET(tcp_incoming_sockets[i], &copy)) {
-          handle_incoming_mem_chunk(tcp_incoming_sockets[i]);
+          handle_incoming_mem_chunk(i);
+          found = 1;
           break;
         }
       }
+      if (found) continue;
+      // go through sending sockets
+      for (int i =0; i < no_secondaries; ++i) {
+        if (secondaries[i].socket_tcp == -1) continue;
+        if (FD_ISSET(secondaries[i].socket_tcp, &sending)) {
+          // can send some more data on this socket
+          found = 1;
+          push_data(i);
+        }
+      }
 
+      if (found) continue;
       assert(0);  // TODO: if we got here, it means that some socket received an error.. I think... treat it
     }
 
@@ -276,7 +575,7 @@ void create_delegation_socket(int* port_sctp_out, int* port_tcp_out) {
   delegation_if_arg.sock_tcp = sock_tcp;
   if (pthread_create(&delegation_if_thread, &attr, &delegation_interface, &delegation_if_arg))
     handle_error("pthread_create"); 
-
+  
   *port_sctp_out = port_sctp;
   *port_tcp_out = port_tcp;
 }
@@ -389,6 +688,7 @@ void sync_with_primary(
     secondaries[no_secondaries].port_tcp = atoi(port2);
     secondaries[no_secondaries].socket = -1;
     secondaries[no_secondaries].socket_sctp = socket(AF_INET, SOCK_SEQPACKET, IPPROTO_SCTP);
+    secondaries[no_secondaries].socket_tcp = -1;
     // fill in the addr_sctp field
     if (no_secondaries != *node_index) {
       int res;
@@ -426,7 +726,7 @@ void send_quit_message_to_secondaries() {
 
 }
 
-static void send_sctp_msg(int node_index, void* buf, int len) {
+void send_sctp_msg(int node_index, void* buf, int len) {
   assert(node_index != NODE_INDEX);  // we don't want to send to ourselves
   ((net_request_t*)buf)->node_index = NODE_INDEX;  // fill in sender
   int res = sctp_sendmsg(secondaries[node_index].socket_sctp, 
@@ -446,6 +746,10 @@ void init_network() {
     if (pthread_spin_init(&pending_requests[i].istruct.lock, PTHREAD_PROCESS_PRIVATE) != 0) handle_error("pthread_spin_init");
     pending_requests[i].free = 1;
     pending_requests[i].id = i;
+  }
+  // init push_requests_locks
+  for (int i = 0; i < MAX_NODES; ++i) {
+    if (pthread_spin_init(&push_requests_locks[i], PTHREAD_PROCESS_PRIVATE) != 0) handle_error("pthread_spin_init");
   }
 
 }
@@ -497,6 +801,17 @@ pending_request_t* request_remote_tcs(int node_index, int proc_index, int no_tcs
 
 /*
  * Blocks until a response for a particular pending request slot comes in.
+ */
+void block_for_confirmation(pending_request_t* req) {
+  tc_ident_t writer; 
+  writer.node_index = NODE_INDEX; writer.proc_index = -1; // will be written by the network thread
+  read_istruct(&req->istruct, &writer);
+  LOG(DEBUG, "block_for_confirmation: unblocking.\n");
+  free_pending_request_slot(req);
+}
+
+/*
+ * Blocks until a response for a particular pending request slot comes in.
  * resp - [OUT] - the response
  */
 void block_for_allocate_response(pending_request_t* req, resp_allocate* resp) {
@@ -526,7 +841,7 @@ void allocate_remote_tcs(int node_index, int proc_index, int no_tcs, int* tcs, i
 void populate_remote_tcs(
     int node_index,  // destination node
     int* tcs,  // indexes of the TC's on the destination node
-    struct thread_range_t* ranges,
+    thread_range_t* ranges,
     int no_tcs,
     thread_func func,
     tc_ident_t parent, tc_ident_t prev, tc_ident_t next,
@@ -580,4 +895,81 @@ static void handle_req_create(const req_create* req) {
                      req->final_shareds,
                      req->done);
   LOG(DEBUG, "network: handle_req_create: finished populating local TC's\n");
+}
+
+/*
+ * Enqueues a requerst to push some memory ranges to a remote node.
+ * node_index - [IN] - the node to push to
+ */
+static void enqueue_push_request(int node_index, 
+                              int pending_req_index, 
+                              int remote_confirm_needed, 
+                              mem_range_t* ranges, 
+                              int no_ranges) {
+  assert(node_index < no_secondaries);
+ 
+  pthread_spin_lock(&push_requests_locks[node_index]); 
+
+  int slot = no_push_requests[node_index];
+  push_requests[node_index][slot].no_ranges = no_ranges;
+  push_requests[node_index][slot].pending_req_index = pending_req_index;
+  push_requests[node_index][slot].remote_confirm_needed = remote_confirm_needed;
+  for (int i = 0; i < no_ranges; ++i) {
+    push_requests[node_index][slot].ranges[i] = ranges[i];
+  }
+  ++no_push_requests[node_index];
+
+  pthread_spin_unlock(&push_requests_locks[node_index]); 
+}
+
+/*
+ * Returns 0 if queue is empty, 1 otherwise
+ */
+static int push_queue_not_empty(int node_index) {
+  int res;
+  assert(node_index < no_secondaries);
+  pthread_spin_lock(&push_requests_locks[node_index]); 
+  res = (no_push_requests[node_index] > 0);
+  pthread_spin_unlock(&push_requests_locks[node_index]); 
+  return res;
+}
+
+/*
+ * Returns 0 if queue is empty, 1 otherwise
+ * req - [OUT] - the dequeued request
+ */
+static int dequeue_push_request(int node_index, push_request_t* req) {
+  int res;
+  assert(node_index < no_secondaries);
+ 
+  pthread_spin_lock(&push_requests_locks[node_index]); 
+  int no_reqs = no_push_requests[node_index];
+  if (no_reqs) res = 1;
+  else res = 0;
+  if (no_reqs) {
+    *req = push_requests[node_index][no_reqs-1];
+    --no_push_requests[node_index];
+  }
+  pthread_spin_unlock(&push_requests_locks[node_index]); 
+  return res;
+}
+
+/*
+ * Handles a request made by a node that wants to pull some data. The data requested is described by a local
+ * descriptor.
+ * Pushes the requested data.
+ */
+static void handle_req_pull_data(const req_pull_data* req) {
+  assert(0); // TODO FIXME
+  call enqueue_push_requests
+}
+
+/*
+ * Handles a request made by a node that wants to pull some data. The data requested is described by a 
+ * mem_range_t in the request.
+ * Pushes the requested data.
+ */
+static void handle_req_pull_data_described(const req_pull_data_described* req) {
+  assert(0); // TODO FIXME
+  call enqueue_push_requests
 }

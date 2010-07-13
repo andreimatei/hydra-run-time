@@ -90,6 +90,7 @@ m4_define([[sl_index]], [[m4_dnl
 
 
 m4_define([[sl_mf_localize]], [[[[{'type':'attr', 'name':'localize', 'place':[r""" $1 """], 'hints':[ ]]m4_shift($@)[[ ]},]]]])
+m4_define([[sl_mf_distribute]], [[[[{'type':'attr', 'name':'distribute', 'hint':[r""" $1 """], 'place':[ r""" $2 """ ]},]]]])
 
 m4_define([[sl_create_ext]], [[m4_dnl
 m4_pushdef([[_sl_increate]],1)m4_dnl

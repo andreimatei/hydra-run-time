@@ -24,6 +24,7 @@
 
 #define CACHE_LINE_SIZE 128  // in bytes
 
+
 /* the start of then address space used by the TCs of nodes */
 #define ADDR_SPACE_START ((void*)0x100000)  // 1 MB
 
@@ -616,7 +617,7 @@ static inline int test_same_tc(const tc_ident_t* l,const tc_ident_t* r) {
 
 void populate_local_tcs(
     const int* tcs, 
-    const struct thread_range_t* ranges, 
+    const thread_range_t* ranges, 
     int no_tcs, 
     thread_func func,
     //int no_shareds, int no_globals, 
@@ -874,14 +875,28 @@ void* mmap_processor_stack(int processor_index) {
 static const int delegation_if_stack_size = 1 << 15;
 static char delegation_if_stack[1<<15];
 
+/*--------------------------------------------------
+* static const int sending_if_stack_size = 1 << 15;
+* static char sending_if_stack[1<<15];
+*--------------------------------------------------*/
+
 /*
- * Map a stack for the pthread handling the delegation interface. The stack will be located
- * right before the stacks for the processors.
+ * Map a stack for the pthread handling the delegation interface.
  */
 void* mmap_delegation_interface_stack(size_t* size) {
   *size = delegation_if_stack_size;
   return delegation_if_stack;
 }
+
+/*--------------------------------------------------
+* / *
+*  * Map a stack for the pthread handling the sending interface.
+*  * /
+* void* mmap_sending_interface_stack(size_t* size) {
+*   *size = sending_if_stack_size;
+*   return sending_if_stack;
+* }
+*--------------------------------------------------*/
 
 static int get_no_CPUs() {
   int res = sysconf(_SC_NPROCESSORS_ONLN);
@@ -1499,24 +1514,11 @@ void parse_mem_map(char* buf) {
 struct slave_addr {
   char addr[500];
   int port_daemon;
-  //int port;
 };
 typedef struct slave_addr slave_addr;
 slave_addr slaves[1000];
 int no_slaves = -1;
 
-/*
-typedef struct secondary {
-  char addr[500];
-  int port_daemon;
-  int port_sctp, port_tcp;
-  int socket;  // socket to daemon
-  int no_procs;
-  //mem_range memory_range;
-} secondary;
-*/
-secondary secondaries[1000];
-int no_secondaries = 0;
 
 int am_i_primary() {
   // check is slaves.txt file exists
@@ -1593,6 +1595,7 @@ void start_nodes(int port_sctp, int port_tcp) {
   secondaries[0].port_tcp = port_tcp;
   secondaries[0].port_daemon = primary_port;
   secondaries[0].socket = -1;
+  secondaries[0].socket_tcp = -1;
   ++no_secondaries;
 
   // contact slaves, 1 by 1, and ask for their
@@ -1660,6 +1663,7 @@ void start_nodes(int port_sctp, int port_tcp) {
           secondaries[no_secondaries].port_daemon = slaves[i].port_daemon;
           secondaries[no_secondaries].port_sctp = secondaries[no_secondaries].port_tcp = -1;  
           secondaries[no_secondaries].socket = sockets[i];
+          secondaries[no_secondaries].socket_tcp = -1;
           ++no_secondaries;
         }
       }
