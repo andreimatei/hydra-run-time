@@ -790,7 +790,7 @@ void mmap_tc_ctrl_struct(int tc_index) {
   if (mapping == MAP_FAILED) {
     perror("mmap"); exit(1);
   }
-  if (tc_index == 1024)
+  if (tc_index % 1024 == 0)
     LOG(DEBUG, "mapped %d pages starting from %p for a TC control structure\n",
       no_pages, addr);
 }
@@ -957,8 +957,21 @@ static void rt_init() {
       perror("pthread_spin_init:"); exit(1);
     }
   }
-  
+ 
+  /*
+  LOG(DEBUG, "this node will skip %d TC's due to addr space holes.\n", no_tc_holes);
+  for (int j = 0; j < no_tc_holes; ++j) {
+    LOG(DEBUG, "addr space hole: %d\n", j);
+  }
+  */
+
   // init TCs
+  void* a,*b;
+  a = TC_START_VM(0);
+  b = TC_START_VM((NO_PROCS * NO_TCS_PER_PROC));
+  LOG(DEBUG, "initializing %d TC's in address space from %p to %p\n", 
+      NO_PROCS*NO_TCS_PER_PROC, a, b);
+//      TC_START_VM(0), TC_START_VM((NO_PROCS * NO_TCS_PER_PROC)));
   for (i = 0; i < NO_PROCS * NO_TCS_PER_PROC; ++i) {
     // check if we should skip this TC due to a hole in the vm
     int skip = 0;
@@ -987,7 +1000,10 @@ static void rt_init() {
   int fc_index = 0;
   for (i = 0; i < NO_PROCS; ++i) {
     for (j = 0; j < NO_FAM_CONTEXTS_PER_PROC; ++j) {
+      if (i == 1 && j == 5) 
+        LOG(DEBUG, "0 initializing fam_contexts[%d][%d] - > %x.\n", i, j, &fam_contexts[i][j]);
       fam_contexts[i][j].empty = 1;
+      //LOG(DEBUG, "1 initializing fam_contexts[%d][%d].\n", i, j);
       fam_contexts[i][j].done.state = EMPTY;
       fam_contexts[i][j].index = fc_index++;
       int k = 0;
@@ -1448,29 +1464,6 @@ sl_def(__root_fam, void, sl_glparm(int, argc), sl_glparm(char**, argv))
 }
 sl_enddef
 
-void parse_own_memory_map(char* map) {
-  map[0] = 0;  // so that strcat will work
-  int pid = getpid();
-  char file[100];
-  sprintf(file, "/proc/%d/maps", pid);
-  FILE* f = fopen(file, "rt");
-  char buf[500];
-  int first = 1;
-  while (fgets(buf, 500, f)) {
-    char* l = strtok(buf, "-");
-    assert(l);
-    char* r = strtok(buf, " ");
-    assert(r);
-    if (!first) strcat(map, ";");
-    first = 0;
-    strcat(map, l);
-    strcat(map, "-");
-    strcat(map, r);
-  }
-  strcat(map, "!");
-  //return map;
-}
-
 typedef struct {
   unsigned long long l, r;
 }mem_range;
@@ -1494,7 +1487,8 @@ void parse_mem_map(char* buf) {
   char* range = strtok_r(buf, ";", &saveptr_range);
   while (range) {
     long long l,r;
-    int res = sscanf(range, "%Lx-%Lx", &l, &r);
+    int res = sscanf(range, "%LX-%LX", &l, &r);
+    //LOG(DEBUG, "parse_mem_map: parsing range \"%s\".\t Got %LX - %LX.\n", range, l, r);
     assert(res = 2);
 
     if (l > 0x7fffffffffffLL) {  // we ignore ranges above 0x7fffffffffff; those belong to the kernel,
@@ -1510,6 +1504,32 @@ void parse_mem_map(char* buf) {
     range = strtok_r(NULL, ";", &saveptr_range);
   }
 }
+
+void parse_own_memory_map(char* map) {
+  map[0] = 0;  // so that strcat will work
+  int pid = getpid();
+  char file[100];
+  sprintf(file, "/proc/%d/maps", pid);
+  FILE* f = fopen(file, "rt");
+  char buf[500];
+  int first = 1;
+  while (fgets(buf, 500, f)) {
+    char* l = strtok(buf, "-");
+    assert(l);
+    char* r = strtok(NULL, " ");
+    assert(r);
+    if (!first) strcat(map, ";");
+    first = 0;
+    strcat(map, l);
+    strcat(map, "-");
+    strcat(map, r);
+  }
+  strcat(map, "!");
+
+
+  //return map;
+}
+
 
 struct slave_addr {
   char addr[500];
@@ -1568,6 +1588,14 @@ int am_i_secondary() {
 void get_vm_holes(int node_index, int* holes, int* no_holes) {
   int j = 0;
   *no_holes = 0;
+
+  LOG(DEBUG, "get_vm_holes: computing tc holes for %d mem_ranges.\n", no_mem_ranges);
+  /*
+  for (int j = 0; j < no_mem_ranges; ++j) {
+    LOG(DEBUG, "mem_range %d: %p - %p \n", j, (void*)mem_ranges[j].l, (void*)mem_ranges[j].r);
+  }
+  */
+
   for (int i = 0; i < NO_TCS_PER_PROC * MAX_PROCS_PER_NODE; ++i) {  // TODO: here i should see how many procs 
                                                   // a node has and just iterate through those, instead of
                                                   // the maximum possible number
@@ -1580,8 +1608,9 @@ void get_vm_holes(int node_index, int* holes, int* no_holes) {
     void* l = (void*)mem_ranges[j].l;
     void* r = (void*)mem_ranges[j].r;
     
-    if ( (start_vm <= l && l <= end_vm ) || (start_vm <= r && r <= end_vm) ) {
-      holes[*no_holes++] = i;
+    if ( (l <= start_vm && end_vm <= r) || (start_vm <= l && l <= end_vm ) || (start_vm <= r && r <= end_vm) ) {
+      holes[(*no_holes)++] = i;
+      //LOG(DEBUG, "get_vm_holes: found hole!\n");
     }
   }
 }
@@ -1760,12 +1789,13 @@ void start_nodes(int port_sctp, int port_tcp) {
 
   // parse own memory map
   parse_own_memory_map(buf);
+  parse_mem_map(buf);
 
   // compute address ranges for all secondaries
   qsort(mem_ranges, no_mem_ranges, sizeof(mem_range), &compare_mem_ranges);
   //assign_mem_ranges();
   
-  // transmit the index and all other node to each node
+  // transmit the index and all other nodes to each node
   LOG(INFO, "transmitting data to %d secondaries...\n", no_secondaries - 1);
   for (int i = 0; i < no_secondaries; ++i) {
     int holes[NO_TCS_PER_PROC * MAX_PROCS_PER_NODE];
@@ -1886,7 +1916,6 @@ static int start(int argc, char** argv) {
  */
 #undef main
 int main(int argc, char** argv) {
-
   struct sigaction sa;
   sa.sa_sigaction = sighandler_foo;
   sigemptyset(&sa.sa_mask);

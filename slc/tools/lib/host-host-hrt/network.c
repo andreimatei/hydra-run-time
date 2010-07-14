@@ -414,7 +414,7 @@ void build_push_header(const tcp_sending_state_t* s, char* buf, int buf_size, in
   assert(*len < buf_size);
 }
 
-void push_data(int node_index) {
+static void push_data(int node_index) {
   assert(outgoing_state[node_index].active);
   tcp_sending_state_t* s = &outgoing_state[node_index];
   int sock = secondaries[node_index].socket_tcp;
@@ -666,6 +666,7 @@ void sync_with_primary(
   char buf2[3010];
   sprintf(buf2, "%d;%d;%d;", port_sctp, port_tcp, no_procs);
   strcat(buf2, map);
+  LOG(DEBUG, "preparing mem map to send to primary: \"%s\"\n", map); 
   LOG(DEBUG, "sending data to primary: \"%s\"\n", buf2); 
   int sent = 0;
   while (sent < strlen(buf2)) {
