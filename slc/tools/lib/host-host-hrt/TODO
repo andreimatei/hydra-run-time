@@ -1,3 +1,7 @@
+define an initializer with __attribute__((constructor)) that calls mmap(BIG); free(); 
+(or do malloc at the beginning of main()) - to make sure we start
+with a non-empty heap, so that a number of mallocs done by libc will work.
+
 take care to close all sockets; in particular the "daemon" one on the primary and secondaries
 
 investigate why we need -O0

@@ -40,21 +40,6 @@ typedef struct memdesc {
   int no_ranges;
 }memdesc_t;
 
-/*
-typedef struct memdesc_stub {
-  short node_index;
-  short slot_index;
-  int fc_index;
-}memdesc_stub_t;
-*/
-
-/*
- * 11 bits for node
- * 1 bit for S
- * 52 bits for pointer
- */
-//typedef unsigned long memdesc_stub_t;
-
 typedef struct {
   // inde of the node where .pointer is valid (the node that has the descriptor)
   unsigned node :10;

@@ -22,10 +22,13 @@ struct delegation_interface_params_t delegation_if_arg;
 static int tcp_incoming_sockets[MAX_NODES];
 static int no_tcp_incoming_sockets = 0;  // TODO: add some locking for this
 
+/*
+ * struct representing the state of reading incoming memory ranges
+ */
 typedef struct {
- memdesc_t desc;
+ memdesc_t desc;  // descriptor for the memory that we're currently receiving
  int node_index;  // index of the node that is sending us data; useful if we need to send a confirmation
- int cur_range;
+ int cur_range;   // index of the range within the descriptor desc that we're currently receiving
  int offset_within_range;
  int pending_req_index;  // the index of a pending request slot to write to when all the data
                          // is received. This can be a local slot or a remote slot.
@@ -35,16 +38,25 @@ typedef struct {
 
 static tcp_incoming_state_t incoming_state[MAX_NODES];
 
+/*
+ * struct representing a request to push some memory to a remote node
+ */
 typedef struct{
   mem_range_t ranges[100];
   int no_ranges;
-  int pending_req_index;
-  int remote_confirm_needed;
+  int pending_req_index;    // this index will be embedded in the data stream that
+                            // we pushes. When the remote node receives this stream and reads it all,
+                            // it will write to the pending request slot to unblock either itself or this node.
+  int remote_confirm_needed;  // specifies wether pending_req_index refers to a slot on the remote node or
+                              // on the local node.
 }push_request_t;
 
-typedef struct{
+/*
+ * struct describing the state of a memory send operation.
+ */
+typedef struct {
   int active;  // 0 if there is no sending state for this remote node
-  push_request_t req;
+  push_request_t req;  // the memory that we're currently pushing
   int header_sent;  // 1 if the header (describing the ranges, etc.) has been fully sent. 0 otherwise.
   int cur_range;    // index of the range that is currently in the process of being sent
   int bytes_sent;   // bytes already sent from cur_range
@@ -198,7 +210,8 @@ static int handle_new_tcp_connection(int listening_sock) {
 }
 
 /*
- *
+ * Called when we get a memory stream.
+ * Reads a header from buf and initializes incoming_state[incoming_index].
  */
 char* parse_memchunk_header(char* buf, int len, int incoming_index) {
   // TODO: handle the case where the header is split and the read() call only returns a part
@@ -210,13 +223,13 @@ char* parse_memchunk_header(char* buf, int len, int incoming_index) {
   char* tok = strtok_r(buf, ";", &tmp);  // node_index
   assert(tok);
   incoming_state[incoming_index].node_index = atoi(tok);
-  tok = strtok_r(buf, ";", &tmp);  // no_ranges
+  tok = strtok_r(NULL, ";", &tmp);  // no_ranges
   assert(tok);
   res.no_ranges = atoi(tok);
-  tok = strtok_r(buf, ";", &tmp);  // pending_req_index
+  tok = strtok_r(NULL, ";", &tmp);  // pending_req_index
   assert(tok);
   incoming_state[incoming_index].pending_req_index = atoi(tok);
-  tok = strtok_r(buf, ";", &tmp);  // is the pending_req_index referring to a remote slot (or 0 for a local slot)?
+  tok = strtok_r(NULL, ";", &tmp);  // is the pending_req_index referring to a remote slot (or 0 for a local slot)?
   assert(tok);
   incoming_state[incoming_index].remote_confirm = atoi(tok);
   for (int i = 0; i < res.no_ranges; ++i) {
@@ -234,11 +247,12 @@ char* parse_memchunk_header(char* buf, int len, int incoming_index) {
   incoming_state[incoming_index].cur_range = 0;
   incoming_state[incoming_index].offset_within_range = 0;
 
-  return tmp;  // TODO: check that this is indeed a pointer to the next unconsumed char
+  return tmp;
 }
     
 /*
- * Returns 1 
+ * Read from a buffer and copies to local memory.
+ * Returns 1 if we got all that was required by the incoming_state[invoming_index]; 0 if more data is needed.
  */
 static int parse_incoming_memchunk(int incoming_index, char* buf, int len) {
   memdesc_t* desc = &incoming_state[incoming_index].desc;
@@ -269,7 +283,8 @@ static int parse_incoming_memchunk(int incoming_index, char* buf, int len) {
 }
 
 /*
- * This function does not block.
+ * This function does not block but it does assume that the header is small 
+ * and comes all in one piece.
  */
 static void handle_incoming_mem_chunk(int incoming_index) {
   char buf[10000];
@@ -379,8 +394,24 @@ fd_set get_sending_sockets() {
 /*
  * Build the header for a push request.
  */
-void build_push_header(const tcp_sending_state_t* s, char* c, int buf_size, int* len) {
-  assert(0); //FIXME TODO
+void build_push_header(const tcp_sending_state_t* s, char* buf, int buf_size, int* len) {
+  // the header looks like <local node index>;<number of ranges>;<pending_req_index>;<remote_confirm>;
+  // (<pointer>;<no elements>;<sizeof element>;)*
+  
+  assert(s->active);
+  *len = sprintf(buf, "%d;%d;%d;%d;", 
+                 NODE_INDEX, 
+                 s->req.no_ranges, 
+                 s->req.pending_req_index, 
+                 s->req.remote_confirm_needed);
+  for (int i = 0; i < s->req.no_ranges; ++i) {
+    const mem_range_t* r = &s->req.ranges[i];
+    *len += sprintf(buf + *len, "%ld;%d;%d;",
+                    (long)r->p,
+                    r->no_elements,
+                    r->sizeof_element);
+  }
+  assert(*len < buf_size);
 }
 
 void push_data(int node_index) {
@@ -900,12 +931,17 @@ static void handle_req_create(const req_create* req) {
 /*
  * Enqueues a requerst to push some memory ranges to a remote node.
  * node_index - [IN] - the node to push to
+ * pending_req_index - [IN] - index of pending request slot (local or remote) to be written to when all
+ *                            the memory is made consistent
+ * remote_confirm_needed - [IN] - 1 if pending_req_index refers to a remote slot, 0 if it refers to a local slot
+ * ranges, no_ranges - [IN] - array of ranges that need to be pushed; the contents are copied to an
+ *                            internal data structure
  */
 static void enqueue_push_request(int node_index, 
-                              int pending_req_index, 
-                              int remote_confirm_needed, 
-                              mem_range_t* ranges, 
-                              int no_ranges) {
+                                 int pending_req_index, 
+                                 int remote_confirm_needed, 
+                                 const mem_range_t* ranges, 
+                                 int no_ranges) {
   assert(node_index < no_secondaries);
  
   pthread_spin_lock(&push_requests_locks[node_index]); 
@@ -960,8 +996,16 @@ static int dequeue_push_request(int node_index, push_request_t* req) {
  * Pushes the requested data.
  */
 static void handle_req_pull_data(const req_pull_data* req) {
-  assert(0); // TODO FIXME
-  call enqueue_push_requests
+  memdesc_t* desc = req->desc;
+  mem_range_t ranges[desc->no_ranges];
+  for (int i = 0; i < desc->no_ranges; ++i) {
+    ranges[i] = desc->ranges[i];
+  }
+  enqueue_push_request(req->node_index,  // destination node
+                       req->identifier,  // pending request slot to be written on the remote node
+                       0,                // no remote confirmation needed 
+                       ranges,           // memory to push
+                       desc->no_ranges);
 }
 
 /*
@@ -970,6 +1014,10 @@ static void handle_req_pull_data(const req_pull_data* req) {
  * Pushes the requested data.
  */
 static void handle_req_pull_data_described(const req_pull_data_described* req) {
-  assert(0); // TODO FIXME
-  call enqueue_push_requests
+  enqueue_push_request(req->node_index,  // destination node
+                       req->identifier,  // pending request slot to be written on the remote node
+                       0,                // no remote confirmation needed 
+                       &req->range,      // memory to push
+                       1                 // only one range to push 
+                       );
 }

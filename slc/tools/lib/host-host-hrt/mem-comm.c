@@ -92,7 +92,10 @@ static void pull_data(memdesc_stub_t* stub) {
   assert(!stub->have_data);
 
   // get pending request slot
-  pending_request_t* pending = get_pending_request_slot(_cur_tc);  
+  pending_request_t* pending = get_pending_request_slot(_cur_tc);  // this index will be sent as part of
+                            // the pull request, and then the remote node will embed it in the data stream that
+                            // it pushes. When we receive this stream and read it all, we will write to the
+                            // pending request slot to unblock ourselves.
 
   // send the request
   if (memdesc_desc_local(*stub)) {
@@ -100,7 +103,7 @@ static void pull_data(memdesc_stub_t* stub) {
     req_pull_data_described req;
     req.type = REQ_PULL_DATA_DESCRIBED;
     req.node_index = NODE_INDEX;
-    req.identifier = pending->id;
+    req.identifier = pending->id;  
     req.response_identifier = -1;
     assert(get_stub_pointer(*stub)->no_ranges == 0);  // so far, we only support this for pulling with
                         // a local descriptor. This is usually sufficient, since usually you would get a
@@ -112,7 +115,7 @@ static void pull_data(memdesc_stub_t* stub) {
     req_pull_data req;
     req.type = REQ_PULL_DATA;
     req.node_index = NODE_INDEX;
-    req.identifier = pending->id;
+    req.identifier = pending->id;  // request a confirm message to be sent to this pending request slot
     req.response_identifier = -1;
     req.desc = get_stub_pointer(*stub);
     assert(stub->data_provider == stub->node);
