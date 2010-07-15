@@ -3,6 +3,14 @@
 #include "network.h"
 #include "mem-comm.h"
 
+/*
+ *  The range of memory that is currently being received over the network.
+ *  The SIGSEGV handler uses this to mmap the range when the network interface tries to write it. 
+ */
+void* cur_incoming_mem_range_start;
+unsigned long cur_incoming_mem_range_len;
+
+
 void _memdesc(memdesc_t* memdesc, void* p, unsigned int no_elements, unsigned int sizeof_element) {
   memdesc->no_ranges = 1;
   memdesc->ranges[0].p = p;
@@ -218,6 +226,7 @@ static void push_elems(int node_index, memdesc_stub_t stub, int first_elem, int 
 
 /*
  * Pulls elements [first_elem...last_elem] from the first range of a descriptor, from a particular node.
+ * Used for gather operations.
  */
 static void pull_elems(int node_index, memdesc_stub_t stub, int first_elem, int last_elem) {
   assert(memdesc_data_local(stub));

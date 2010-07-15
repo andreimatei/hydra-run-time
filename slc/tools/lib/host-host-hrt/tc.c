@@ -23,7 +23,7 @@
 
 
 #define CACHE_LINE_SIZE 128  // in bytes
-
+#define MAPPING_CHUNK (1<<20)  // the size and allignment of chunks to map on SIGSEGV
 
 /* the start of then address space used by the TCs of nodes */
 #define ADDR_SPACE_START ((void*)0x100000)  // 1 MB
@@ -1428,7 +1428,7 @@ void rt_quit() {
 }
 
 
-void sighandler_foo(int sig, siginfo_t *si, void *ucontext);
+static void sighandler_foo(int sig, siginfo_t *si, void *ucontext);
 
 
 pthread_mutex_t main_finished_mutex;
@@ -1480,7 +1480,7 @@ int compare_mem_ranges(const void* l, const void* r) {
 }
 
 
-void parse_mem_map(char* buf) {
+void parse_mem_map(char* buf, mem_range* mem_ranges, int* no_mem_ranges) {
   LOG(DEBUG, "parsing mem map: %s\n", buf);
 
   char* saveptr_range;//, *saveptr2;
@@ -1496,9 +1496,9 @@ void parse_mem_map(char* buf) {
       assert(r > 0x7fffffffffffLL);
     } else {
       assert(r < 0x7fffffffffffLL);
-      mem_ranges[no_mem_ranges].l = l;
-      mem_ranges[no_mem_ranges].r = r;
-      ++no_mem_ranges;
+      mem_ranges[*no_mem_ranges].l = l;
+      mem_ranges[*no_mem_ranges].r = r;
+      ++(*no_mem_ranges);
     }
 
     range = strtok_r(NULL, ";", &saveptr_range);
@@ -1755,7 +1755,7 @@ void start_nodes(int port_sctp, int port_tcp) {
             secondaries[i].port_sctp, secondaries[i].port_tcp, secondaries[i].no_procs);
 
         s = strtok(NULL, "");  // get the rest of the string - the mem map
-        parse_mem_map(s);
+        parse_mem_map(s, mem_ranges, &no_mem_ranges);
         break;
       }
       read_bytes += res;
@@ -1789,7 +1789,7 @@ void start_nodes(int port_sctp, int port_tcp) {
 
   // parse own memory map
   parse_own_memory_map(buf);
-  parse_mem_map(buf);
+  parse_mem_map(buf, mem_ranges, &no_mem_ranges);
 
   // compute address ranges for all secondaries
   qsort(mem_ranges, no_mem_ranges, sizeof(mem_range), &compare_mem_ranges);
@@ -1977,14 +1977,55 @@ void write_global(fam_context_t* ctx, int index, long val) {
   }
 }
 
-void sighandler_foo(int sig, siginfo_t *si, void *ucontext)
+/*
+ * Returns 0 if the range that is passed overlaps an existing mapping, 1 otherwise
+ */
+static int check_virtual_memory_range(void* range_start, void* range_end) {
+  // TODO: this function is here only for debugging, it shouldn't be necessary. Also, it will
+  // crash if we have more than 5000 mmapped range
+  char c[5000];
+  mem_range ranges[5000];
+  int no_ranges = 0;
+  parse_own_memory_map(c);
+  parse_mem_map(c, ranges, &no_ranges);
+  for (int i = 0; i < no_ranges; ++i) {
+    void* l = (void*)ranges[i].l;
+    void* r = (void*)ranges[i].r;
+    if ( 
+        (l <= range_start && range_end <= r) || 
+        (range_start <= l && l <= range_end ) || 
+        (range_start <= r && r <= range_end) ) {
+      return 0;
+    }
+  }
+  return 1;
+}
+
+static void sighandler_foo(int sig, siginfo_t *si, void *ucontext)
 {
-    char *page =
-      (char*)((unsigned long)si->si_addr
-          & ~((unsigned long)getpagesize() - 1L));
+  LOG(DEBUG, "sigsegv handler: GOT SIGSEGV \n");
+  char *page =
+    (char*)((unsigned long)si->si_addr
+        & ~((unsigned long)getpagesize() - 1L));
+  // map a chunk if the address is within the range that the network interface is currently copying over
+  if (si->si_addr >= cur_incoming_mem_range_start &&
+      si->si_addr < (cur_incoming_mem_range_start + cur_incoming_mem_range_len)) {
+    void* range_start = (void*)((unsigned long)si->si_addr
+        & ~(MAPPING_CHUNK - 1L));
+    void* range_end = range_start + MAPPING_CHUNK;
+
+    // check that the range we intend to map doesn't overlap any existing range
+    assert(check_virtual_memory_range(range_start, range_end));
+
+    void* mapping = mmap(range_start, MAPPING_CHUNK, PROT_READ | PROT_WRITE,
+        MAP_PRIVATE | MAP_FIXED | MAP_ANON, -1, 0);
+    assert(mapping == range_start);
+    LOG(DEBUG, "sigsegv handler: mapped a chunk\n");
+  } else {
     printf("sig handler for %d, fault %p, page %p\n", sig, si->si_addr, page);
     assert(0); // trigger a core dump
     exit(EXIT_FAILURE);
-    return;
+  }
+  return;
 }
 

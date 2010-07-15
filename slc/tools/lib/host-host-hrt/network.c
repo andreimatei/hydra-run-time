@@ -7,6 +7,7 @@
 #include <errno.h>
 #include "sl_hrt.h"
 #include "hrt.h"
+#include "mem-comm.h"
 #include "network.h"
 
 
@@ -287,18 +288,29 @@ static int parse_incoming_memchunk(int incoming_index, char* buf, int len) {
  * and comes all in one piece.
  */
 static void handle_incoming_mem_chunk(int incoming_index) {
+  // TODO: don't assume that the header comes all in one piece
   char buf[10000];
   char* tmp = buf;
   int sock = tcp_incoming_sockets[incoming_index];
   while (1) {
     int r = read(sock, buf, 10000);
     assert(r > 0);
+    // if this is the first time we're receiving data for this incoming_state slot, read the header
     if (incoming_state[incoming_index].cur_range == -1) {
       tmp = parse_memchunk_header(buf, r, incoming_index);
     }
+  
+    // init the range that we're currently receiving, so that the SIGSEGV handler maps it for us if needed
+    memdesc_t* desc = &incoming_state[incoming_index].desc;
+    int range_no = incoming_state[incoming_index].cur_range;
+    cur_incoming_mem_range_start = desc->ranges[range_no].p;
+    cur_incoming_mem_range_len = desc->ranges[range_no].no_elements * desc->ranges[range_no].sizeof_element; 
+
     int finished = parse_incoming_memchunk(incoming_index, tmp, r - (tmp - buf));
     if (finished) {  // we've got all the data
       // clear the state
+      cur_incoming_mem_range_start = NULL;
+      cur_incoming_mem_range_len = 0;
       incoming_state[incoming_index].cur_range = -1;
       int slot_index;
       if ((slot_index = incoming_state[incoming_index].pending_req_index) != -1) {
@@ -317,7 +329,6 @@ static void handle_incoming_mem_chunk(int incoming_index) {
         }
       }  
     }
-
 
     if (r == 10000) {  // maybe there's more data
       //poll with 0 timeout to return immediately
