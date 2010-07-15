@@ -381,6 +381,7 @@ fd_set get_sending_sockets() {
   FD_ZERO(&res);
   for (int i = 0; i < no_secondaries; ++i) {
     if (outgoing_state[i].active || push_queue_not_empty(i)) {
+      LOG(DEBUG, "network: get_sending_sockets: found socket that wants to send data for secondary %d\n", i);
       if (secondaries[i].socket_tcp == -1) {
         // open a connection
         open_tcp_conn(i);
@@ -507,8 +508,9 @@ void* delegation_interface(void* parm) {
     time.tv_sec = 0;
     time.tv_usec = 5000;  // 5 miliseconds
     int res = select(FD_SETSIZE, &copy, &sending, NULL, &time);
+    //LOG(DEBUG, "network: delegation_interface: select returned %d.\n", res);
     if (res < 0) handle_error("select");
-    if (res = 0) {
+    if (res == 0) {
       continue;  // this is done to rebuild the sending sockets collection
     }
 
