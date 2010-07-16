@@ -130,6 +130,11 @@ void allocate_remote_tcs(int node_index, int proc_index, int no_tcs, int* tcs, i
 void write_remote_istruct(int node_index, i_struct* istructp, long val, const tc_t* reader_tc);
 pending_request_t* get_pending_request_slot(tc_t* blocking_tc);
 void send_sctp_msg(int node_index, void* buf, int len);
+void enqueue_push_request(int node_index, 
+                          int pending_req_index, 
+                          int remote_confirm_needed, 
+                          const mem_range_t* ranges, 
+                          int no_ranges);
 
 /*
  * Block the current TC until the istruct in req has been written to.

@@ -206,7 +206,9 @@ static void handle_req_confirmation(const req_confirmation* req) {
  */
 static int handle_new_tcp_connection(int listening_sock) {
   int conn = accept(listening_sock, NULL, NULL);
-  tcp_incoming_sockets[no_tcp_incoming_sockets++] = conn;
+  incoming_state[no_tcp_incoming_sockets].cur_range = -1;
+  tcp_incoming_sockets[no_tcp_incoming_sockets] = conn;
+  no_tcp_incoming_sockets++;
   return conn; 
 }
 
@@ -254,29 +256,38 @@ char* parse_memchunk_header(char* buf, int len, int incoming_index) {
 /*
  * Read from a buffer and copies to local memory.
  * Returns 1 if we got all that was required by the incoming_state[invoming_index]; 0 if more data is needed.
+ * len - [IN] - size of buf
  */
 static int parse_incoming_memchunk(int incoming_index, char* buf, int len) {
   memdesc_t* desc = &incoming_state[incoming_index].desc;
   void* mem_dest = desc->ranges[incoming_state[incoming_index].cur_range].p +
                    incoming_state[incoming_index].offset_within_range;
-  int bytes_needed;
+  int bytes_needed = 0;
   int i;
   for (i = incoming_state[incoming_index].cur_range; i < desc->no_ranges; ++i) {
     if (i > incoming_state[incoming_index].cur_range) {
       mem_dest = desc->ranges[incoming_state[incoming_index].cur_range].p;
       incoming_state[incoming_index].offset_within_range = 0;
     }
+    // compute how much data is still to be received for this range
     bytes_needed = desc->ranges[i].no_elements * desc->ranges[i].sizeof_element - 
                    incoming_state[incoming_index].offset_within_range;
-    memcpy(desc->ranges[i].p, mem_dest, MIN(bytes_needed, len));
-    bytes_needed -= MIN(bytes_needed, len);
-    len -= MIN(bytes_needed, len);
-    if (len == 0) break;
-    incoming_state[incoming_index].offset_within_range += MIN(bytes_needed, len);
+    int read = MIN(bytes_needed, len);
+    memcpy(mem_dest, buf, read);
+    LOG(DEBUG, "network: parse_incoming_mem_chunk: copied %d bytes at %p\n", read, mem_dest);
+    bytes_needed -= read;
+    len -= read;
+    if (len == 0) {
+      LOG(DEBUG, "network: parse_incoming_mem_chunk: exhausted all data in incoming buffer\n");
+      break;
+    }
+    incoming_state[incoming_index].offset_within_range += read;
   }
-  incoming_state[incoming_index].cur_range = bytes_needed? i : i+1;
-  if (incoming_state[incoming_index].cur_range == desc->no_ranges + 1) {
+  incoming_state[incoming_index].cur_range = bytes_needed ? i : i + 1;
+  if (incoming_state[incoming_index].cur_range == desc->no_ranges) {
     assert(len == 0);
+    LOG(DEBUG, "network: parse_incoming_mem_chunk: finished receiving memory for incoming_state slot %d\n",
+        incoming_index);
     return 1;
   } else {
     return 0;
@@ -308,6 +319,7 @@ static void handle_incoming_mem_chunk(int incoming_index) {
 
     int finished = parse_incoming_memchunk(incoming_index, tmp, r - (tmp - buf));
     if (finished) {  // we've got all the data
+      LOG(DEBUG, "network: handle_incoming_mem_chunk: finished receiving data for a memdesc\n");
       // clear the state
       cur_incoming_mem_range_start = NULL;
       cur_incoming_mem_range_len = 0;
@@ -507,6 +519,9 @@ void* delegation_interface(void* parm) {
     struct timeval time;
     time.tv_sec = 0;
     time.tv_usec = 5000;  // 5 miliseconds
+    // TODO: do something about this timeout, at least make it bigger; it's only purpose is to allow
+    // rebulding of the sending sockets collection to take place. Maybe there's another way to interupt a select
+    // when this collection is modified... Send a signal to this thread?
     int res = select(FD_SETSIZE, &copy, &sending, NULL, &time);
     //LOG(DEBUG, "network: delegation_interface: select returned %d.\n", res);
     if (res < 0) handle_error("select");
@@ -796,7 +811,6 @@ void init_network() {
   for (int i = 0; i < MAX_NODES; ++i) {
     if (pthread_spin_init(&push_requests_locks[i], PTHREAD_PROCESS_PRIVATE) != 0) handle_error("pthread_spin_init");
   }
-
 }
 
 /*
@@ -951,7 +965,7 @@ static void handle_req_create(const req_create* req) {
  * ranges, no_ranges - [IN] - array of ranges that need to be pushed; the contents are copied to an
  *                            internal data structure
  */
-static void enqueue_push_request(int node_index, 
+void enqueue_push_request(int node_index, 
                                  int pending_req_index, 
                                  int remote_confirm_needed, 
                                  const mem_range_t* ranges, 

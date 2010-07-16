@@ -29,7 +29,7 @@ static int memdesc_desc_local(memdesc_stub_t stub) {
 }
 
 static int memdesc_data_local(memdesc_stub_t stub) {
-  return stub.have_data || (stub.data_provider == NODE_INDEX);
+  return stub.have_data || (stub.data_provider == NODE_INDEX) || stub.S;
 }
 
 static int memdesc_get_effective_data_prov(memdesc_stub_t stub) {
@@ -47,36 +47,25 @@ static int memdesc_get_effective_data_prov(memdesc_stub_t stub) {
 * }
 *--------------------------------------------------*/
 
-/*
- * Create a stub for a local descriptor
- */
-static memdesc_stub_t _create_memdesc_stub(
-    const memdesc_t* desc, 
-    int data_provider,
-    int have_data) {
-  memdesc_stub_t stub;
-  stub.node = NODE_INDEX;
-  stub.have_data = have_data;
-  stub.data_provider = data_provider;
-  set_stub_pointer(&stub, desc);
-  assert(get_stub_pointer(stub) == desc);  // just for debugging
-  return stub;
-}
 
 /*
  * Create a new descriptor referring to part of the first range of an existing descriptor.
  * The new descriptor, upon activation, will return the same pointer as the original one.
  */
 memdesc_stub_t _memrestrict(memdesc_stub_t orig_stub, memdesc_t* new_desc, //memdesc_stub_t* new_stub, 
-                  mem_range_t first_range,  // first range from new_desc
+                  mem_range_t first_range,  // first range from the descriptor of orig_stub
                   int start_elem, int no_elems) {
   mem_range_t range = first_range;//get_first_range(orig_stub);
   new_desc->no_ranges = 1;
   new_desc->ranges[0] = range; 
   // range[0].orig_p remains unchanged
-  new_desc->ranges[0].p += (start_elem * range.sizeof_element);
+  new_desc->ranges[0].p = range.orig_p + (start_elem * range.sizeof_element);
   new_desc->ranges[0].no_elements = no_elems;
-  return _create_memdesc_stub(new_desc, orig_stub.data_provider, orig_stub.have_data); //get_effective_data_provider(orig_stub));
+  return _create_memdesc_stub(new_desc, 
+                              orig_stub.data_provider, 
+                              orig_stub.have_data,
+                              0 // S
+                              );
 }
 
 /*
@@ -97,6 +86,9 @@ static void pull_desc(memdesc_t* new_desc, memdesc_stub_t* stub,
 }
 
 static void pull_data(memdesc_stub_t* stub) {
+  assert(stub->data_provider != NODE_INDEX);  // shouldn't be called on such a descriptor; the compiler
+                            // should ensure that the generic version of a thread func is not invoked on the
+                            // same node as the parent
   assert(!stub->have_data);
 
   // get pending request slot
@@ -113,7 +105,7 @@ static void pull_data(memdesc_stub_t* stub) {
     req.node_index = NODE_INDEX;
     req.identifier = pending->id;  
     req.response_identifier = -1;
-    assert(get_stub_pointer(*stub)->no_ranges == 0);  // so far, we only support this for pulling with
+    assert(get_stub_pointer(*stub)->no_ranges == 1);  // so far, we only support this for pulling with
                         // a local descriptor. This is usually sufficient, since usually you would get a
                         // local descriptor by a restrict operation, which produces a desc with one range
     req.range = get_stub_pointer(*stub)->ranges[0];
@@ -142,7 +134,8 @@ static void pull_data(memdesc_stub_t* stub) {
  */
 void _memextend(memdesc_stub_t stub, memdesc_stub_t stub_to_copy, int* no_ranges) {
   assert(memdesc_data_local(stub) && memdesc_desc_local(stub));
-  assert(memdesc_data_local(stub_to_copy) && memdesc_desc_local(stub_to_copy));
+  assert(stub_to_copy.data_provider == NODE_INDEX && memdesc_desc_local(stub_to_copy));
+  //assert(memdesc_data_local(stub_to_copy) && memdesc_desc_local(stub_to_copy));
   memdesc_t* src = get_stub_pointer(stub_to_copy);
   memdesc_t* dest = get_stub_pointer(stub);
   for (int i = 0; i < src->no_ranges; ++i) {
@@ -194,8 +187,38 @@ void* _memactivate(memdesc_stub_t* stub, mem_range_t first_range, unsigned int n
 }
 
 
+/*
+ * Used by propagate operations.
+ */
+// TODO: make this function static and remove it from sl_hrt.h. It was put there temporarily.
 void push_data(memdesc_stub_t stub, int dest_node) {
-  assert(0); // TODO FIXME
+  if (dest_node == NODE_INDEX) return;  // nothing to do
+  assert(!stub.S);  // if the descriptor if involved in a scatter/gather, we shouldn't have gotten here
+  assert(memdesc_data_local(stub));  // we should have the data...
+  assert(dest_node != NODE_INDEX);  // shouldn't call this on such a provider... Compiler has to
+                            // make sure that a generic version of a gen_callee function is not called on
+                            // the same node as the parent.
+
+  assert(memdesc_desc_local(stub));  // for now, only handle local descriptors
+                                     // TODO: handle remote descriptors (right now, those can be involved in
+                                     // propagate operations. Maybe if we make _memactivate always pull the descriptor,
+                                     // we would get rid of this problem...
+  memdesc_t* desc = get_stub_pointer(stub);
+  // get pending request slot
+  pending_request_t* pending = get_pending_request_slot(_cur_tc);  // this index will embedded in the data 
+                            // stream that
+                            // we push. When all the data is received remotely, we will get a message to
+                            // unblock ourselves.
+  LOG(DEBUG, "mem-comm: push_data: enqueueing a push request.\n");
+  enqueue_push_request(dest_node,  // destination node
+                       pending->id,  // pending request slot to be written on this node
+                       1,                // no remote confirmation needed 
+                       desc->ranges,           // memory to push
+                       desc->no_ranges);
+  // block on the pending request slot
+  LOG(DEBUG, "mem-comm: push_data: blocking until all the push data is received.\n");
+  block_for_confirmation(pending);
+  LOG(DEBUG, "mem-comm: push_data: unblocked... all the data was received.\n");
 }
 
 /*

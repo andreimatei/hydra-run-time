@@ -32,12 +32,10 @@
 #define VM_PER_NODE (1L<<VM_BITS_PER_NODE)
 #define VM_BITS_PER_TC (25)
 #define VM_PER_TC (1L<<VM_BITS_PER_TC)
-//#define VM_RUNTIME (1L<<25)  // vm for runtime (on each node)
 #define VM_TC_CONTROL_STRUCTURES (1L<<20)  // vm for TC control structures,
                                            // available at the beginning of each TC
 
 /* start address for the vm of the current node */
-//#define NODE_START_VM (node_start_addr)
 #define NODE_START_VM ((void*)(ADDR_SPACE_START + NODE_INDEX * VM_PER_NODE))
 #define TC_START_VM(index) ((tc_t*)(NODE_START_VM + VM_PER_TC + (index)*VM_PER_TC))
                             // first VM_PER_TC is left for the runtime
@@ -1278,6 +1276,18 @@ void write_istruct_no_checks(
   istructp->state = WRITTEN;
 }
 
+/*
+void write_memrange_ancillary(int node_index,
+                              int tc_index,
+                              int global,  // 1 for global slot, 0 for shared slot
+                              int slot_index,
+                              mem_range_t range,
+                              const tc_ident_t* reading_tc) {
+  
+}
+*/
+
+
 /* handles same or different proc*/
 long read_istruct_different_tc(volatile i_struct* istruct, int same_proc) {
   suspend_on_istruct(istruct, same_proc);
@@ -2015,7 +2025,10 @@ static void sighandler_foo(int sig, siginfo_t *si, void *ucontext)
     void* range_end = range_start + MAPPING_CHUNK;
 
     // check that the range we intend to map doesn't overlap any existing range
-    assert(check_virtual_memory_range(range_start, range_end));
+    // TODO: the call to check_virtual_memory_range crashes because of stack smashing... probably
+    // because we're in a signal handler. Either provide a bigger stack for the sig handlers,
+    // or reduce the consumption of the function, or drop it all together.
+    //assert(check_virtual_memory_range(range_start, range_end));
 
     void* mapping = mmap(range_start, MAPPING_CHUNK, PROT_READ | PROT_WRITE,
         MAP_PRIVATE | MAP_FIXED | MAP_ANON, -1, 0);
@@ -2027,5 +2040,19 @@ static void sighandler_foo(int sig, siginfo_t *si, void *ucontext)
     exit(EXIT_FAILURE);
   }
   return;
+}
+
+/*
+ * TODO: Temporary; 
+ * convert between stubs and longs so stubs can be passed in istructs
+ */
+memdesc_stub_t long_2_stub(long x) {
+  memdesc_stub_t res = *(memdesc_stub_t*)&x;
+  return res;
+}
+
+long stub_2_long(memdesc_stub_t stub) {
+  long res = *(long*)&stub;
+  return res;
 }
 

@@ -1,3 +1,4 @@
+import sys
 import pprint
 from ..visitors import *
 from ..ast import *
@@ -87,7 +88,6 @@ class Create_2_HydraCall(ScopedVisitor):
     def visit_lowcreate(self, lc):
         cr = self.cur_scope.creates[lc.label]
 
-        import sys
         print >>sys.stderr, "EXTRAS create ", cr.fun, cr.extras
         n = cr.extras.get_attr("gencallee", None)
         if n is not None:

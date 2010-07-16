@@ -38,17 +38,22 @@ typedef struct memdesc {
 
   mem_range_t ranges[MAX_RANGES_PER_MEM];
   int no_ranges;
-}memdesc_t;
+}memdesc_t  __attribute__ ((aligned (32)));  // because pointers to these have to use less bits, cause
+                                             // we stuff them in memdesc_stub_t's
 
 typedef struct {
-  // inde of the node where .pointer is valid (the node that has the descriptor)
-  unsigned node :10;
-  unsigned have_data :1;  // valid only if data_provider != NODE_INDEX
+  // index of the node where .pointer is valid (the node that has the descriptor)
+  unsigned node         :10;
+  unsigned S            :1;  // 1 if the stub represents a desc involved in a scatter-gather
+                             // if set, implies that the data is always local when any operation needs it
+  unsigned have_data    :1;  // valid only if !S and data_provider != NODE_INDEX; 
+                             // 1 if data is present (has been pulled or pushed)
+                             
   // index of the node that has a consistent view of the data described by this descriptor
   unsigned data_provider: 10;
   // pointer to the memdesc, valid on the node inticated by .node
-  long pointer :43;  // the pointer is 43 bits, when we would normally need 47. So memdescs have to
-                     // be alligned so that the last 4 bits are 0 => alligned on a 16 byte boundary 
+  long pointer :42;  // the pointer is 42 bits, when we would normally need 47. So memdescs have to
+                     // be alligned so that the last 5 bits are 0 => alligned on a 32 byte boundary 
 } memdesc_stub_t;
 
 static inline unsigned int get_stub_node(memdesc_stub_t stub) {
@@ -65,13 +70,34 @@ static inline unsigned int get_stub_node(memdesc_stub_t stub) {
 
 static inline memdesc_t* get_stub_pointer(memdesc_stub_t stub) {
   //return (memdesc_t*)(stub & 0x000FFFFFFFFFFFFFL); 
-  return (memdesc_t*)(long)(stub.pointer << 4);
+  return (memdesc_t*)((long)(stub.pointer) << 5);
 }
 
 static inline void set_stub_pointer(memdesc_stub_t* stub, const memdesc_t* desc) {
   // assert that the desc is alligned properly
-  assert(((unsigned long)desc & 0xF) == 0);
-  stub->pointer = ((unsigned long)desc >> 4);
+  assert(((unsigned long)desc & 15) == 0);
+  stub->pointer = ((unsigned long)desc >> 5);
+}
+
+/*
+ * Create a stub for a local descriptor
+ * data_provider - [IN] - the index of the node that has the data (probably NODE_INDEX will be passed always)
+ * have_data     - [IN] - this will be copied verbatim to the stub, so it has to be valid on the node that will
+ *                        use the stub. Thus, if you indent to pass the stub, you probably want to say 0.
+ */
+static inline memdesc_stub_t _create_memdesc_stub(
+    const memdesc_t* desc, 
+    int data_provider,
+    int have_data,
+    int S) {
+  memdesc_stub_t stub;
+  stub.node = NODE_INDEX;
+  stub.have_data = have_data;
+  stub.data_provider = data_provider;
+  stub.S = S;
+  set_stub_pointer(&stub, desc);
+  assert(get_stub_pointer(stub) == desc);  // just for debugging
+  return stub;
 }
 
 struct tc_ident_t {
@@ -124,6 +150,7 @@ typedef struct {
   tc_ident_t dest;
 }thread_range_t;
 
+
 typedef struct {
   int empty;  // 1 if the fam_context is available for reuse (nobody is going to sync on it)
   i_struct done;  // written on family termination
@@ -136,7 +163,7 @@ typedef struct {
                             //remotely.
   int index;  // the index of this fam_context among all the fam_contexts allocated on it's node
 
-  memdesc_t mems[MAX_ARGS_PER_FAM];  // FIXME: allign these
+  memdesc_t mems[MAX_ARGS_PER_FAM];  // FIXME: switch to a structure padded to a multiple of 32
 
   //long shareds[MAX_ARGS_PER_FAM];  // shareds written by the last thread in the fam. They don't need to
                                    // be i-structs since they will only be read after the sync
@@ -155,8 +182,15 @@ struct tc_t {
                 //TODO: decide to what extent the .size member has any meaning. If it does, we need to trap
                 // on stack auto-growth and update it.
 
+  // i-structures for globals and shareds received by the threads running in this TC
   i_struct shareds[MAX_ARGS_PER_FAM];
   i_struct globals[MAX_ARGS_PER_FAM];
+  // space if shareds[i]/globals[i] is a memdesc_stub_t, then shared/global_first_ranges[i]
+  // will hold the first range described by the respective descriptor, and will be accessible after reading
+  // the istruct (the shared or the global)
+  mem_range_t shared_first_ranges[MAX_ARGS_PER_FAM];
+  mem_range_t global_first_ranges[MAX_ARGS_PER_FAM];
+
   fam_context_t* fam_context;  // family context of the thread of the family 
                                // currently occupying the TC
   tc_ident_t parent_ident;  // identifier of the TC where the parent is running; will
@@ -385,13 +419,6 @@ void write_istruct(//volatile i_struct_fat_pointer istructp,
 
 //void* _activate(mem_pointer_t p);
 
-/*
- * Create a stub for a local descriptor
- */
-static inline memdesc_stub_t _create_memdesc_stub(const memdesc_t* desc,
-                                                  int data_provider, // node that has the data
-                                                  int have_data);    // value for the .have_data member of the stub
-
 //--------------------------------------------------
 // static inline void* _activate_from_istruct(long x) {
 //   mem_pointer_t* p = (mem_pointer_t*)&x;
@@ -423,20 +450,11 @@ long read_istruct(volatile i_struct* istructp, const tc_ident_t* writing_tc);
 
 void write_global(fam_context_t* ctx, int index, long val);
 
-//--------------------------------------------------
-// /* read a shared from a child family 
-//  * TODO: maybe optimize for when the read is done after sync. Then the istruct can
-//  * be read directly 
-//  */
-// static inline long read_shared_from_child(
-//     fam_context_t* child_fam, 
-//     int shared_index) {
-//   assert(_cur_tc != NULL);  // this should only fail for the parent of fam_main,
-//                            // but fam_main doesn't have any shareds
-//   return read_istruct(&child_fam->shareds[shared_index],
-//                       &child_fam->ranges[child_fam->no_ranges].dest);
-// }
-// 
-//-------------------------------------------------- 
+/*
+ * TODO: Temporary; 
+ * convert between stubs and longs so stubs can be passed in istructs
+ */
+memdesc_stub_t long_2_stub(long x);
+long stub_2_long(memdesc_stub_t stub);
 
 #endif

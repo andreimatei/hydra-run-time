@@ -30,11 +30,11 @@ hrt_naked_host_host_hrt_libslc_a_CPPFLAGS = \
 	-I$(srcdir)/host-host-hrt/include \
 	-I$(builddir)/host-host-hrt/include
 
-SLC_HRT_N = $(SLC_RUN) -b hrt_n -nostdlib -O0 -g3  # last 2 args for debugging
+SLC_HRT_N = $(SLC_RUN) -b hrt_n -nostdlib  
 
 hrt_naked-host-host-hrt/%.o: $(srcdir)/host-host-hrt/%.c
 	$(AM_V_at)$(MKDIR_P) hrt_naked-host-host-hrt
-	$(slc_verbose)$(SLC_HRT_N) -c -o $@ $< $(AM_CFLAGS) $(CFLAGS)
+	$(slc_verbose)$(SLC_HRT_N) -c -o $@ $< $(AM_CFLAGS) $(CFLAGS) -O0 -g3 # last 2 args for debugging
 
 hrt_naked-host-host-hrt/%.o: $(srcdir)/%.c
 	$(AM_V_at)$(MKDIR_P) hrt_naked-host-host-hrt
