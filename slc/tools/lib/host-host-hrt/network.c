@@ -112,7 +112,7 @@ static void handle_sctp_request(int sock) {
   int flags;
   int read = sctp_recvmsg(sock, buf, sizeof(buf), NULL, 0, &sndrcvinfo, &flags);
   if (read < 0) handle_error("sctp_recvmsg");
-  LOG(DEBUG, "SCTP REQUEST: got %d bytes\n", read);
+  LOG(DEBUG, "network: handle_sctp_request: got a SCTP request of %d bytes\n", read);
   assert(read < sizeof(buf));
   //buf[read] = 0;  // NULL-terminate the string
 
@@ -148,9 +148,11 @@ static void handle_sctp_request(int sock) {
       break;
     case REQ_PULL_DATA:
       assert(read == sizeof(req_pull_data));
+      LOG(DEBUG, "network: handle_sctp_request: got REQ_PULL_DATA\n");
       handle_req_pull_data((req_pull_data*)req);
       break;
     case REQ_PULL_DATA_DESCRIBED:
+      LOG(DEBUG, "network: handle_sctp_request: got REQ_PULL_DATA_DESCRIBED\n");
       assert(read == sizeof(req_pull_data_described));
       handle_req_pull_data_described((req_pull_data_described*)req);
       break;
@@ -259,6 +261,7 @@ char* parse_memchunk_header(char* buf, int len, int incoming_index) {
  * len - [IN] - size of buf
  */
 static int parse_incoming_memchunk(int incoming_index, char* buf, int len) {
+  LOG(DEBUG, "network: parse_incoming_memchunk: incoming_index = %d, len = %d\n", incoming_index, len);
   memdesc_t* desc = &incoming_state[incoming_index].desc;
   void* mem_dest = desc->ranges[incoming_state[incoming_index].cur_range].p +
                    incoming_state[incoming_index].offset_within_range;
@@ -443,23 +446,26 @@ static void push_data(int node_index) {
   tcp_sending_state_t* s = &outgoing_state[node_index];
   int sock = secondaries[node_index].socket_tcp;
   int res;
-
+  
+  assert(s->cur_range < s->req.no_ranges);
   if (!s->header_sent) {
     // send the header in a blocking fashion
     char c[1000];
     int len;
     build_push_header(s, c, 1000, &len);
-    res = send(sock, c, len, 0);
+    res = send(sock, c, len, MSG_MORE);
     assert(res == len);
     s->cur_range = 0;
   }
   // send data in non-blocking mode
-  assert(s->cur_range < s->req.no_ranges);
   mem_range_t r = s->req.ranges[s->cur_range];
   int tot_send = r.no_elements * r.sizeof_element;
   int to_send = tot_send - s->bytes_sent;
   assert(to_send > 0);
-  res = send(sock, r.p + s->bytes_sent, to_send, MSG_DONTWAIT);
+  int flags = MSG_DONTWAIT;
+  if (s->cur_range < s->req.no_ranges - 1)  // if there are more ranges to come
+    flags |= MSG_MORE;
+  res = send(sock, r.p + s->bytes_sent, to_send, flags);
   if (res == -1) {
     assert(errno == EWOULDBLOCK || errno == EAGAIN);
     res = 0;

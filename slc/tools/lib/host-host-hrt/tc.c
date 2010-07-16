@@ -216,12 +216,14 @@ mapping_decision map_fam(
     long no_threads,
     //long start_index,
     //long end_index,
-    struct mapping_node_t* parent_id) {
-  static int first_mapping = 1;
+    struct mapping_node_t* parent_id,
+    int hint) {
+  //static int first_mapping = 1;
 
   assert(parent_id == NULL); // TODO
   mapping_decision rez;
 
+  /*
   if (first_mapping) {
     rez.should_inline = 0;
     rez.no_proc_assignments = 1;
@@ -231,14 +233,16 @@ mapping_decision map_fam(
     rez.proc_assignments[0].load_percentage = 100; // 100% of threads on this proc
 
     first_mapping = 0;
-  } else {
+  } 
+  else { */
     rez.should_inline = 0;
     rez.no_proc_assignments = 1;
-    rez.proc_assignments[0].node_index = (no_secondaries > 1 ? 1 - NODE_INDEX : NODE_INDEX);
+    rez.proc_assignments[0].node_index = 
+      hint == -1 ? NODE_INDEX : (no_secondaries > 1 ? 1 - NODE_INDEX : NODE_INDEX);
     rez.proc_assignments[0].proc_index = 0;//(_cur_tc->ident.proc_index + 1) % NO_PROCS;
     rez.proc_assignments[0].no_tcs = 1;
     rez.proc_assignments[0].load_percentage = 100; // 100% of threads on this proc
-  }
+  //}
 
   return rez;
 }

@@ -271,7 +271,8 @@ mapping_decision map_fam(
     long no_threads,
     //long start_index,
     //long end_index,
-    struct mapping_node_t* parent_id);
+    struct mapping_node_t* parent_id,
+    int hint);
 
 //tc_ident_t create_fam(fam_context_t* fc);
 tc_ident_t create_fam(fam_context_t* fc, 

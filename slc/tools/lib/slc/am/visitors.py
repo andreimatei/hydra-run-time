@@ -88,6 +88,7 @@ class Create_2_HydraCall(ScopedVisitor):
     def visit_lowcreate(self, lc):
         cr = self.cur_scope.creates[lc.label]
 
+        print >>sys.stderr, "PLACE create ", cr.fun, cr.place
         print >>sys.stderr, "EXTRAS create ", cr.fun, cr.extras
         n = cr.extras.get_attr("gencallee", None)
         if n is not None:
@@ -132,9 +133,9 @@ class Create_2_HydraCall(ScopedVisitor):
         start = CVarUse(decl = cr.cvar_start)
         end_index = CVarUse(decl = cr.cvar_limit) + " - 1"  # this is now inclusive
         step = CVarUse(decl = cr.cvar_step)
-        
+       
         rrhs = flatten(cr.loc_end, 'map_fam(&') + gen_loop_fun_name(funvar) + ', (' + end_index \
-                       + ' - ' + start + '+ 1) / ' + step+ ', 0)'
+                       + ' - ' + start + '+ 1) / ' + step+ ', 0, ' + cr.place + ')'
 
         mapping_call = CVarSet(decl = mapping_decision_var, rhs = rrhs)
         newbl.append(mapping_call + ';\n')
