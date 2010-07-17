@@ -50,7 +50,8 @@ typedef struct{
                             // it will write to the pending request slot to unblock either itself or this node.
   int remote_confirm_needed;  // specifies wether pending_req_index refers to a slot on the remote node or
                               // on the local node.
-}push_request_t;
+  struct timeval create_time;  // time when this request was created (enqueued)
+} push_request_t;
 
 /*
  * struct describing the state of a memory send operation.
@@ -61,6 +62,7 @@ typedef struct {
   int header_sent;  // 1 if the header (describing the ranges, etc.) has been fully sent. 0 otherwise.
   int cur_range;    // index of the range that is currently in the process of being sent
   int bytes_sent;   // bytes already sent from cur_range
+  struct timeval start_time;  // time when this state has been created
 }tcp_sending_state_t;
 
 static tcp_sending_state_t outgoing_state[MAX_NODES];
@@ -195,8 +197,9 @@ static void handle_resp_allocate(const resp_allocate* req) {
 
 static void handle_req_confirmation(const req_confirmation* req) {
   int index = req->identifier;
-  LOG(DEBUG, "network: handle_req_confirmation: got response with index %d\n", 
-      index);
+  struct timeval t; gettimeofday(&t, NULL);
+  LOG(DEBUG, "network: handle_req_confirmation: got response with index %d. Time is %ld:%ld\n", 
+      index, t.tv_sec, t.tv_usec/1000);
   pending_request_t* pending = &pending_requests[index];
 
   LOG(DEBUG, "network: handle_resp_allocate: unblocking tc %p\n", pending->blocking_tc);
@@ -307,11 +310,24 @@ static void handle_incoming_mem_chunk(int incoming_index) {
   char* tmp = buf;
   int sock = tcp_incoming_sockets[incoming_index];
   while (1) {
+
+
     int r = read(sock, buf, 10000);
     assert(r > 0);
     // if this is the first time we're receiving data for this incoming_state slot, read the header
     if (incoming_state[incoming_index].cur_range == -1) {
       tmp = parse_memchunk_header(buf, r, incoming_index);
+    }
+    
+    if (!incoming_state[incoming_index].remote_confirm) {
+      int slot_index;
+      if ((slot_index = incoming_state[incoming_index].pending_req_index) != -1) {
+        struct timeval t; gettimeofday(&t, NULL);
+        pending_request_t* pending = &pending_requests[slot_index];
+        LOG(DEBUG, "network: handle_incoming_mem_chunk: it seems we have received some memory data," \
+            "The TC pulling the data has been blocked for %ld ms.\n", 
+            timediff(t,pending->blocking_tc->blocking_time));
+      }
     }
   
     // init the range that we're currently receiving, so that the SIGSEGV handler maps it for us if needed
@@ -336,9 +352,11 @@ static void handle_incoming_mem_chunk(int incoming_index) {
           req.node_index = NODE_INDEX;
           req.identifier = incoming_state[incoming_index].pending_req_index;
           req.response_identifier = -1;
+          LOG(DEBUG, "network: handle_incoming_mem_chunk: sending remote confirmation for received data\n");
           send_sctp_msg(incoming_state[incoming_index].node_index, &req, sizeof(req));
         } else {
           // the pending slot was local; write to it
+          LOG(DEBUG, "network: handle_incoming_mem_chunk: sending local confirmation for received data\n");
           pending_request_t* pending = &pending_requests[slot_index];
           write_istruct_different_proc(&pending->istruct, 1, pending->blocking_tc);
         }
@@ -399,12 +417,18 @@ fd_set get_sending_sockets() {
       LOG(DEBUG, "network: get_sending_sockets: found socket that wants to send data for secondary %d\n", i);
       if (secondaries[i].socket_tcp == -1) {
         // open a connection
+        LOG(DEBUG, "network: get_sending_sockets: opening TCP connection to secondary %d\n", i);
         open_tcp_conn(i);
+        LOG(DEBUG, "network: get_sending_sockets: done opening TCP connection to secondary %d\n", i);
       }
       if (!outgoing_state[i].active) {
         //dequeue a send request
         int got_req = dequeue_push_request(i, &outgoing_state[i].req);
         assert(got_req);
+        struct timeval t;
+        gettimeofday(&outgoing_state[i].start_time, NULL);
+        LOG(DEBUG, "network: get_sending_sockets: dequeued push request. It stayed in queue for %ld ms.\n",
+            timediff(outgoing_state[i].start_time, outgoing_state[i].req.create_time));
         outgoing_state[i].active = 1;
         outgoing_state[i].header_sent = 0;
         outgoing_state[i].cur_range = 0;
@@ -442,6 +466,9 @@ void build_push_header(const tcp_sending_state_t* s, char* buf, int buf_size, in
 }
 
 static void push_data(int node_index) {
+  // TODO: as implemented now, i send the header in blocking mode, but with MSG_MORE set,
+  // and then i continue in not blocking mode... test if this does the right thing (i.e. don't block if I 
+  // send a GB).
   assert(outgoing_state[node_index].active);
   tcp_sending_state_t* s = &outgoing_state[node_index];
   int sock = secondaries[node_index].socket_tcp;
@@ -464,7 +491,8 @@ static void push_data(int node_index) {
   assert(to_send > 0);
   int flags = MSG_DONTWAIT;
   if (s->cur_range < s->req.no_ranges - 1)  // if there are more ranges to come
-    flags |= MSG_MORE;
+    flags |= MSG_MORE;  // TODO: verify that select still returns this socket so we can continue sending
+                        // or, loop in this function until send returns 0
   res = send(sock, r.p + s->bytes_sent, to_send, flags);
   if (res == -1) {
     assert(errno == EWOULDBLOCK || errno == EAGAIN);
@@ -474,8 +502,13 @@ static void push_data(int node_index) {
   if (res == to_send) {
     s->cur_range++;
     s->bytes_sent = 0;
-    if (s->cur_range == s->req.no_ranges)
+    if (s->cur_range == s->req.no_ranges) {  // we just finished sending the last part of the last range
       s->active = 0;
+      struct timeval t;
+      gettimeofday(&t, NULL);
+      LOG(DEBUG, "network: push_data: finished sending memory. The sending state was active for %ld ms. (%ld ms since request for push was enqueued)\n",
+          timediff(t, s->start_time), timediff(t, s->req.create_time));
+    }
   } else {
     s->bytes_sent += res;
     // TODO: check if we can send more now; use MSG_MORE 
@@ -871,7 +904,7 @@ void block_for_confirmation(pending_request_t* req) {
   tc_ident_t writer; 
   writer.node_index = NODE_INDEX; writer.proc_index = -1; // will be written by the network thread
   read_istruct(&req->istruct, &writer);
-  LOG(DEBUG, "block_for_confirmation: unblocking.\n");
+  LOG(DEBUG, "network: block_for_confirmation: unblocking.\n");
   free_pending_request_slot(req);
 }
 
@@ -972,10 +1005,10 @@ static void handle_req_create(const req_create* req) {
  *                            internal data structure
  */
 void enqueue_push_request(int node_index, 
-                                 int pending_req_index, 
-                                 int remote_confirm_needed, 
-                                 const mem_range_t* ranges, 
-                                 int no_ranges) {
+                          int pending_req_index, 
+                          int remote_confirm_needed, 
+                          const mem_range_t* ranges, 
+                          int no_ranges) {
   assert(node_index < no_secondaries);
  
   pthread_spin_lock(&push_requests_locks[node_index]); 
@@ -984,6 +1017,7 @@ void enqueue_push_request(int node_index,
   push_requests[node_index][slot].no_ranges = no_ranges;
   push_requests[node_index][slot].pending_req_index = pending_req_index;
   push_requests[node_index][slot].remote_confirm_needed = remote_confirm_needed;
+  gettimeofday(&push_requests[node_index][slot].create_time, NULL);
   for (int i = 0; i < no_ranges; ++i) {
     push_requests[node_index][slot].ranges[i] = ranges[i];
   }

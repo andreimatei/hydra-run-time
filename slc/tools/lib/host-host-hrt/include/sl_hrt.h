@@ -8,6 +8,7 @@
 #include <pthread.h>
 #include <signal.h>
 #include <assert.h>
+#include <sys/time.h>
 
 extern int NODE_INDEX;
 
@@ -114,7 +115,7 @@ typedef struct tc_ident_t tc_ident_t;
 #define MAX_ARGS_PER_FAM 32  
 
 
-enum istruct_state {EMPTY = 0, WRITTEN, SUSPENDED};
+enum istruct_state {EMPTY = 0, WRITTEN = 1, SUSPENDED = 2};
 typedef enum istruct_state istruct_state;
 
 /*
@@ -176,6 +177,7 @@ struct tc_t {
                  // at the end of loop functions
   int blocked;  // -1 means empty, 0 means running, 1 means blocked (so far on an istruct, but we might want
                 // to extend this ?). TODO: is this really used? check and remove
+  struct timeval blocking_time;  // if TC is blocked, this is the moment when it was blocked
 
   ucontext_t context;  // contains stack in .uc_stack
   stack_t initial_thread_stack;  // the stack that will be reused every time when a new family is started
@@ -457,5 +459,11 @@ void write_global(fam_context_t* ctx, int index, long val);
  */
 memdesc_stub_t long_2_stub(long x);
 long stub_2_long(memdesc_stub_t stub);
+
+static inline long timediff(struct timeval t1, struct timeval t2) {
+  long micros = 1000000 * (t1.tv_sec - t2.tv_sec);
+  micros += t1.tv_usec - t2.tv_usec;
+  return micros/1000;
+}
 
 #endif

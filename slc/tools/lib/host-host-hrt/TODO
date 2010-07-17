@@ -1,3 +1,5 @@
+init main_place_id to -1 (or do smth to force the create in libslmain to be done the local node)
+
 define an initializer with __attribute__((constructor)) that calls mmap(BIG); free(); 
 (or do malloc at the beginning of main()) - to make sure we start
 with a non-empty heap, so that a number of mallocs done by libc will work.

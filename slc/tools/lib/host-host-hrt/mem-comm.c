@@ -1,3 +1,4 @@
+#include <sys/time.h>
 #include "hrt.h"
 #include "sl_hrt.h"
 #include "network.h"
@@ -209,7 +210,8 @@ void push_data(memdesc_stub_t stub, int dest_node) {
                             // stream that
                             // we push. When all the data is received remotely, we will get a message to
                             // unblock ourselves.
-  LOG(DEBUG, "mem-comm: push_data: enqueueing a push request.\n");
+  struct timeval t; gettimeofday(&t, NULL);
+  LOG(DEBUG, "mem-comm: push_data: enqueueing a push request. Time is %ld:%ld\n", t.tv_sec, t.tv_usec/1000);
   enqueue_push_request(dest_node,  // destination node
                        pending->id,  // pending request slot to be written on this node
                        1,                // no remote confirmation needed 
@@ -217,8 +219,14 @@ void push_data(memdesc_stub_t stub, int dest_node) {
                        desc->no_ranges);
   // block on the pending request slot
   LOG(DEBUG, "mem-comm: push_data: blocking until all the push data is received.\n");
+  struct timeval t1, t2;
+  assert(!gettimeofday(&t1, NULL));
   block_for_confirmation(pending);
-  LOG(DEBUG, "mem-comm: push_data: unblocked... all the data was received.\n");
+  assert(!gettimeofday(&t2, NULL));
+  long microsec = 1000000 * (t2.tv_sec - t1.tv_sec);
+  microsec += t2.tv_usec - t1.tv_usec;
+  LOG(DEBUG, "mem-comm: push_data: unblocked... all the data was received by the remote node." \
+      " TC was blocked for %ld ms.\n", microsec/1000);
 }
 
 /*

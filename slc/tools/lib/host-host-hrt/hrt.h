@@ -13,6 +13,9 @@
 
 #define MIN(a,b) (((a)<(b))?(a):(b))
 
+/*
+ * Struct used for blocking until a network response targeting a specific such struct arrives.
+ */
 typedef struct pending_request {
   volatile i_struct istruct;
   tc_t* blocking_tc;
@@ -20,6 +23,7 @@ typedef struct pending_request {
   char buf[1000];
   int buf_len;
   int free;
+  struct timeval blocking_time;  // time at which the TC blocked
 }pending_request_t;
 
 typedef struct secondary {

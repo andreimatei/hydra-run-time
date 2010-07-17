@@ -97,6 +97,8 @@ void LOG(LOG_LEVEL level, char* fmt, ...) {
     char s[strlen(fmt) + 20];
     strcpy(s, log_prefix[level]);
     strcpy(s + strlen(log_prefix[level]), fmt);
+    struct timeval t; gettimeofday(&t, NULL);
+    fprintf(stderr, "%3ld:%3ld ", t.tv_sec % 1000, t.tv_usec/1000);
     vfprintf(stderr, s, args);
     va_end(args);
   }
@@ -238,7 +240,7 @@ mapping_decision map_fam(
     rez.should_inline = 0;
     rez.no_proc_assignments = 1;
     rez.proc_assignments[0].node_index = 
-      hint == -1 ? NODE_INDEX : (no_secondaries > 1 ? 1 - NODE_INDEX : NODE_INDEX);
+      hint == -1 ? NODE_INDEX : hint; //(no_secondaries > 1 ? 1 - NODE_INDEX : NODE_INDEX);
     rez.proc_assignments[0].proc_index = 0;//(_cur_tc->ident.proc_index + 1) % NO_PROCS;
     rez.proc_assignments[0].no_tcs = 1;
     rez.proc_assignments[0].load_percentage = 100; // 100% of threads on this proc
@@ -388,6 +390,9 @@ fam_context_t* allocate_fam(
 
       LOG(DEBUG, "allocate_fam: requesting %d local TC's\n", as.no_tcs);
       allocate_local_tcs(as.proc_index, as.no_tcs, allocated_tcs[i].tcs, &allocated_tcs[i].allocated_tcs);
+      if (as.no_tcs == 1) {
+        LOG(DEBUG, "allocate_fam: allocated %d tcs: %d.\n", allocated_tcs[i].allocated_tcs, allocated_tcs[i].tcs[0]);
+      }
     } else {
       LOG(DEBUG, "allocate_fam: requesting %d remote TC's\n", as.no_tcs);
       allocate_remote_tcs(as.node_index, as.proc_index, as.no_tcs, 
@@ -802,9 +807,9 @@ void run_tc(int processor_index, tc_t* tc) {
   assert(tc->ident.proc_index == processor_index);
 
   _cur_tc = tc;
-  LOG(DEBUG, "jumping to user code\n");
+  LOG(DEBUG, "run_tc: jumping to user code. proc_index = %d\n", processor_index);
   swapcontext(&_processor[processor_index].scheduler_context, &tc->context);
-  LOG(DEBUG, "back from user code\n");
+  LOG(DEBUG, "run_tc: back from user code. proc_index = %d\n", processor_index);
 
   /*
   getcontext(&processor[processor_index].scheduler_context);
@@ -851,7 +856,7 @@ void* run_processor(void* processor_index) {
     pthread_spin_unlock((pthread_spinlock_t*)&runnable_queue_locks[pid]);
 
     // run tc
-    LOG(DEBUG, "run_processor: found runnable TC\t proc index = %d\n", processor_index);
+    LOG(DEBUG, "run_processor: found runnable TC (%d)\t proc index = %d\n", tc->ident.tc_index, processor_index);
     run_tc(pid, tc);
   }
 }
@@ -1201,9 +1206,14 @@ void write_istruct_same_proc(
   
   istructp->data = val;
   int unblock_needed = (istructp->state == SUSPENDED);
+  LOG(DEBUG, "write_istruct_same_proc: state of the istruct %p is found to be %d\n",
+      istructp, istructp->state);
   istructp->state = WRITTEN;
   if (unblock_needed) {
+    LOG(DEBUG, "write_istruct_same_proc: unblock needed\n");
     unblock_tc(potentially_blocked_tc, 1 /*same proc*/);
+  } else {
+    LOG(DEBUG, "write_istruct_same_proc: unblock not needed\n");
   }
 }
 
@@ -1258,9 +1268,11 @@ void write_istruct(//i_struct_fat_pointer istruct,
       write_istruct_same_tc((i_struct*)istructp, val);  // cast to strip volatile; same TC, no asynchrony
     } else {
       if (reading_tc->proc_index == cur_ident.proc_index) {  // same proc
+        LOG(DEBUG, "write_istruct (%p): same_proc\n", istructp);
         write_istruct_same_proc(istructp, val, dest_tc);
       }
       else {  // different proc
+        LOG(DEBUG, "write_istruct: different_proc\n");
         write_istruct_different_proc(istructp, val, dest_tc);
       }
     }
@@ -1336,7 +1348,7 @@ static inline void write_istruct_state(volatile i_struct* istructp, int same_pro
   if (!same_proc) {
     st_rel_istruct(istructp, value);
   } else {
-    istructp->data = value;
+    istructp->state = value;
   }
 }
 
@@ -1356,9 +1368,9 @@ void suspend_on_istruct(volatile i_struct* istructp, int same_proc) {
   state = read_istruct_state(istructp, same_proc);
   if (state != WRITTEN) {
     write_istruct_state(istructp, same_proc, SUSPENDED);
-    // we sleep
     LOG(DEBUG, "suspend_on_istruct: suspending tc %d (proc %d) on istruct %p\n", 
         _cur_tc->ident.tc_index, _cur_tc->ident.proc_index, istructp);
+    // we sleep
     block_tc_and_unlock(_cur_tc, same_proc ? NULL : &istructp->lock);
     // ... and we wake up
   } else {
@@ -1371,8 +1383,11 @@ void suspend_on_istruct(volatile i_struct* istructp, int same_proc) {
 
 // same_processor = 1, if the tc to be unblocked is handled by the same processor as the caller
 void unblock_tc(tc_t* tc, int same_processor) {
+  struct timeval t;
+  gettimeofday(&t, NULL);
   pthread_spinlock_t* lock;
-  LOG(VERBOSE, "unblocking TC ("PRINT_TC_IDENT_FORMAT")\n", PRINT_TC_IDENT(tc->ident));
+  LOG(DEBUG, "unblocking TC ("PRINT_TC_IDENT_FORMAT"). It was blocked for %ld ms.\n", 
+      PRINT_TC_IDENT(tc->ident), timediff(t, tc->blocking_time));
   if (!same_processor) {
     lock = (pthread_spinlock_t*)&runnable_queue_locks[tc->ident.proc_index];
     pthread_spin_lock(lock);
@@ -1390,7 +1405,7 @@ void unblock_tc(tc_t* tc, int same_processor) {
 }
 
 void yield(tc_t* yielding_tc) {
-  LOG(VERBOSE, "yielding tc\n");
+  LOG(DEBUG + 1, "yielding tc\n");
   //getcontext(&yielding_tc->context);
   //setcontext(&processor[yielding_tc->ident.proc_index].scheduler_context);
   swapcontext(&yielding_tc->context,
@@ -1399,6 +1414,7 @@ void yield(tc_t* yielding_tc) {
 
 void block_tc_and_unlock(tc_t* tc, pthread_spinlock_t* lock) {
   // assumes tc is the current TC
+  gettimeofday(&tc->blocking_time, NULL);
   tc->blocked = 1;
   if (lock != NULL) pthread_spin_unlock(lock);
   // we sleep
