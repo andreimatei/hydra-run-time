@@ -703,7 +703,6 @@ tc_ident_t create_fam(fam_context_t* fc,
 
     if (cur_node_index == NODE_INDEX) {
       if (_cur_tc != NULL) {  // this will be NULL when creating root_fam
-        LOG(DEBUG, "create_fam: %d\n", fc->no_ranges);
         populate_local_tcs(tcs, 
             &fc->ranges[start_index], 
             no_tcs, 

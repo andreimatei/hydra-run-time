@@ -1,6 +1,8 @@
 #ifndef NETWORK_H
 #define NETWORK_H
 
+#include <sys/time.h>
+
 struct delegation_interface_params_t {
   int sock_sctp, sock_tcp;
 };//delegation_if_arg;
@@ -13,7 +15,9 @@ typedef enum request_type {
   REQ_WRITE_ISTRUCT,
   REQ_CONFIRMATION,
   REQ_PULL_DATA,
-  REQ_PULL_DATA_DESCRIBED
+  REQ_PULL_DATA_DESCRIBED,
+  REQ_PING,
+  RESP_PING
 }request_type;
 
 typedef struct net_request_t {
@@ -22,6 +26,27 @@ typedef struct net_request_t {
   int identifier;
   int response_identifier;
 }net_request_t;
+
+typedef struct {
+  request_type type;
+  int node_index;  // originating node
+  int identifier;
+  int response_identifier;
+  struct timeval send_time;
+  int request_unblock;
+  i_struct* istructp;
+  tc_t* reading_tc;
+}req_ping;
+
+typedef struct {
+  request_type type;
+  int node_index;  // originating node
+  int identifier;
+  int response_identifier;
+  struct timeval ping_send_time;
+  struct timeval pong_send_time;
+}resp_ping;
+
 
 typedef struct req_allocate {
   request_type type;
@@ -108,6 +133,7 @@ extern int delegation_if_finished;
 
 
 //void* delegation_interface(void* parm);
+void send_ping(int node_index, int identifier, int request_unblock, i_struct* istructp);
 void init_network();
 void create_delegation_socket(int* port_sctp_out, int* port_tcp_out);
 void sync_with_primary(int port_sctp, int port_tcp, int no_procs, int* node_index, int* tc_holes, int* no_tc_holes);

@@ -463,7 +463,17 @@ long stub_2_long(memdesc_stub_t stub);
 static inline long timediff(struct timeval t1, struct timeval t2) {
   long micros = 1000000 * (t1.tv_sec - t2.tv_sec);
   micros += t1.tv_usec - t2.tv_usec;
+  return micros / 1000;
+}
+
+static inline long timediff_now(struct timeval t) {
+  struct timeval now;
+  gettimeofday(&now, NULL);
+  long micros = 1000000 * (now.tv_sec - t.tv_sec);
+  micros += now.tv_usec - t.tv_usec;
   return micros/1000;
 }
+
+void send_ping(int node_index, int identifier, int request_unblock, i_struct* istructp);
 
 #endif

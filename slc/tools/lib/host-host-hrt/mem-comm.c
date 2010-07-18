@@ -193,6 +193,7 @@ void* _memactivate(memdesc_stub_t* stub, mem_range_t first_range, unsigned int n
  */
 // TODO: make this function static and remove it from sl_hrt.h. It was put there temporarily.
 void push_data(memdesc_stub_t stub, int dest_node) {
+  static int ping_id = 100;
   if (dest_node == NODE_INDEX) return;  // nothing to do
   assert(!stub.S);  // if the descriptor if involved in a scatter/gather, we shouldn't have gotten here
   assert(memdesc_data_local(stub));  // we should have the data...
@@ -204,6 +205,7 @@ void push_data(memdesc_stub_t stub, int dest_node) {
                                      // TODO: handle remote descriptors (right now, those can be involved in
                                      // propagate operations. Maybe if we make _memactivate always pull the descriptor,
                                      // we would get rid of this problem...
+  send_ping(dest_node, ping_id++, 0, NULL);  // FIXME: remove this; just for debugging
   memdesc_t* desc = get_stub_pointer(stub);
   // get pending request slot
   pending_request_t* pending = get_pending_request_slot(_cur_tc);  // this index will embedded in the data 
@@ -217,10 +219,13 @@ void push_data(memdesc_stub_t stub, int dest_node) {
                        1,                // no remote confirmation needed 
                        desc->ranges,           // memory to push
                        desc->no_ranges);
+
   // block on the pending request slot
   LOG(DEBUG, "mem-comm: push_data: blocking until all the push data is received.\n");
   struct timeval t1, t2;
   assert(!gettimeofday(&t1, NULL));
+  //send_ping(dest_node, 1000+ping_id - 1, 1, (i_struct*)&pending->istruct);  // FIXME: remove this; just for debugging
+  send_ping(dest_node, 1000+ping_id - 1, 0, NULL);  // FIXME: remove this; just for debugging
   block_for_confirmation(pending);
   assert(!gettimeofday(&t2, NULL));
   long microsec = 1000000 * (t2.tv_sec - t1.tv_sec);

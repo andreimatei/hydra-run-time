@@ -100,6 +100,8 @@ static void handle_req_create(const req_create* req);
 static void handle_req_confirmation(const req_confirmation* req);
 static void handle_req_pull_data(const req_pull_data* req);
 static void handle_req_pull_data_described(const req_pull_data_described* req);
+static void handle_req_ping(const req_ping* req);
+static void handle_resp_ping(const resp_ping* req);
 
 static int push_queue_not_empty(int node_index);
 static int dequeue_push_request(int node_index, push_request_t* req);
@@ -157,6 +159,16 @@ static void handle_sctp_request(int sock) {
       LOG(DEBUG, "network: handle_sctp_request: got REQ_PULL_DATA_DESCRIBED\n");
       assert(read == sizeof(req_pull_data_described));
       handle_req_pull_data_described((req_pull_data_described*)req);
+      break;
+    case REQ_PING:
+      LOG(DEBUG, "network: handle_sctp_request: got REQ_PING\n");
+      assert(read == sizeof(req_ping));
+      handle_req_ping((const req_ping*)req);
+      break;
+    case RESP_PING:
+      LOG(DEBUG, "network: handle_sctp_request: got RESP_PING\n");
+      assert(read == sizeof(resp_ping));
+      handle_resp_ping((const resp_ping*)req);
       break;
     default:
       LOG(CRASH, "SCTP REQUEST: invalid request type: %d\n", req->type);
@@ -305,6 +317,7 @@ static int parse_incoming_memchunk(int incoming_index, char* buf, int len) {
  * and comes all in one piece.
  */
 static void handle_incoming_mem_chunk(int incoming_index) {
+  static int ping_id;
   // TODO: don't assume that the header comes all in one piece
   char buf[10000];
   char* tmp = buf;
@@ -353,7 +366,10 @@ static void handle_incoming_mem_chunk(int incoming_index) {
           req.identifier = incoming_state[incoming_index].pending_req_index;
           req.response_identifier = -1;
           LOG(DEBUG, "network: handle_incoming_mem_chunk: sending remote confirmation for received data\n");
-          send_sctp_msg(incoming_state[incoming_index].node_index, &req, sizeof(req));
+          int dest_node = incoming_state[incoming_index].node_index;
+          send_sctp_msg(dest_node, &req, sizeof(req));
+
+          send_ping(dest_node, 99000 + ping_id++, 0, NULL);  // FIXME: remove this; just for debugging
         } else {
           // the pending slot was local; write to it
           LOG(DEBUG, "network: handle_incoming_mem_chunk: sending local confirmation for received data\n");
@@ -515,12 +531,15 @@ static void push_data(int node_index) {
   }
 }
 
+static int delegation_sock_sctp;
+
 /*
  * Creates a socket where this node will listen for delegation requests;
  */
 void* delegation_interface(void* parm) {
   int sock_tcp = ((struct delegation_interface_params_t*)parm)->sock_tcp;
   int sock_sctp = ((struct delegation_interface_params_t*)parm)->sock_sctp;
+  delegation_sock_sctp = sock_sctp;
   fd_set all_sockets;
   FD_ZERO(&all_sockets);
   FD_SET(sock_sctp, &all_sockets);
@@ -540,7 +559,11 @@ void* delegation_interface(void* parm) {
   }
   pthread_spin_unlock(&rt_init_done_lock);
   
+  int print_msg = 1;
   while (1) {
+    if (print_msg)
+      LOG(DEBUG, "network: delegation interface: starting building sockets collection\n");
+    print_msg = 0;
     if (no_tcp_incoming_sockets != old_tcp_incoming_sockets) {
       // if we have new incoming sockets, add them to the collection
       assert(no_tcp_incoming_sockets > old_tcp_incoming_sockets);
@@ -557,16 +580,19 @@ void* delegation_interface(void* parm) {
     fd_set sending = get_sending_sockets();
     struct timeval time;
     time.tv_sec = 0;
-    time.tv_usec = 5000;  // 5 miliseconds
+    time.tv_usec = 1000;  // 20 miliseconds
     // TODO: do something about this timeout, at least make it bigger; it's only purpose is to allow
     // rebulding of the sending sockets collection to take place. Maybe there's another way to interupt a select
     // when this collection is modified... Send a signal to this thread?
+    //LOG(DEBUG, "network: delegation interface: entering select\n");
     int res = select(FD_SETSIZE, &copy, &sending, NULL, &time);
-    //LOG(DEBUG, "network: delegation_interface: select returned %d.\n", res);
     if (res < 0) handle_error("select");
     if (res == 0) {
+    //LOG(DEBUG, "network: delegation interface: got out of select just to rebuild sending sockets\n");
       continue;  // this is done to rebuild the sending sockets collection
     }
+    print_msg = 1;
+    LOG(DEBUG, "network: delegation interface: got out of select; we actually have work to do\n");
 
     if (FD_ISSET(sock_sctp, &copy)) {
       handle_sctp_request(sock_sctp);
@@ -617,6 +643,7 @@ void create_delegation_socket(int* port_sctp_out, int* port_tcp_out) {
   memset(&hints, 0, sizeof(hints));
   hints.ai_family = AF_INET;
   hints.ai_socktype = SOCK_STREAM;
+  hints.ai_flags = AI_PASSIVE;
   char port1[10], port2[10];
   char* s;
   if (s = getenv("SCTP_PORT")) {
@@ -636,10 +663,13 @@ void create_delegation_socket(int* port_sctp_out, int* port_tcp_out) {
   LOG(DEBUG, "starting delegation interface on ports %d, %d\n", port_sctp, port_tcp);
 
   int res;
-  if ((res = getaddrinfo(NULL, port1, &hints, &addr_sctp)) < 0) {
+  hints.ai_socktype = SOCK_STREAM;
+  if ((res = getaddrinfo(NULL, port2, &hints, &addr_tcp)) < 0) {
     LOG(CRASH, "getaddrinfo failed: %s\n", gai_strerror(res)); exit(EXIT_FAILURE);
   }
-  if ((res = getaddrinfo(NULL, port2, &hints, &addr_tcp)) < 0) {
+  hints.ai_socktype = SOCK_SEQPACKET;
+  hints.ai_protocol = IPPROTO_SCTP;
+  if ((res = getaddrinfo(NULL, port1, &hints, &addr_sctp)) < 0) {
     LOG(CRASH, "getaddrinfo failed: %s\n", gai_strerror(res)); exit(EXIT_FAILURE);
   }
   
@@ -651,10 +681,10 @@ void create_delegation_socket(int* port_sctp_out, int* port_tcp_out) {
 
 
   /* Enable receipt of SCTP Snd/Rcv Data via sctp_recvmsg */
-  struct sctp_event_subscribe events;
-  memset( (void *)&events, 0, sizeof(events) );
-  events.sctp_data_io_event = 1;
-  setsockopt( sock_sctp, SOL_SCTP, SCTP_EVENTS, (const void *)&events, sizeof(events) );
+  //struct sctp_event_subscribe events;
+  //memset( (void *)&events, 0, sizeof(events) );
+  //events.sctp_data_io_event = 1;
+  //setsockopt( sock_sctp, SOL_SCTP, SCTP_EVENTS, (const void *)&events, sizeof(events) );
   
   if (bind(sock_sctp, addr_sctp->ai_addr, addr_sctp->ai_addrlen) < 0) handle_error("bind");
   if (bind(sock_tcp, addr_tcp->ai_addr, addr_tcp->ai_addrlen) < 0) handle_error("bind");
@@ -818,7 +848,7 @@ void send_quit_message_to_secondaries() {
                        sizeof(req), 
                        secondaries[i].addr_sctp->ai_addr, 
                        secondaries[i].addr_sctp->ai_addrlen,
-                       1, 0, 0,0,0);
+                       1, SCTP_UNORDERED, 0,0,0);
     if (res < 0) handle_error("sctp_sendmsg");
     LOG(INFO, "sent quit message to secondary %d\n", i);
   }
@@ -828,15 +858,29 @@ void send_quit_message_to_secondaries() {
 void send_sctp_msg(int node_index, void* buf, int len) {
   assert(node_index != NODE_INDEX);  // we don't want to send to ourselves
   ((net_request_t*)buf)->node_index = NODE_INDEX;  // fill in sender
-  int res = sctp_sendmsg(secondaries[node_index].socket_sctp, 
+  int res = //sctp_sendmsg(secondaries[node_index].socket_sctp, 
+            sctp_sendmsg(delegation_sock_sctp,
       buf, 
       len, 
       secondaries[node_index].addr_sctp->ai_addr, 
       secondaries[node_index].addr_sctp->ai_addrlen,
-      1, 0, 0,0,0);
+      1, SCTP_UNORDERED, 0,0,0);
   if (res < 0) handle_error("sctp_sendmsg");
 }
 
+void send_ping(int node_index, int identifier, int request_unblock, i_struct* istructp) {
+  req_ping req;
+  req.type = REQ_PING;
+  req.node_index = NODE_INDEX;
+  req.identifier = identifier;
+  req.response_identifier = identifier;
+  req.request_unblock = request_unblock;
+  req.istructp = istructp;
+  req.reading_tc = _cur_tc;
+  gettimeofday(&req.send_time, NULL);
+  send_sctp_msg(node_index, &req, sizeof(req));
+  LOG(DEBUG, "network: send_ping: sent ping %d\n", identifier);
+}
 
 void init_network() {
   // init pending requests
@@ -1089,3 +1133,29 @@ static void handle_req_pull_data_described(const req_pull_data_described* req) {
                        1                 // only one range to push 
                        );
 }
+
+static void handle_req_ping(const req_ping* req) {
+  if (!req->request_unblock) {
+    resp_ping resp;
+    resp.identifier = req->response_identifier;
+    resp.type = RESP_PING;
+    resp.node_index = NODE_INDEX;
+    resp.response_identifier = -1;
+    resp.ping_send_time = req->send_time;
+    gettimeofday(&resp.pong_send_time, NULL);
+
+    LOG(DEBUG, "network: handle_req_ping: sending pong %d \n", resp.identifier);
+    send_sctp_msg(req->node_index, &resp, sizeof(resp));
+    LOG(DEBUG, "network: handle_req_ping: sending pong %d done (%ld ms since ping was sent)\n", 
+        resp.identifier, timediff_now(req->send_time));
+  } else {
+    write_remote_istruct(req->node_index, req->istructp, 1, req->reading_tc);
+    LOG(DEBUG, "network: handle_req_ping: unblocking remote TC for ping %d \n", req->identifier);
+  }
+}
+
+static void handle_resp_ping(const resp_ping* req) {
+  LOG(DEBUG, "network: handle_resp_ping: got PONG %d -> total roundtrip time: %ld ms; time since pong send: %ld\n", 
+      req->identifier, timediff_now(req->ping_send_time), timediff_now(req->pong_send_time));
+}
+
