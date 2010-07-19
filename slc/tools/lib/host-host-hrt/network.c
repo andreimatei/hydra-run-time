@@ -21,7 +21,12 @@ pthread_spinlock_t pending_requests_lock;
 
 struct delegation_interface_params_t delegation_if_arg;
 static int tcp_incoming_sockets[MAX_NODES];
+// number of sockets in tcp_incoming_sockets array 
 static int no_tcp_incoming_sockets = 0;  // TODO: add some locking for this
+static int new_sending_socket_pipe_fd[2];  // the 2 end of a pipe use to wake up the delegation interface from
+                        // it's select() syscall when a new tcp socket potentially needs to be added to the
+                        // collection of sockets to be polled for sending
+
 
 /*
  * struct representing the state of reading incoming memory ranges
@@ -483,7 +488,7 @@ void build_push_header(const tcp_sending_state_t* s, char* buf, int buf_size, in
 
 static void push_data(int node_index) {
   // TODO: as implemented now, i send the header in blocking mode, but with MSG_MORE set,
-  // and then i continue in not blocking mode... test if this does the right thing (i.e. don't block if I 
+  // and then i continue in non blocking mode... test if this does the right thing (i.e. don't block if I 
   // send a GB).
   assert(outgoing_state[node_index].active);
   tcp_sending_state_t* s = &outgoing_state[node_index];
@@ -542,8 +547,12 @@ void* delegation_interface(void* parm) {
   delegation_sock_sctp = sock_sctp;
   fd_set all_sockets;
   FD_ZERO(&all_sockets);
+  assert(sock_sctp < FD_SETSIZE);
   FD_SET(sock_sctp, &all_sockets);
+  assert(sock_tcp < FD_SETSIZE);
   FD_SET(sock_tcp, &all_sockets);
+  assert(new_sending_socket_pipe_fd[0] < FD_SETSIZE);
+  FD_SET(new_sending_socket_pipe_fd[0], &all_sockets);   
   int old_tcp_incoming_sockets = 0;  // used to check if new sockets are added to the array over time
   for (int i = 0; i < no_tcp_incoming_sockets; ++i) {
     FD_SET(tcp_incoming_sockets[i], &all_sockets);
@@ -561,37 +570,49 @@ void* delegation_interface(void* parm) {
   
   int print_msg = 1;
   while (1) {
-    if (print_msg)
+    fd_set copy, sending;
+    int got_work = 0;
+    while(!got_work) {   // loop while we get messages to rebuild the writing sockets collection
       LOG(DEBUG, "network: delegation interface: starting building sockets collection\n");
-    print_msg = 0;
-    if (no_tcp_incoming_sockets != old_tcp_incoming_sockets) {
-      // if we have new incoming sockets, add them to the collection
-      assert(no_tcp_incoming_sockets > old_tcp_incoming_sockets);
-      // TODO: add some locking for no_tcp_incoming_sockets
-      for (int i = old_tcp_incoming_sockets; i < no_tcp_incoming_sockets; ++i) {
-        assert(tcp_incoming_sockets[i] < FD_SETSIZE);
-        FD_SET(tcp_incoming_sockets[i], &all_sockets);
-        old_tcp_incoming_sockets++;
+      // add new tcp incoming sockets to the collection, if any
+      if (no_tcp_incoming_sockets != old_tcp_incoming_sockets) {
+        // if we have new incoming sockets, add them to the collection
+        assert(no_tcp_incoming_sockets > old_tcp_incoming_sockets);
+        // TODO: add some locking for no_tcp_incoming_sockets
+        for (int i = old_tcp_incoming_sockets; i < no_tcp_incoming_sockets; ++i) {
+          assert(tcp_incoming_sockets[i] < FD_SETSIZE);
+          FD_SET(tcp_incoming_sockets[i], &all_sockets);
+          old_tcp_incoming_sockets++;
+        }
+      }
+      copy = all_sockets;
+      // build collection of sockets that need to send data
+      sending = get_sending_sockets();
+      //struct timeval time;
+      //time.tv_sec = 0;
+      //time.tv_usec = 30000;  // 1 miliseconds
+      // TODO: do something about this timeout, at least make it bigger; it's only purpose is to allow
+      // rebulding of the sending sockets collection to take place. Maybe there's another way to interupt a select
+      // when this collection is modified... Send a signal to this thread?
+      LOG(DEBUG, "network: delegation interface: entering select\n");
+      int res = select(FD_SETSIZE, &copy, &sending, NULL, NULL);//&time);
+      if (res <= 0) handle_error("select");
+      if (!FD_ISSET(new_sending_socket_pipe_fd[0], &copy)) { // if we got anything but the pipe, we need to treat it
+        got_work = 1;
+      } else {
+        LOG(DEBUG, "network: delegation interface: we have something on the pipe; need to loop\n");
+        char c;//buf[100];
+        int res = read(new_sending_socket_pipe_fd[0], &c, 1);
+        // TODO: do a fcnt or whatever to set the pipe in non-blocking mode, and read as much as possible
+        // (in case 2 TC's did enqueue_push_request in the meantime).
+        assert(res == 1);
       }
     }
-
-    fd_set copy = all_sockets;
-
-    fd_set sending = get_sending_sockets();
-    struct timeval time;
-    time.tv_sec = 0;
-    time.tv_usec = 1000;  // 20 miliseconds
-    // TODO: do something about this timeout, at least make it bigger; it's only purpose is to allow
-    // rebulding of the sending sockets collection to take place. Maybe there's another way to interupt a select
-    // when this collection is modified... Send a signal to this thread?
-    //LOG(DEBUG, "network: delegation interface: entering select\n");
-    int res = select(FD_SETSIZE, &copy, &sending, NULL, &time);
-    if (res < 0) handle_error("select");
-    if (res == 0) {
-    //LOG(DEBUG, "network: delegation interface: got out of select just to rebuild sending sockets\n");
-      continue;  // this is done to rebuild the sending sockets collection
-    }
-    print_msg = 1;
+    //if (res == 0) {
+    ////LOG(DEBUG, "network: delegation interface: got out of select just to rebuild sending sockets\n");
+    //  continue;  // this is done to rebuild the sending sockets collection
+    //}
+    //print_msg = 1;
     LOG(DEBUG, "network: delegation interface: got out of select; we actually have work to do\n");
 
     if (FD_ISSET(sock_sctp, &copy)) {
@@ -685,6 +706,8 @@ void create_delegation_socket(int* port_sctp_out, int* port_tcp_out) {
   //memset( (void *)&events, 0, sizeof(events) );
   //events.sctp_data_io_event = 1;
   //setsockopt( sock_sctp, SOL_SCTP, SCTP_EVENTS, (const void *)&events, sizeof(events) );
+  int on = 1;
+  if (setsockopt(sock_sctp, IPPROTO_SCTP, SCTP_NODELAY, &on, sizeof(on)) < 0) handle_error("setsockopt");
   
   if (bind(sock_sctp, addr_sctp->ai_addr, addr_sctp->ai_addrlen) < 0) handle_error("bind");
   if (bind(sock_tcp, addr_tcp->ai_addr, addr_tcp->ai_addrlen) < 0) handle_error("bind");
@@ -816,7 +839,7 @@ void sync_with_primary(
     secondaries[no_secondaries].port_sctp = atoi(port1);
     secondaries[no_secondaries].port_tcp = atoi(port2);
     secondaries[no_secondaries].socket = -1;
-    secondaries[no_secondaries].socket_sctp = socket(AF_INET, SOCK_SEQPACKET, IPPROTO_SCTP);
+    //secondaries[no_secondaries].socket_sctp = socket(AF_INET, SOCK_SEQPACKET, IPPROTO_SCTP);
     secondaries[no_secondaries].socket_tcp = -1;
     // fill in the addr_sctp field
     if (no_secondaries != *node_index) {
@@ -843,7 +866,8 @@ void send_quit_message_to_secondaries() {
   req.type = REQ_QUIT;
 
   for (int i = 1; i < no_secondaries; ++i) {  // we are at index 0
-    int res = sctp_sendmsg(secondaries[i].socket_sctp, 
+    int res = //sctp_sendmsg(secondaries[i].socket_sctp, 
+              sctp_sendmsg(delegation_sock_sctp, 
                        &req, 
                        sizeof(req), 
                        secondaries[i].addr_sctp->ai_addr, 
@@ -894,6 +918,8 @@ void init_network() {
   for (int i = 0; i < MAX_NODES; ++i) {
     if (pthread_spin_init(&push_requests_locks[i], PTHREAD_PROCESS_PRIVATE) != 0) handle_error("pthread_spin_init");
   }
+  // init new_sending_socket_pipe_fd
+  if (pipe(new_sending_socket_pipe_fd) < 0) handle_error("pipe");
 }
 
 /*
@@ -1068,6 +1094,7 @@ void enqueue_push_request(int node_index,
   ++no_push_requests[node_index];
 
   pthread_spin_unlock(&push_requests_locks[node_index]); 
+  write(new_sending_socket_pipe_fd[1], "1", 1);
 }
 
 /*

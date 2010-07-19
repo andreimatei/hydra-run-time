@@ -37,7 +37,7 @@ typedef struct secondary {
   struct addrinfo* addr_sctp;  // address of the delegation interface
   struct addrinfo* addr_tcp;  // address of the tcp interface
   int socket_tcp;  // socket to the tcp interface
-  int socket_sctp;  // socket to the delegation interface
+  //int socket_sctp;  // socket to the delegation interface
 } secondary;
 extern secondary secondaries[1000];
 extern int no_secondaries;
