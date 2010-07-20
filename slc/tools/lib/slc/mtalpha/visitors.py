@@ -65,19 +65,24 @@ class Create_2_MTACreate(ScopedVisitor):
         lbl = cr.label
 
         # generate allocate + test for alternative
-        fidvar = CVarDecl(loc = cr.loc, name = "C$mtF$%s" % lbl, ctype = 'long')
-        self.cur_scope.decls += fidvar
+        fidvar = cr.cvar_fid
         
         usefvar = CVarUse(decl = fidvar)
+
+        if lc.target_next is None:
+            if cr.extras.get_attr('exclusive', None) is None:
+                warn("this create may fail and no alternative is available", cr)
+            forcesuspend = '|8'
+        else:
+            forcesuspend = ''
+
         newbl += (flatten(cr.loc,
                           '__asm__ __volatile__("allocate %%1, %%0\\t# MT: CREATE %s"'
                           ' : "=r"(' % lbl) + 
-                  usefvar + ') : "rI"(' + CVarUse(decl = cr.cvar_place) + '));')
+                  usefvar + ') : "rI"(' + CVarUse(decl = cr.cvar_place) + 
+                  '%s));' % forcesuspend)
         
-        if lc.target_next is None:
-            # FIXME: ignore warning if the create is guaranteed to wait
-            warn("this create may fail and no alternative is available", cr)
-        else:
+        if lc.target_next is not None:
             newbl += (flatten(cr.loc, ' if (!__builtin_expect(!!(') + 
                       usefvar + '), 1)) ' + 
                       CGoto(target = lc.target_next)) + ';'
@@ -257,9 +262,10 @@ class TFun_2_MTATFun(DefaultVisitor):
         newitems.append(flatten(fundef.loc,
                                 ' extern void %(name)s(void); '
                                 'void __slf_%(name)s(void) {'
-                                ' register long __slI __asm__("%(idxreg)s");'
+                                ' register long __slI_ __asm__("%(idxreg)s");'
                                 ' __asm__("# MT: index in %%0 (must be %(idxreg)s)"'
-                                '   : "=r"(__slI));'
+                                '   : "=r"(__slI_));'
+                                ' register const long __slI = __slI_;'
                                 ' __asm__ __volatile__("%(regdir)s");'
                                 % { 'name': fundef.name, 
                                     'regdir' : regdir,
@@ -333,7 +339,7 @@ class TFun_2_MTATFun(DefaultVisitor):
                 if p.name in self.gllist_mem:
                     orig = "__slPgm->%s" % p.name
                 else:
-                    orig = "__slPg_%s" % p.aname
+                    orig = "__slPg_%s" % p.name
                 newitems.append(flatten(p.loc,'') + p.ctype + 
                                 " __slPwg_%s = %s;" % (p.name, orig))
 
@@ -349,33 +355,43 @@ class TFun_2_MTATFun(DefaultVisitor):
         return newitems
 
     def visit_getp(self, getp):
-        if getp.name in self.gllist_mutable:
-            return flatten(getp.loc, ' __slPwg_%s ' % getp.name)
-        elif getp.name in self.shlist:
-            name = getp.name
+        name = getp.name
+        if name in self.shlist:
+            if getp.decl.type == 'shfparm':
+                regtype = 'f'
+            else:
+                regtype = 'r'
             return flatten(getp.loc, 
                            '({'
                            '__asm__ __volatile__("# MT: read shared %(name)s (%%0)"'
-                           '  : "=rf"(__slPsin_%(name)s)'
+                           '  : "=%(regtype)s"(__slPsin_%(name)s)'
                            '  : "0"(__slPsin_%(name)s));'
                            '__slPsin_%(name)s;'
                            '})'
                            % locals())
-        elif getp.name in self.gllist_mem:
-            return flatten(getp.loc, "(__slPgm->%s)" % getp.name)
+        elif name in self.gllist_mutable:
+            return flatten(getp.loc, ' __slPwg_%s ' % name)
+        elif name in self.gllist_mem:
+            return flatten(getp.loc, "(__slPgm->%s)" % name)
         else: # normal global
-            assert getp.name in self.gllist
-            return flatten(getp.loc, " __slPg_%s " % getp.name)
+            assert name in self.gllist
+            return flatten(getp.loc, " __slPg_%s " % name)
 
     def visit_setp(self, setp):
         rhs = setp.rhs.accept(self)
-        if setp.name in self.shlist:
-            name = setp.name
+        name = setp.name
+        if name in self.shlist:
+            if setp.decl.type == 'shfparm':
+                regtype = 'f'
+                itype = 'f'
+            else:
+                regtype = 'r'
+                itype = ''
             b = []
             b.append(flatten(setp.loc, 
                              'do {'
                              ' __asm__ __volatile__("# MT: clobber incoming %(name)s (%%0)"'
-                             ' : "=rf"(__slPsin_%(name)s) '
+                             ' : "=%(regtype)s"(__slPsin_%(name)s) '
                              ' : "0"(__slPsin_%(name)s));'
                              ' __typeof__(__slPsout_%(name)s) __tmp_set_%(name)s = ('
                              % locals()))
@@ -383,23 +399,23 @@ class TFun_2_MTATFun(DefaultVisitor):
             b.append(flatten(setp.loc, 
                              ');'
                              ' __asm__ __volatile__("# MT: start write shared %(name)s (%%0)"'
-                             ' : "=rf"(__slPsout_%(name)s) : "0"(__slPsout_%(name)s));'
-                             ' __asm__ __volatile__("mov %%4, %%0\\t# MT: write shared %(name)s (%%0)"'
-                             ' : "=rf" (__slPsout_%(name)s), "=rf" (__slPsin_%(name)s)'
+                             ' : "=%(regtype)s"(__slPsout_%(name)s) : "0"(__slPsout_%(name)s));'
+                             ' __asm__ __volatile__("%(itype)smov %%4, %%0\\t# MT: write shared %(name)s (%%0)"'
+                             ' : "=%(regtype)s" (__slPsout_%(name)s), "=%(regtype)s" (__slPsin_%(name)s)'
                              ' : "0"(__slPsout_%(name)s), "1" (__slPsin_%(name)s), '
-                             '   "rf" (__tmp_set_%(name)s));'
+                             '   "%(regtype)s" (__tmp_set_%(name)s));'
                              '} while(0)'
                              % locals()))
             return b
         else:
-            assert setp.name in self.gllist_mem or setp.name in self.gllist
-            return flatten(setp.loc, "#error invalid set to global %s\n" % setp.name)
+            assert name in self.gllist_mem or name in self.gllist
+            return flatten(setp.loc, "#error invalid set to global %s\n" % name)
 
     def visit_break(self, br):
         return flatten(br.loc, 
                        ' do {'
                        ' __asm__ __volatile__("break; end\\t# MT: break");'
-                       ' __builtin_unreachable();'
+                       ' while(1);'
                        '} while(0)')
     
     def visit_endthread(self, et):

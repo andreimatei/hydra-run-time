@@ -1,7 +1,7 @@
 //
-// sac_helpers.h: this file is part of the SL toolchain.
+// fiduse.c: this file is part of the SL toolchain.
 //
-// Copyright (C) 2009,2010 Universiteit van Amsterdam.
+// Copyright (C) 2010 Universiteit van Amsterdam.
 //
 // This program is free software; you can redistribute it and/or
 // modify it under the terms of the GNU General Public License
@@ -12,14 +12,12 @@
 // `COPYING' file in the root directory.
 //
 
-#ifndef SLC_SAC_HELPERS_H
-# define SLC_SAC_HELPERS_H
+sl_def(foo, void) {} sl_enddef
 
-#warning "You can replace uses of this header by #include <stdlib.h>, <string.h>, <alloca.h>."
-
-#include <stdlib.h>
-#include <string.h>
-#include <alloca.h>
-#include <undocumented.h>
-
-#endif // ! SLC_SAC_HELPERS_H
+sl_def(t_main, void)
+{
+  long f;
+  sl_create(f,,1,10,2,3,, foo);
+  sl_sync();
+}
+sl_enddef

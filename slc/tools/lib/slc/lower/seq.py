@@ -142,14 +142,18 @@ class TFun_2_CFun(DefaultVisitor):
         else:
             self.__gllist.append(parm.name)
             if parm.type.endswith('_mutable'):
+                reg = ""
                 const = ""
             else:
+                reg = "register"
                 const = "const"
-            self.__buffer += (Opaque(', register ') + parm.ctype + 
+            self.__buffer += (Opaque(', %s ' % reg) + parm.ctype + 
                               ' %s __slP_%s ' % (const, parm.name))
         return parm
 
     def visit_fundecl(self, fundecl, infundef = False):
+        old_shlist = self.__shlist
+        old_gllist = self.__gllist
         self.__shlist = []
         self.__gllist = []
         qual = ""
@@ -169,10 +173,13 @@ class TFun_2_CFun(DefaultVisitor):
         ret = self.__buffer
         self.__buffer = None
         if not infundef:
-            self.__shlist = self.__gllist = None
+            self.__shlist = old_shlist
+            self.__gllist = old_gllist
         return ret
  
     def visit_fundeclptr(self, fundecl):
+        old_shlist = self.__shlist
+        old_gllist = self.__gllist
         self.__shlist = []
         self.__gllist = []
         if fundecl.extras.get_attr('typedef', None) is not None:
@@ -189,7 +196,8 @@ class TFun_2_CFun(DefaultVisitor):
         self.__buffer += ')'
         ret = self.__buffer
         self.__buffer = None
-        self.__shlist = self.__gllist = None
+        self.__shlist = old_shlist
+        self.__gllist = old_gllist
         return ret
 
     def visit_fundef(self, fundef):

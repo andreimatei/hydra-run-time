@@ -1,7 +1,7 @@
 //
-// sac_helpers.h: this file is part of the SL toolchain.
+// mutable.c: this file is part of the SL toolchain.
 //
-// Copyright (C) 2009,2010 Universiteit van Amsterdam.
+// Copyright (C) 2010 Universiteit van Amsterdam.
 //
 // This program is free software; you can redistribute it and/or
 // modify it under the terms of the GNU General Public License
@@ -12,14 +12,17 @@
 // `COPYING' file in the root directory.
 //
 
-#ifndef SLC_SAC_HELPERS_H
-# define SLC_SAC_HELPERS_H
+sl_def(foo, void, sl_glparm_mutable(int, x), sl_glfparm_mutable(float, y))
+{
+    sl_getp(x) = 3;
+    sl_getp(y) = 4.5;
+}
+sl_enddef
 
-#warning "You can replace uses of this header by #include <stdlib.h>, <string.h>, <alloca.h>."
+// XIGNORE: ptl*:*
 
-#include <stdlib.h>
-#include <string.h>
-#include <alloca.h>
-#include <undocumented.h>
-
-#endif // ! SLC_SAC_HELPERS_H
+sl_def(t_main, void)
+{
+    sl_proccall(foo, sl_glarg(int, , 3), sl_glfarg(float, , 4.5));
+}
+sl_enddef

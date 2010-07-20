@@ -31,6 +31,8 @@ def parse_create(item):
       for p in item['args']:
             c.args.append(parse_argparm(CreateArg(), 'arg', p))
 
+      if 'fid' in item and item['fid']:
+            c.fid_lvalue = parse_block(item['fid'])
       if 'result' in item and item['result']:
             c.result_lvalue = parse_block(item['result'])
 
@@ -106,7 +108,8 @@ def parse_block(items):
 
 def parse_argparm(p, cat, item):
       #print "parse argparm %x: item %x: %r" % (id(p), id(item), item)
-      if not item['type'].endswith(cat):
+      t = item['type'].replace('_mutable','')
+      if not t.endswith(cat):
             unexpected(item)
       p.loc = item['loc']
       p.type = item['type']

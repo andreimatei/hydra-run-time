@@ -1,5 +1,5 @@
 //
-// sac_helpers.h: this file is part of the SL toolchain.
+// malloc_wrappers.c: this file is part of the SL toolchain.
 //
 // Copyright (C) 2009,2010 Universiteit van Amsterdam.
 //
@@ -12,14 +12,24 @@
 // `COPYING' file in the root directory.
 //
 
-#ifndef SLC_SAC_HELPERS_H
-# define SLC_SAC_HELPERS_H
-
-#warning "You can replace uses of this header by #include <stdlib.h>, <string.h>, <alloca.h>."
-
 #include <stdlib.h>
-#include <string.h>
-#include <alloca.h>
-#include <undocumented.h>
 
-#endif // ! SLC_SAC_HELPERS_H
+void* malloc(size_t sz)
+{
+  return excl_dlmalloc(sz);
+}
+
+void free(void* ptr)
+{
+  return excl_dlfree(ptr);
+}
+
+void* calloc(size_t cnt, size_t sz)
+{
+  return excl_dlcalloc(cnt, sz);
+}
+
+void* realloc(void *ptr, size_t sz)
+{
+  return excl_dlrealloc(ptr, sz);
+}

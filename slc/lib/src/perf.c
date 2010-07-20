@@ -15,6 +15,9 @@
 #include <svp/perf.h>
 #include <svp/testoutput.h>
 #include <svp/fast_malloc.h>
+#ifdef __mt_freestanding__
+#include "mtconf.h"
+#endif
 
 // the ordering in the following
 // table should match the counter
@@ -29,13 +32,23 @@ const char* mtperf_counter_names[] = {
   "n_bytesin_core",
   "n_bytesout_core",
   "n_extmem_cl_in",
-  "n_extmem_cl_out"
+  "n_extmem_cl_out",
+  "notused",
+  "tt_total",
+  "ft_total",
+  "xq_total",
+// computed columns
+  "pl_eff",
+  "tt_occp",
+  "ft_occp",
+  "xq_avg",
 #endif
 };
 
 #define pc(Ch) output_char((Ch), stream)
 #define ps(Str) output_string((Str), stream)
 #define pn(Num) output_int((Num), stream)
+#define pf(Num) output_float((Num), stream, 6)
 #define pnl  output_char('\n', stream);
 
 #define bfibre(N) do { \
@@ -54,6 +67,55 @@ const char* mtperf_counter_names[] = {
 #endif
 #define max(a,b) ((a) > (b) ? (a) : (b))
 
+static 
+float mtperf_compute_extra(const counter_t* before, const counter_t* after, unsigned extra)
+{
+#ifdef __mt_freestanding__    
+    counter_t ncores = after[MTPERF_PLACE_SIZE];
+    counter_t elapsed = after[MTPERF_CLOCKS] - before[MTPERF_CLOCKS];
+
+    switch (extra) {
+    case 0:
+    {
+        float itotal = after[MTPERF_EXECUTED_INSNS] - before[MTPERF_EXECUTED_INSNS];
+        itotal /= ncores;
+        itotal /= elapsed;
+        return itotal;
+    }
+    case 1:
+    {
+        // thread table occupancy
+        float ttotal = after[MTPERF_CUMUL_TT_OCCUPANCY] - before[MTPERF_CUMUL_TT_OCCUPANCY];
+        ttotal /= ncores;
+        ttotal /= *mgconf_ttes_per_core;
+        ttotal /= elapsed;
+        return ttotal;
+    }
+    case 2:
+    {
+        // family table occupancy
+        float ttotal = after[MTPERF_CUMUL_FT_OCCUPANCY] - before[MTPERF_CUMUL_FT_OCCUPANCY];
+        ttotal /= ncores;
+        ttotal /= *mgconf_ftes_per_core;
+        ttotal /= elapsed;
+        return ttotal;
+    }
+    case 3:
+    {
+        // exclusive allocate queue size
+        float ttotal = after[MTPERF_CUMUL_ALLOC_EX_QSIZE] - before[MTPERF_CUMUL_ALLOC_EX_QSIZE];
+        ttotal /= ncores;
+        ttotal /= elapsed;
+        return ttotal;
+    }
+#define N_EXTRA_COLUMNS 4
+    }
+#else
+#define N_EXTRA_COLUMNS 0
+#endif
+
+    return 0;        
+}
 
 void mtperf_report_diffs(const counter_t* before, const counter_t* after, int flags)
 {
@@ -72,7 +134,7 @@ void mtperf_report_diffs(const counter_t* before, const counter_t* after, int fl
       char sep = spec_sep ? ((flags >> 16) & 0xff) : ',';
       if (print_headers) {
 	// print column headers
-	for (i = 0; i < MTPERF_NCOUNTERS; ++i) {
+	for (i = 0; i < MTPERF_NCOUNTERS + N_EXTRA_COLUMNS; ++i) {
 	  if (i) pc(sep);
 	  ps(mtperf_counter_names[i]);
 	}
@@ -81,6 +143,10 @@ void mtperf_report_diffs(const counter_t* before, const counter_t* after, int fl
       for (i = 0; i < MTPERF_NCOUNTERS; ++i) {
 	if (i) pc(sep);
 	pn(after[i]-before[i]);
+      }
+      for (i = 0; i < N_EXTRA_COLUMNS; ++i) {
+          pc(sep);
+          pf(mtperf_compute_extra(before, after, i));
       }
       pnlsep;
     }
@@ -91,15 +157,23 @@ void mtperf_report_diffs(const counter_t* before, const counter_t* after, int fl
       pn(after[i]-before[i]);
       pnlsep;
     }
+    for (i = 0; i < N_EXTRA_COLUMNS; ++i) {
+        pf(mtperf_compute_extra(before, after, i));
+        pnlsep;
+    }
     break;
   case 2:
     // output Fibre
     {
       int pad = (flags >> 16) & 0xff;
-      bfibre(max(MTPERF_NCOUNTERS, pad));
+      bfibre(max(MTPERF_NCOUNTERS+N_EXTRA_COLUMNS, pad));
       for (i = 0; i < MTPERF_NCOUNTERS; ++i) {
 	pc(' ');
 	pn(after[i]-before[i]);
+      }
+      for (i = 0; i < N_EXTRA_COLUMNS; ++i) {
+          pc(' ');
+          pf(mtperf_compute_extra(before, after, i));
       }
       for ( ; i < pad; ++i) ps(" 0");
       efibre;
@@ -129,7 +203,7 @@ void mtperf_report_intervals(const struct s_interval* ivs,
       char sep = spec_sep ? ((flags >> 16) & 0xff) : ',';
       if (print_headers) {
 	// print column headers
-	for (i = 0; i < MTPERF_NCOUNTERS; ++i) {
+	for (i = 0; i < MTPERF_NCOUNTERS+N_EXTRA_COLUMNS; ++i) {
 	  if (i) pc(sep);
 	  pc('"');
 	  ps(mtperf_counter_names[i]);
@@ -144,6 +218,10 @@ void mtperf_report_intervals(const struct s_interval* ivs,
 	  if (i) pc(sep);
 	  pn(ivs[j].after[i]-ivs[j].before[i]);
 	}
+        for (i = 0; i < N_EXTRA_COLUMNS; ++i) {
+            pc(sep);
+            pf(mtperf_compute_extra(ivs[j].before, ivs[j].after, i));
+        }                
 	if (print_headers) {
 	  if (i) pc(sep);
 	  pc('"');
@@ -158,7 +236,7 @@ void mtperf_report_intervals(const struct s_interval* ivs,
   case 1:
     // output raw
     ps("# metrics\n");
-    for (i = 0; i < MTPERF_NCOUNTERS; ++i) {
+    for (i = 0; i < MTPERF_NCOUNTERS+N_EXTRA_COLUMNS; ++i) {
       ps(mtperf_counter_names[i]);
       pnlsep;
     }
@@ -171,6 +249,10 @@ void mtperf_report_intervals(const struct s_interval* ivs,
 	pn(ivs[j].after[i]-ivs[j].before[i]);
 	pnlsep;
       }
+      for (i = 0; i < N_EXTRA_COLUMNS; ++i) {
+          pf(mtperf_compute_extra(ivs[j].before, ivs[j].after, i));
+          pnlsep;
+      }         
     }
     break;
   case 2:
@@ -179,17 +261,21 @@ void mtperf_report_intervals(const struct s_interval* ivs,
       int pad = ((flags >> 16) & 0xff);
       int dmax = 0;
       if (pad)
-	dmax = max(pad, max(n, MTPERF_NCOUNTERS));
+	dmax = max(pad, max(n, MTPERF_NCOUNTERS+N_EXTRA_COLUMNS));
 
       ps("### begin intervals\n");
       bfibre(n); 
       pnlsep;
       for (j = 0; j < n; ++j) {
-	bfibre(MTPERF_NCOUNTERS);
+	bfibre(MTPERF_NCOUNTERS+N_EXTRA_COLUMNS);
 	for (i = 0; i < MTPERF_NCOUNTERS; ++i) {
 	  pc(' '); 
 	  pn(ivs[j].after[i]-ivs[j].before[i]);
 	}
+        for (i = 0; i < N_EXTRA_COLUMNS; ++i) {
+            pc(' ');
+            pf(mtperf_compute_extra(ivs[j].before, ivs[j].after, i));
+        }         
 	efibre;
 	pnlsep;
       }
@@ -211,8 +297,8 @@ void mtperf_report_intervals(const struct s_interval* ivs,
       
       pnlsep;
       
-      bfibre(dmax ? dmax : MTPERF_NCOUNTERS);
-      for (i = 0; i < MTPERF_NCOUNTERS; ++i) {
+      bfibre(dmax ? dmax : MTPERF_NCOUNTERS+N_EXTRA_COLUMNS);
+      for (i = 0; i < MTPERF_NCOUNTERS+N_EXTRA_COLUMNS; ++i) {
 	pc(' ');
 	pc('"');
 	ps(mtperf_counter_names[i]);
