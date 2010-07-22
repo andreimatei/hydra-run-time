@@ -372,7 +372,7 @@ class TFun_2_HydraCFunctions(DefaultVisitor):
 
         if fundef.name <> "__root_fam":  # for main, we just need the generic variant
             self.__state = 0  #begin
-            newitems = flatten(fundef.loc, ("long %s_begin(const tc_ident_t* prev, " +
+            newitems = flatten(fundef.loc, ("long %s_begin(const tc_ident_t* prev __attribute__((unused)), " +
                                            "long __index) {\n") % fundef.name)
             newitems += begin_body.accept(self)
             newitems += flatten(fundef.loc_end, "return 0; \n}")
@@ -385,15 +385,15 @@ class TFun_2_HydraCFunctions(DefaultVisitor):
 
             self.__state = 2  #end
             newitems += flatten(fundef.loc, ("long %s_end(const tc_ident_t* next, " +
-                                "i_struct* shareds, long __index) {\n") % fundef.name)
+                                "i_struct* shareds __attribute__((unused)), long __index) {\n") % fundef.name)
             newitems += end_body.accept(self)
             newitems += flatten(fundef.loc_end, "return 0; \n}")
 
         
         self.__state = 3  #generic
         newitems += flatten(fundef.loc, ("long %s_generic(const tc_ident_t* " +
-                            "prev, const tc_ident_t* next, " +
-                            "i_struct* shareds, long __index) {\n") % fundef.name)
+                            "prev __attribute__((unused)), const tc_ident_t* next __attribute__((unused)), " +
+                            "i_struct* shareds __attribute__((unused)), long __index __attribute__((unused))) {\n") % fundef.name)
         newitems += generic_body.accept(self)
         newitems += flatten(fundef.loc_end, "return 0; \n}")
        
@@ -406,9 +406,9 @@ class TFun_2_HydraCFunctions(DefaultVisitor):
         newitems += """
             //fam_context_t* fam_context = _get_fam_context();
             const tc_ident_t* parent = _get_parent_ident();
-            const tc_ident_t* prev = _get_prev_ident();
+            const tc_ident_t* prev __attribute__((unused)) = _get_prev_ident();
             const tc_ident_t* next = _get_next_ident();
-            i_struct* shareds = _get_final_shareds_pointer();
+            i_struct* shareds __attribute__((unused)) = _get_final_shareds_pointer();
             i_struct* done = _get_done_pointer();       
 
             if (__end_index - __start_index > 4) {\n

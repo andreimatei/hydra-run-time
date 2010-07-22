@@ -1,3 +1,8 @@
+!!! does activate wait until the corresponding gather operation finishes? Or do I not create until the scatter is complete?
+or do I not write the stub arg until the gather is complete?
+
+
+
 init main_place_id to -1 (or do smth to force the create in libslmain to be done the local node)
 
 define an initializer with __attribute__((constructor)) that calls mmap(BIG); free(); 
@@ -23,3 +28,19 @@ calls get_parent_ident() to find out who is going to write the global...
 
 - when working across nodes, make sure the shareds written by a child make it across the network before the
 write to the "done" istruct
+
+
+
+
+
+
+
+
+
+
+KNOWN ISSUES
+
+- network:
+    - in network.c, no_tcp_incoming_sockets needs locking before incrementing and reading it
+- tc.c
+    - we need to always to map memory chunks in 1MB increments (cause that what the sigsegv handler does)

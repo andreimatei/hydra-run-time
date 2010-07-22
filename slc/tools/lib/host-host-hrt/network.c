@@ -85,7 +85,6 @@ static int port_sctp;  // local port used for everything except memory requests 
 static int port_tcp;   // local port used for incoming memory requests
 
 static pthread_t delegation_if_thread;  // identifier of the thread running sockets of the delegation interface
-static pthread_t sending_if_thread;  // identifier of the thread running sockets of the sending interface
 
 pthread_mutex_t delegation_if_finished_mutex;
 pthread_cond_t delegation_if_finished_cv;  // TODO: do I need to init this?
@@ -122,7 +121,7 @@ static void handle_sctp_request(int sock) {
   int read = sctp_recvmsg(sock, buf, sizeof(buf), NULL, 0, &sndrcvinfo, &flags);
   if (read < 0) handle_error("sctp_recvmsg");
   LOG(DEBUG, "network: handle_sctp_request: got a SCTP request of %d bytes\n", read);
-  assert(read < sizeof(buf));
+  assert(read < (int)sizeof(buf));
   //buf[read] = 0;  // NULL-terminate the string
 
   //assert that we got a full message
@@ -238,7 +237,7 @@ static int handle_new_tcp_connection(int listening_sock) {
  * Called when we get a memory stream.
  * Reads a header from buf and initializes incoming_state[incoming_index].
  */
-char* parse_memchunk_header(char* buf, int len, int incoming_index) {
+char* parse_memchunk_header(char* buf, int len __attribute__((__unused__)), int incoming_index) {
   // TODO: handle the case where the header is split and the read() call only returns a part
 
   assert(incoming_state[incoming_index].cur_range == -1); // assert we weren't in the middle of receiving another object
@@ -446,7 +445,6 @@ fd_set get_sending_sockets() {
         //dequeue a send request
         int got_req = dequeue_push_request(i, &outgoing_state[i].req);
         assert(got_req);
-        struct timeval t;
         gettimeofday(&outgoing_state[i].start_time, NULL);
         LOG(DEBUG, "network: get_sending_sockets: dequeued push request. It stayed in queue for %ld ms.\n",
             timediff(outgoing_state[i].start_time, outgoing_state[i].req.create_time));
@@ -568,7 +566,7 @@ void* delegation_interface(void* parm) {
   }
   pthread_spin_unlock(&rt_init_done_lock);
   
-  int print_msg = 1;
+  //int print_msg = 1;
   while (1) {
     fd_set copy, sending;
     int got_work = 0;
@@ -667,13 +665,13 @@ void create_delegation_socket(int* port_sctp_out, int* port_tcp_out) {
   hints.ai_flags = AI_PASSIVE;
   char port1[10], port2[10];
   char* s;
-  if (s = getenv("SCTP_PORT")) {
+  if ((s = getenv("SCTP_PORT"))) {
     port_sctp = atoi(s);
   } else {  // TODO: if the envvar wasn't set, we choose a random port... obviously it could be in use
             // how the hell do I get the OS to give me one?
     port_sctp = (rand() % 20000) + 2000;
   }
-  if (s = getenv("TCP_PORT")) {
+  if ((s = getenv("TCP_PORT"))) {
     port_tcp = atoi(s);
   } else {  // TODO: if the envvar wasn't set, we choose a random port... obviously it could be in use
             // how the hell do I get the OS to give me one?
@@ -759,7 +757,7 @@ void sync_with_primary(
   
   int daemon_port = 33333;
   char *s;
-  if (s = getenv("DAEMON_PORT")) {
+  if ((s = getenv("DAEMON_PORT"))) {
     daemon_port = atoi(s);
   }
 
@@ -788,7 +786,7 @@ void sync_with_primary(
   strcat(buf2, map);
   LOG(DEBUG, "preparing mem map to send to primary: \"%s\"\n", map); 
   LOG(DEBUG, "sending data to primary: \"%s\"\n", buf2); 
-  int sent = 0;
+  unsigned int sent = 0;
   while (sent < strlen(buf2)) {
     int res = write(cfd, buf2 + sent, strlen(buf2) - sent);
     if (res < 0) {perror("sending map"); exit(1);}
@@ -1008,9 +1006,9 @@ void allocate_remote_tcs(int node_index, int proc_index, int no_tcs, int* tcs, i
 
 void populate_remote_tcs(
     int node_index,  // destination node
-    int* tcs,  // indexes of the TC's on the destination node
+    //int* tcs,  // indexes of the TC's on the destination node
     thread_range_t* ranges,
-    int no_tcs,
+    int no_ranges,
     thread_func func,
     tc_ident_t parent, tc_ident_t prev, tc_ident_t next,
     int final_ranges,  // 1 if these tcs are the last ones of the family
@@ -1023,9 +1021,9 @@ void populate_remote_tcs(
   req.identifier = -1;
   req.response_identifier = -1;
 
-  memcpy(req.tcs, tcs, no_tcs * sizeof(req.tcs[0]));
-  req.no_tcs = no_tcs;
-  memcpy(req.ranges, ranges, no_tcs * sizeof(req.ranges[0]));
+  //memcpy(req.tcs, tcs, no_tcs * sizeof(req.tcs[0]));
+  req.no_ranges = no_ranges;
+  memcpy(req.ranges, ranges, no_ranges * sizeof(req.ranges[0]));
   req.func = func;
   req.parent = parent; req.prev = prev; req.next = next;
   req.final_ranges = final_ranges;
@@ -1054,9 +1052,9 @@ static void handle_req_write_istruct(const req_write_istruct* req) {
 
 static void handle_req_create(const req_create* req) {
   LOG(DEBUG, "network: handle_req_create: got create request\n");
-  populate_local_tcs(req->tcs,
+  populate_local_tcs(//req->tcs,
                      req->ranges,
-                     req->no_tcs,
+                     req->no_ranges,
                      req->func,
                      req->parent, req->prev, req->next,
                      req->final_ranges,

@@ -106,9 +106,11 @@ static void pull_data(memdesc_stub_t* stub) {
     req.node_index = NODE_INDEX;
     req.identifier = pending->id;  
     req.response_identifier = -1;
-    assert(get_stub_pointer(*stub)->no_ranges == 1);  // so far, we only support this for pulling with
-                        // a local descriptor. This is usually sufficient, since usually you would get a
-                        // local descriptor by a restrict operation, which produces a desc with one range
+    assert(get_stub_pointer(*stub)->no_ranges == 1);  
+    //TODO: so far, we only support this (1 range) for pulling with
+    // a local descriptor. This is usually sufficient, since usually you would get a
+    // local descriptor by a restrict operation, which produces a desc with one range
+
     req.range = get_stub_pointer(*stub)->ranges[0];
     send_sctp_msg(stub->data_provider, &req, sizeof(req));
   } else {
@@ -180,7 +182,9 @@ memdesc_stub_t _memlocalize(memdesc_t* new_desc, //memdesc_stub_t* new_stub,
  * Create a consistent view upon the object described by stub.
  * Return a pointer to the first range of the descriptor.
  */
-void* _memactivate(memdesc_stub_t* stub, mem_range_t first_range, unsigned int no_ranges) {
+void* _memactivate(memdesc_stub_t* stub, 
+                   mem_range_t first_range, 
+                   unsigned int no_ranges __attribute__((unused))) {
   if (!memdesc_data_local(*stub)) {
     pull_data(stub);
   }
@@ -216,7 +220,7 @@ void push_data(memdesc_stub_t stub, int dest_node) {
   LOG(DEBUG, "mem-comm: push_data: enqueueing a push request. Time is %ld:%ld\n", t.tv_sec, t.tv_usec/1000);
   enqueue_push_request(dest_node,  // destination node
                        pending->id,  // pending request slot to be written on this node
-                       1,                // no remote confirmation needed 
+                       1,                // remote confirmation needed 
                        desc->ranges,           // memory to push
                        desc->no_ranges);
 
@@ -254,33 +258,86 @@ void _mempropagate_up(memdesc_stub_t stub, int parent_node) {
 
 /*
  * Pushes elements [first_elem...last_elem] from the first range of a descriptor to a particular node.
+ * Return value: a pointer to a pending request slot that will be unblocked 
+ * when the push operation is done.
+ * Params:
+ *  - node_index - [IN] - destination node
+ *  - first_range - [IN] - first range of the descriptor described by stub
  */
-static void push_elems(int node_index, memdesc_stub_t stub, int first_elem, int last_elem) {
+static pending_request_t* push_elems(int node_index, 
+                                     memdesc_stub_t stub, 
+                                     mem_range_t first_range,
+                                     int first_elem, 
+                                     int last_elem) {
+  assert(first_elem <= last_elem);
   assert(memdesc_data_local(stub));
-  assert(0); //FIXME TODO
+  pending_request_t* pending = get_pending_request_slot(_cur_tc);  // this index will embedded in the data 
+  assert(pending != NULL);  // TODO: handle error
+  mem_range_t range;
+  range.p = get_elem_pointer(&first_range, first_elem);
+  //range.p = first_range.p + (first_elem - 1) * first_range.sizeof_element;
+  range.orig_p = NULL;  // sholdn't be used
+  range.no_elements = last_elem - first_elem + 1;
+  range.sizeof_element = first_range.sizeof_element;
+
+  enqueue_push_request(node_index,   // destination node
+                       pending->id,  // pending request slot to be written on this node
+                       1,            // remote confirmation needed 
+                       &range,       // memory to push
+                       1             // number of ranges to push
+                       );
+  return pending;
 }
 
 /*
  * Pulls elements [first_elem...last_elem] from the first range of a descriptor, from a particular node.
  * Used for gather operations.
  */
-static void pull_elems(int node_index, memdesc_stub_t stub, int first_elem, int last_elem) {
-  assert(memdesc_data_local(stub));
-  assert(0); //FIXME TODO
+static pending_request_t* pull_elems(int node_index, 
+                       mem_range_t first_range,
+                       int first_elem, 
+                       int last_elem) {
+  pending_request_t* pending = get_pending_request_slot(_cur_tc);  // this index will embedded in the data 
+  assert(pending != NULL);  // TODO: handle error
+  
+  // build a req_pull_data_described
+  req_pull_data_described req;
+  req.type = REQ_PULL_DATA_DESCRIBED;
+  req.node_index = NODE_INDEX;
+  req.identifier = pending->id;  
+  // TODO: check this function again
+  req.response_identifier = -1;
+  req.range.p = get_elem_pointer(&first_range, first_elem);
+  req.range.orig_p = NULL;  // sholdn't be used
+  req.range.no_elements = last_elem - first_elem + 1;
+  req.range.sizeof_element = first_range.sizeof_element;
+  send_sctp_msg(node_index, &req, sizeof(req));
+
+  return pending;
 }
 
 /*
  * Scatters the first range of a descriptor so that each thread i in a family gets a consistent view on
- * elements [a*i + a, a*i + b].
+ * elements [a*i + b, a*i + c].
  */
-void _memscatter_affine(fam_context_t* fc, memdesc_stub_t stub, int a, int b, int c) {
+void _memscatter_affine(fam_context_t* fc, 
+                        memdesc_stub_t stub, 
+                        mem_range_t first_range,
+                        int a, int b, int c) {
   int start_thread, end_thread;
   int cur_node = -1;
+  pending_request_t* pending_pushes[MAX_NODES];
+  int no_pushes = 0;
+
   for (int i = 0; i < fc->no_ranges; ++i) {
     thread_range_t r = fc->ranges[i];
     if (r.dest.node_index != cur_node) {
       if (cur_node != -1) {
-        push_elems(cur_node, stub, a*start_thread + b, a*end_thread + c);
+        assert(no_pushes < MAX_NODES);
+        pending_request_t* p = 
+          push_elems(cur_node, stub, first_range,
+                     a*start_thread + b, a*end_thread + c);
+        pending_pushes[no_pushes++] = p;
       }
       cur_node = r.dest.node_index;
       start_thread = r.index_start;
@@ -290,20 +347,30 @@ void _memscatter_affine(fam_context_t* fc, memdesc_stub_t stub, int a, int b, in
       assert(end_thread == r.index_start - 1);
       end_thread = r.index_end;
     }
-  } 
+  }
+  // block until all the push operations complete
+  // TODO: this is ugly; we block on one operation at a time.
+  // What we'd really want is a semaphore 
+  for (int i = 0; i < no_pushes; ++i) {
+    block_for_confirmation(pending_pushes[i]); 
+  }
 }
 
 /*
  * Gathers from a descriptor that was scattered with _memscatter_affine(.. a,b,c)
  */
-void _gathermem_affine(fam_context_t* fc, memdesc_stub_t stub, int a, int b, int c) {
+void _gathermem_affine(
+    fam_context_t* fc,
+    //memdesc_stub_t stub, 
+    mem_range_t first_range,
+    int a, int b, int c) {
   int start_thread, end_thread;
   int cur_node = -1;
   for (int i = 0; i < fc->no_ranges; ++i) {
     thread_range_t r = fc->ranges[i];
     if (r.dest.node_index != cur_node) {
       if (cur_node != -1) {
-        pull_elems(cur_node, stub, a*start_thread + b, a*end_thread + c);
+        pull_elems(cur_node, first_range, a*start_thread + b, a*end_thread + c);
       }
       cur_node = r.dest.node_index;
       start_thread = r.index_start;

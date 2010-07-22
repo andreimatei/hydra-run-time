@@ -331,12 +331,14 @@ void _mempropagate_up(memdesc_stub_t stub, int parent_node);
  * Scatters the first range of a descriptor so that each thread i in a family gets a consistent view on
  * elements [a*i + a, a*i + b].
  */
-void _memscatter_affine(fam_context_t* fc, memdesc_stub_t stub, int a, int b, int c);
+void _memscatter_affine(fam_context_t* fc, memdesc_stub_t stub, mem_range_t first_range, int a, int b, int c);
 
 /*
  * Gathers from a descriptor that was scattered with _memscatter_affine(.. a,b,c)
  */
-void _gathermem_affine(fam_context_t* fc, memdesc_stub_t stub, int a, int b, int c);
+void _gathermem_affine(fam_context_t* fc, 
+                       //memdesc_stub_t stub, 
+                       mem_range_t first_range, int a, int b, int c);
 
 /* Used by a thread func to get it's range of indexes */
 static inline long _get_start_index() {

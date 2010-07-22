@@ -214,8 +214,8 @@ int tc_is_valid(int tc_index) {
 }
 
 mapping_decision map_fam(
-    thread_func func,
-    long no_threads,
+    thread_func func __attribute__((unused)),
+    long no_threads  __attribute__((unused)),
     //long start_index,
     //long end_index,
     struct mapping_node_t* parent_id,
@@ -339,13 +339,13 @@ fam_context_t* allocate_fam(
     long start_index,
     long end_index,
     long step,
-    struct mapping_node_t* parent_id,
+    struct mapping_node_t* parent_id __attribute__((unused)), 
     const struct mapping_decision* mapping) {
 
   assert(mapping != NULL);
   //find an empty fam_context within the family contexts of the current proc
   //(technically, it doesn't matter where the fam context is chosen from)
-  int i;
+  unsigned int i;
   fam_context_t* fc;
   if (_cur_tc != NULL) {  // this will be NULL when allocating __root_main
     pthread_spin_lock((pthread_spinlock_t*)&(fam_contexts_locks[_cur_tc->ident.proc_index]));
@@ -379,8 +379,8 @@ fam_context_t* allocate_fam(
   }allocated_tcs_t;
 
   allocated_tcs_t allocated_tcs[mapping->no_proc_assignments];
-  int load_to_redistribute = 0;
-  int allocated_procs = 0;
+  unsigned int load_to_redistribute = 0;
+  unsigned int allocated_procs = 0;
   int last_allocated_proc_index = -1;
 
   for (i = 0; i < mapping->no_proc_assignments; ++i) {
@@ -429,7 +429,7 @@ fam_context_t* allocate_fam(
     proc_assignment as = mapping->proc_assignments[i];
     int load = as.load_percentage + additional_load;
     if (i == last_allocated_proc_index) load += additional_load_last;
-    int threads_for_proc;
+    //int threads_for_proc;
     if (i != last_allocated_proc_index) {
       allocated_tcs[i].no_threads = load * total_threads / 100;
       allocated_threads += allocated_tcs[i].no_threads;
@@ -623,7 +623,7 @@ static inline int test_same_tc(const tc_ident_t* l,const tc_ident_t* r) {
 
 
 void populate_local_tcs(
-    const int* tcs, 
+    //const int* tcs,
     const thread_range_t* ranges, 
     int no_tcs, 
     thread_func func,
@@ -662,25 +662,31 @@ tc_ident_t create_fam(fam_context_t* fc,
                       thread_func func
                       //int no_threads
                       ) {
-  //assert(fc->no_ranges == 1); // TODO
-  //assert(_cur_tc == NULL || test_same_node(&fc->ranges[0].dest, &_cur_tc->ident)); //TODO
-
   int tcs[MAX_NO_TCS_PER_ALLOCATION];
-  int no_tcs = 0;
+  int no_ranges_for_current_node = 0;
+
   // populate all TC's
   assert(fc->no_ranges > 0);
-  int cur_node_index = -1; //fc->no_ranges[0].dest.tc_index;
-  //tcs[0] = cur_node_index;
-  //no_tcs = 1;
+  int cur_node_index = -1;
 
   int start_index = 0;
+  // go through the ranges, in chunks allocated to each node
   for (int i = 0; i < fc->no_ranges;) {
+    if (fc->ranges[i].dest.node_index == cur_node_index)
+      continue;
+
+    // start treating the ranges for a new node
     cur_node_index = fc->ranges[i].dest.node_index;
     start_index = i;
-    no_tcs = 0;
+    no_ranges_for_current_node = 0;
+
+    assert(fc->no_ranges <=  MAX_NO_TCS_PER_ALLOCATION);
+    // build an array of all the indexes of the tc's allocated to the current node
     for (; i < fc->no_ranges && fc->ranges[i].dest.node_index == cur_node_index; ++i) {
-      tcs[no_tcs++] = fc->ranges[i].dest.tc_index;
-    }  
+      //tcs[no_tcs++] = fc->ranges[i].dest.tc_index;
+      ++no_ranges_for_current_node;
+    }
+
     // attention: i is now 1 more than the last range that's part of the current node
     tc_ident_t parent, prev, next;
     if (_cur_tc != NULL) {
@@ -703,9 +709,9 @@ tc_ident_t create_fam(fam_context_t* fc,
 
     if (cur_node_index == NODE_INDEX) {
       if (_cur_tc != NULL) {  // this will be NULL when creating root_fam
-        populate_local_tcs(tcs, 
+        populate_local_tcs(//tcs, 
             &fc->ranges[start_index], 
-            no_tcs, 
+            no_ranges_for_current_node,//no_tcs, 
             func, 
             parent, prev, next,
             //_cur_tc->ident,  // parent
@@ -723,9 +729,9 @@ tc_ident_t create_fam(fam_context_t* fc,
         dummy_parent.node_index = NODE_INDEX; // no parent
         dummy_parent.proc_index = -1; dummy_parent.tc_index = -1; dummy_parent.tc = NULL; 
         
-        populate_local_tcs(tcs, 
+        populate_local_tcs(//tcs, 
             &fc->ranges[start_index], 
-            no_tcs, 
+            no_ranges_for_current_node, 
             func, 
             dummy_parent,  // parent
             dummy_parent,  // prev
@@ -737,10 +743,11 @@ tc_ident_t create_fam(fam_context_t* fc,
       }
     } else {  // we have a remote allocation
       assert(_cur_tc != NULL);  // this should only be null for root_fam, and that shouldn't be allocated remotely
+      LOG(DEBUG, "create_fam: sending remote create request with %d ranges\n", no_ranges_for_current_node);
       populate_remote_tcs(cur_node_index,  // destination node
-                          tcs,
+                          //tcs,
                           &fc->ranges[start_index],
-                          no_tcs,
+                          no_ranges_for_current_node,
                           func,
                           parent, prev, next,
                           //_cur_tc->ident,  // parent
@@ -917,7 +924,7 @@ static int get_no_CPUs() {
 
 static void init_processors() {
   unsigned long i;
-  for (i = 0; i < NO_PROCS; ++i) {
+  for (i = 0; i < (unsigned)NO_PROCS; ++i) {
     pthread_attr_init(&threads_attr[i]);
     void* stack_low_addr = mmap_processor_stack(i);
     if (pthread_attr_setstack(&threads_attr[i], stack_low_addr, PROCESSOR_PTHREAD_STACK_SIZE) != 0) {
@@ -1012,7 +1019,6 @@ static void rt_init() {
       //LOG(DEBUG, "1 initializing fam_contexts[%d][%d].\n", i, j);
       fam_contexts[i][j].done.state = EMPTY;
       fam_contexts[i][j].index = fc_index++;
-      int k = 0;
       if (pthread_spin_init(&fam_contexts[i][j].done.lock, PTHREAD_PROCESS_PRIVATE) != 0) {
         perror("pthread_spin_init:"); exit(1);
       }
@@ -1664,7 +1670,7 @@ void start_nodes(int port_sctp, int port_tcp) {
   hints.ai_family = AF_UNSPEC;
   hints.ai_socktype = SOCK_STREAM;
 
-  fd_set master, readfds;
+  fd_set master;
   FD_ZERO(&master);
   LOG(INFO, "attempting connection to %d secondaries\n", no_slaves);
   for (int i = 0; i < no_slaves; ++i) {
@@ -1697,19 +1703,20 @@ void start_nodes(int port_sctp, int port_tcp) {
   int waiting_for = no_slaves;  // number of peers we're waiting for
   while ((waiting_for > 0) && (tv.tv_sec > 0)) {
     if (no_slaves == 0) break;
-    fd_set copy_read = master;
+    //fd_set copy_read = master;
     fd_set copy_write = master;
-    fd_set copy_exception = master;
+    // fd_set copy_exception = master;  // TODO: check for errors (is the code correct now?)
+    assert(max_socket + 1 < FD_SETSIZE);
     int res = select(max_socket + 1, NULL, &copy_write, NULL, &tv);
-    //int res = select(max_socket + 1, &copy_read, &copy_write, &copy_exception, &tv);
     if (res < 0) { handle_error("select"); }
 
     for (int i = 0; i < no_slaves; ++i) {
       if (FD_ISSET(sockets[i], &copy_write)) {
         --waiting_for;
         FD_CLR(sockets[i], &master);  // remove this socket so that we don't test it in next iterations
-        int valopt, lon = sizeof(int);
-        if (getsockopt(sockets[i], SOL_SOCKET, SO_ERROR, (void*)&valopt, &lon) < 0) handle_error("getsockopt");
+        int valopt;
+        socklen_t optlen; // = sizeof(int);
+        if (getsockopt(sockets[i], SOL_SOCKET, SO_ERROR, (void*)&valopt, &optlen) < 0) handle_error("getsockopt");
         if (valopt) {
           LOG(INFO, "connection to secondary %s:%d didn't succeed\n", slaves[i].addr, slaves[i].port_daemon); 
         } else {
@@ -1859,7 +1866,7 @@ void start_nodes(int port_sctp, int port_tcp) {
 
     LOG(DEBUG, "sending \"%s\" to secondary %d\n", buf, i); 
 
-    int written = 0;
+    unsigned written = 0;
     do {
       int res = write(secondaries[i].socket, buf + written, strlen(buf) - written);
       LOG(DEBUG, "written %d bytes to secondary %s:%d\n", res, secondaries[i].addr, secondaries[i].port_daemon);
@@ -1880,7 +1887,8 @@ void start_nodes(int port_sctp, int port_tcp) {
 
 static int start(int argc, char** argv);
 
-static int start_secondary(int argc, char** argv) {
+static int start_secondary(int argc __attribute__((unused)),
+                           char** argv __attribute__((unused))) {
 
   rt_init();  // FIXME: the delegation interface should check on incoming messages that
               // the runtime initialization has finished
@@ -2008,6 +2016,7 @@ void write_global(fam_context_t* ctx, int index, long val) {
 
 /*
  * Returns 0 if the range that is passed overlaps an existing mapping, 1 otherwise
+ * TODO: Currently it's unused, because it smashes the stack when called from a sighandler.
  */
 static int check_virtual_memory_range(void* range_start, void* range_end) {
   // TODO: this function is here only for debugging, it shouldn't be necessary. Also, it will
@@ -2030,7 +2039,7 @@ static int check_virtual_memory_range(void* range_start, void* range_end) {
   return 1;
 }
 
-static void sighandler_foo(int sig, siginfo_t *si, void *ucontext)
+static void sighandler_foo(int sig, siginfo_t *si, void *ucontext __attribute__((unused)))
 {
   LOG(DEBUG, "sigsegv handler: GOT SIGSEGV \n");
   char *page =
@@ -2041,7 +2050,7 @@ static void sighandler_foo(int sig, siginfo_t *si, void *ucontext)
       si->si_addr < (cur_incoming_mem_range_start + cur_incoming_mem_range_len)) {
     void* range_start = (void*)((unsigned long)si->si_addr
         & ~(MAPPING_CHUNK - 1L));
-    void* range_end = range_start + MAPPING_CHUNK;
+    void* range_end __attribute__((unused)) = range_start + MAPPING_CHUNK;
 
     // check that the range we intend to map doesn't overlap any existing range
     // TODO: the call to check_virtual_memory_range crashes because of stack smashing... probably

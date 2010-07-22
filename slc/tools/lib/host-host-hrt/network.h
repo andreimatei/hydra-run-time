@@ -74,8 +74,8 @@ typedef struct req_create {
   int identifier;
   int response_identifier;
 
-  int tcs[100];
-  int no_tcs;
+  //int tcs[100];
+  int no_ranges;
   thread_range_t ranges[100];
   thread_func func;
   tc_ident_t parent, prev, next;
@@ -143,9 +143,9 @@ pending_request_t* request_remote_tcs(
 void block_for_allocate_response(pending_request_t* req, resp_allocate* resp);
 void populate_remote_tcs(
     int node_index,  // destination node
-    int* tcs,  // indexes of the TC's on the destination node
+    //int* tcs,  // indexes of the TC's on the destination node
     thread_range_t* ranges,
-    int no_tcs,
+    int no_ranges,
     thread_func func,
     tc_ident_t parent, tc_ident_t prev, tc_ident_t next,
     int final_ranges,  // 1 if these tcs are the last ones of the family

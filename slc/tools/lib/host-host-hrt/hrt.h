@@ -57,7 +57,7 @@ void parse_own_memory_map(char* map);
 //int atomic_increment_next_tc(int proc_id);
 void allocate_local_tcs(int proc_index, int no_tcs, int* tcs, int* no_allocated_tcs);
 void populate_local_tcs(
-    const int* tcs, 
+    //const int* tcs,
     const thread_range_t* ranges, 
     int no_tcs, 
     thread_func func,
