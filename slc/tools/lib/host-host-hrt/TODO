@@ -1,7 +1,8 @@
 !!! does activate wait until the corresponding gather operation finishes? Or do I not create until the scatter is complete?
 or do I not write the stub arg until the gather is complete?
 
-
+scatter blocks until all confirmations come; if i have multiple scatter's in a create,
+        maybe i want to block on the reunion of the 2 sets of confirmations at once...
 
 init main_place_id to -1 (or do smth to force the create in libslmain to be done the local node)
 

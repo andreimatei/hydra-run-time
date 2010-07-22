@@ -662,7 +662,7 @@ tc_ident_t create_fam(fam_context_t* fc,
                       thread_func func
                       //int no_threads
                       ) {
-  int tcs[MAX_NO_TCS_PER_ALLOCATION];
+  //int tcs[MAX_NO_TCS_PER_ALLOCATION];
   int no_ranges_for_current_node = 0;
 
   // populate all TC's
@@ -954,7 +954,7 @@ static void rt_init() {
   assert((void*)&allocate_tc_locks[0].lock == (void*)&allocate_tc_locks[0]);
 
 
-  init_network();
+  //init_network();
   init_mem_comm();
 
   // init runnable_queue_locks
@@ -1971,6 +1971,7 @@ int main(int argc, char** argv) {
     
   if (pthread_spin_init(&rt_init_done_lock, PTHREAD_PROCESS_PRIVATE) != 0)
     handle_error("pthread_spin_init");
+  init_network();
 
   if (am_i_secondary()) {
     LOG(DEBUG, "creating a socket for delegation...\n");

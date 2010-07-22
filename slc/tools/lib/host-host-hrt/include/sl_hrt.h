@@ -313,19 +313,26 @@ memdesc_stub_t _memlocalize(memdesc_t* new_desc, //memdesc_stub_t* new_stub,
                             );
 /*
  * Create a consistent view upon the object described by stub.
+ * Copies the first range of the object to new_desc.
  * Return a pointer to the first range of the descriptor.
  */
-void* _memactivate(memdesc_stub_t* stub, mem_range_t first_range, unsigned int no_ranges);
-
+void* _memactivate(memdesc_stub_t* stub,
+                   mem_range_t first_range,
+                   unsigned int no_ranges,
+                   memdesc_t* new_desc,
+                   memdesc_stub_t* new_stub
+                   );
 /*
  * Propagate local changes back to the data provider.
  */
 void _mempropagate(memdesc_stub_t stub);
 
-/*
- * Propagate local changes to the parent (as opposed to the data provider)
- */
-void _mempropagate_up(memdesc_stub_t stub, int parent_node);
+//--------------------------------------------------
+// /*
+//  * Propagate local changes to the parent (as opposed to the data provider)
+//  */
+// void _mempropagate_up(memdesc_stub_t stub, int parent_node);
+//-------------------------------------------------- 
 
 /*
  * Scatters the first range of a descriptor so that each thread i in a family gets a consistent view on
@@ -461,6 +468,11 @@ void write_global(fam_context_t* ctx, int index, long val);
  */
 memdesc_stub_t long_2_stub(long x);
 long stub_2_long(memdesc_stub_t stub);
+
+/*
+ * Generate a stub suitable for passing to a child based on an existing stub.
+ */
+memdesc_stub_t _stub_2_canonical_stub(memdesc_stub_t stub, int S);
 
 static inline long timediff(struct timeval t1, struct timeval t2) {
   long micros = 1000000 * (t1.tv_sec - t2.tv_sec);

@@ -30,7 +30,7 @@ static int memdesc_desc_local(memdesc_stub_t stub) {
 }
 
 static int memdesc_data_local(memdesc_stub_t stub) {
-  return stub.have_data || (stub.data_provider == NODE_INDEX) || stub.S;
+  return (stub.data_provider == NODE_INDEX) || stub.S || stub.have_data;
 }
 
 static int memdesc_get_effective_data_prov(memdesc_stub_t stub) {
@@ -53,9 +53,12 @@ static int memdesc_get_effective_data_prov(memdesc_stub_t stub) {
  * Create a new descriptor referring to part of the first range of an existing descriptor.
  * The new descriptor, upon activation, will return the same pointer as the original one.
  */
-memdesc_stub_t _memrestrict(memdesc_stub_t orig_stub, memdesc_t* new_desc, //memdesc_stub_t* new_stub, 
-                  mem_range_t first_range,  // first range from the descriptor of orig_stub
-                  int start_elem, int no_elems) {
+memdesc_stub_t _memrestrict(
+    memdesc_stub_t orig_stub, 
+    memdesc_t* new_desc, //memdesc_stub_t* new_stub, 
+    mem_range_t first_range,  // first range from the descriptor of orig_stub
+    int start_elem,
+    int no_elems) {
   mem_range_t range = first_range;//get_first_range(orig_stub);
   new_desc->no_ranges = 1;
   new_desc->ranges[0] = range; 
@@ -65,9 +68,22 @@ memdesc_stub_t _memrestrict(memdesc_stub_t orig_stub, memdesc_t* new_desc, //mem
   return _create_memdesc_stub(new_desc, 
                               orig_stub.data_provider, 
                               orig_stub.have_data,
-                              0 // S
+                              orig_stub.S // S
                               );
 }
+
+/*
+ * Generate a stub suitable for passing to a child based on an existing stub.
+ */
+memdesc_stub_t _stub_2_canonical_stub(memdesc_stub_t stub, int S) {
+  memdesc_stub_t r = stub;
+  r.S = S;
+  r.have_data = 0;
+  // note that, when memdesc_data_local() will be called on the child, it might still return true
+  // if stub.data_probvider == node id of the child
+  return r;
+}
+
 
 /*
  * Pull a descriptor from the descriptor provider of stub and updates the stub to point to the local copy.
@@ -148,46 +164,67 @@ void _memextend(memdesc_stub_t stub, memdesc_stub_t stub_to_copy, int* no_ranges
   *no_ranges = dest->no_ranges;
 }
 
-/*
- * Pulls data and descriptor for a stub. Updates orig to make it LL, and also returns the new value.
- */
-memdesc_stub_t _memlocalize(memdesc_t* new_desc, //memdesc_stub_t* new_stub,
-                            memdesc_stub_t* orig,
-                            mem_range_t first_range,  // first range of the original descriptor
-                            unsigned int no_ranges  // no ranges from the original descriptor
-                            ) {
-  if (memdesc_data_local(*orig)) {
-    if (memdesc_desc_local(*orig)) { // LL
-      return *orig;
-    } else {  // LR
-      pull_desc(new_desc, orig, 
-                first_range, no_ranges);
-      return *orig;
-      //return _create_memdesc_stub(new_desc, get_effective_data_provider(*orig));
-    } 
-  } else {
-    pull_data(orig);//, first_range, no_ranges);
-    if (memdesc_desc_local(*orig)) {  // RL
-      return *orig;
-    } else {  // RR
-      pull_desc(new_desc, orig, first_range, no_ranges);
-      return *orig;
-      //return _create_memdesc_stub(new_desc, get_effective_data_provider(*orig));
-    }
-  }
-}
+/*--------------------------------------------------
+* / *
+*  * Pulls data and descriptor for a stub. Updates orig to make it LL, and also returns the new value.
+*  * /
+* memdesc_stub_t _memlocalize(memdesc_t* new_desc, //memdesc_stub_t* new_stub,
+*                             memdesc_stub_t* orig,
+*                             mem_range_t first_range,  // first range of the original descriptor
+*                             unsigned int no_ranges  // no ranges from the original descriptor
+*                             ) {
+*   if (memdesc_data_local(*orig)) {
+*     if (memdesc_desc_local(*orig)) { // LL
+*       return *orig;
+*     } else {  // LR
+*       pull_desc(new_desc, orig, 
+*                 first_range, no_ranges);
+*       return *orig;
+*       //return _create_memdesc_stub(new_desc, get_effective_data_provider(*orig));
+*     } 
+*   } else {
+*     pull_data(orig);//, first_range, no_ranges);
+*     if (memdesc_desc_local(*orig)) {  // RL
+*       return *orig;
+*     } else {  // RR
+*       pull_desc(new_desc, orig, first_range, no_ranges);
+*       return *orig;
+*       //return _create_memdesc_stub(new_desc, get_effective_data_provider(*orig));
+*     }
+*   }
+* }
+*--------------------------------------------------*/
 
 
 /*
  * Create a consistent view upon the object described by stub.
+ * Copies the first range of the object to new_desc.
  * Return a pointer to the first range of the descriptor.
  */
-void* _memactivate(memdesc_stub_t* stub, 
-                   mem_range_t first_range, 
-                   unsigned int no_ranges __attribute__((unused))) {
+void* _memactivate(memdesc_stub_t* stub,
+                   mem_range_t first_range,
+                   unsigned int no_ranges,
+                   memdesc_t* new_desc,
+                   memdesc_stub_t* new_stub
+                   ) {
+  // FIXME: TODO: think about the decision made, namely to take a new_desc as an argument and initialize only
+  // the first range
   if (!memdesc_data_local(*stub)) {
     pull_data(stub);
   }
+  //pull_desc(new_desc, stub, first_range, no_ranges);
+  new_stub->have_data = 1;
+  new_stub->data_provider = NODE_INDEX;
+  new_stub->S = 0;
+  // .pointer and .node remain as in the original
+  new_stub->node = stub->node;
+  new_stub->pointer = stub->pointer;
+
+  // initialize the first range of the new descriptor. The first range needs to be valid,
+  // even though the rest are not, because it will be used by subsequent operations on the new stub.
+  new_desc->no_ranges = no_ranges;
+  new_desc->ranges[0] = first_range;
+
   return first_range.orig_p;
 }
 
@@ -197,7 +234,8 @@ void* _memactivate(memdesc_stub_t* stub,
  */
 // TODO: make this function static and remove it from sl_hrt.h. It was put there temporarily.
 void push_data(memdesc_stub_t stub, int dest_node) {
-  static int ping_id = 100;
+  //static int ping_id = 100;
+  LOG(DEBUG, "mem-comm: push_data: pushing data to node %d (stub.S = %d)\n", dest_node, stub.S);
   if (dest_node == NODE_INDEX) return;  // nothing to do
   assert(!stub.S);  // if the descriptor if involved in a scatter/gather, we shouldn't have gotten here
   assert(memdesc_data_local(stub));  // we should have the data...
@@ -209,7 +247,7 @@ void push_data(memdesc_stub_t stub, int dest_node) {
                                      // TODO: handle remote descriptors (right now, those can be involved in
                                      // propagate operations. Maybe if we make _memactivate always pull the descriptor,
                                      // we would get rid of this problem...
-  send_ping(dest_node, ping_id++, 0, NULL);  // FIXME: remove this; just for debugging
+  //send_ping(dest_node, ping_id++, 0, NULL);  // FIXME: remove this; just for debugging
   memdesc_t* desc = get_stub_pointer(stub);
   // get pending request slot
   pending_request_t* pending = get_pending_request_slot(_cur_tc);  // this index will embedded in the data 
@@ -229,7 +267,7 @@ void push_data(memdesc_stub_t stub, int dest_node) {
   struct timeval t1, t2;
   assert(!gettimeofday(&t1, NULL));
   //send_ping(dest_node, 1000+ping_id - 1, 1, (i_struct*)&pending->istruct);  // FIXME: remove this; just for debugging
-  send_ping(dest_node, 1000+ping_id - 1, 0, NULL);  // FIXME: remove this; just for debugging
+  //send_ping(dest_node, 1000+ping_id - 1, 0, NULL);  // FIXME: remove this; just for debugging
   block_for_confirmation(pending);
   assert(!gettimeofday(&t2, NULL));
   long microsec = 1000000 * (t2.tv_sec - t1.tv_sec);
@@ -242,19 +280,26 @@ void push_data(memdesc_stub_t stub, int dest_node) {
  * Propagate local changes back to the data provider.
  */
 void _mempropagate(memdesc_stub_t stub) {
-  if (stub.data_provider != NODE_INDEX) {
+  assert(memdesc_data_local(stub));  // we should have the data...
+  if (stub.data_provider != NODE_INDEX && !stub.S) {
+    LOG(DEBUG, "mem_comm: _mempropagate: pushing data\n");
     push_data(stub, stub.data_provider);
+  } else {
+    LOG(DEBUG, "mem_comm: _mempropagate: nothing to do since either the destination is the local node " \
+               "or the S bit is set.\n");
   }
 }
 
-/*
- * Propagate local changes to the parent (as opposed to the data provider)
- */
-void _mempropagate_up(memdesc_stub_t stub, int parent_node) {
-  if (parent_node != NODE_INDEX) {
-    push_data(stub, parent_node);
-  }
-}
+/*--------------------------------------------------
+* / *
+*  * Propagate local changes to the parent (as opposed to the data provider)
+*  * /
+* void _mempropagate_up(memdesc_stub_t stub, int parent_node) {
+*   if (parent_node != NODE_INDEX) {
+*     push_data(stub, parent_node);
+*   }
+* }
+*--------------------------------------------------*/
 
 /*
  * Pushes elements [first_elem...last_elem] from the first range of a descriptor to a particular node.
@@ -269,6 +314,7 @@ static pending_request_t* push_elems(int node_index,
                                      mem_range_t first_range,
                                      int first_elem, 
                                      int last_elem) {
+  LOG(DEBUG, "mem-comm: push_elems: entering\n", node_index);
   assert(first_elem <= last_elem);
   assert(memdesc_data_local(stub));
   pending_request_t* pending = get_pending_request_slot(_cur_tc);  // this index will embedded in the data 
@@ -280,6 +326,7 @@ static pending_request_t* push_elems(int node_index,
   range.no_elements = last_elem - first_elem + 1;
   range.sizeof_element = first_range.sizeof_element;
 
+  LOG(DEBUG, "mem-comm: push_elems: enqueueing push request for node %d\n", node_index);
   enqueue_push_request(node_index,   // destination node
                        pending->id,  // pending request slot to be written on this node
                        1,            // remote confirmation needed 
@@ -329,11 +376,13 @@ void _memscatter_affine(fam_context_t* fc,
   pending_request_t* pending_pushes[MAX_NODES];
   int no_pushes = 0;
 
+  LOG(DEBUG, "mem-comm: scatter: scattering for %d ranges\n", fc->no_ranges);
   for (int i = 0; i < fc->no_ranges; ++i) {
     thread_range_t r = fc->ranges[i];
     if (r.dest.node_index != cur_node) {
       if (cur_node != -1) {
         assert(no_pushes < MAX_NODES);
+        LOG(DEBUG, "mem-comm: scatter: scattering to node %d\n", cur_node);
         pending_request_t* p = 
           push_elems(cur_node, stub, first_range,
                      a*start_thread + b, a*end_thread + c);
@@ -348,9 +397,18 @@ void _memscatter_affine(fam_context_t* fc,
       end_thread = r.index_end;
     }
   }
+  // push to last node
+  assert(cur_node != -1);
+  assert(no_pushes < MAX_NODES);
+  LOG(DEBUG, "mem-comm: scatter: scattering to node %d\n", cur_node);
+  pending_request_t* p = 
+    push_elems(cur_node, stub, first_range,
+        a*start_thread + b, a*end_thread + c);
+  pending_pushes[no_pushes++] = p;
   // block until all the push operations complete
   // TODO: this is ugly; we block on one operation at a time.
   // What we'd really want is a semaphore 
+  LOG(DEBUG, "mem-comm: scatter: blocking for %d confirmation(s)\n", no_pushes);
   for (int i = 0; i < no_pushes; ++i) {
     block_for_confirmation(pending_pushes[i]); 
   }
@@ -366,11 +424,15 @@ void _gathermem_affine(
     int a, int b, int c) {
   int start_thread, end_thread;
   int cur_node = -1;
+  pending_request_t* pending_pulls[MAX_NODES];
+  int no_pulls = 0;
+
   for (int i = 0; i < fc->no_ranges; ++i) {
     thread_range_t r = fc->ranges[i];
     if (r.dest.node_index != cur_node) {
       if (cur_node != -1) {
-        pull_elems(cur_node, first_range, a*start_thread + b, a*end_thread + c);
+        pending_pulls[no_pulls++] = 
+          pull_elems(cur_node, first_range, a*start_thread + b, a*end_thread + c);
       }
       cur_node = r.dest.node_index;
       start_thread = r.index_start;
@@ -381,6 +443,17 @@ void _gathermem_affine(
       end_thread = r.index_end;
     }
   } 
+  // pull from the last node
+  assert(cur_node != -1);
+  pending_pulls[no_pulls++] = 
+    pull_elems(cur_node, first_range, a*start_thread + b, a*end_thread + c);
+  // block until all the push operations complete
+  // TODO: this is ugly; we block on one operation at a time.
+  // What we'd really want is a semaphore 
+  LOG(DEBUG, "mem-comm: gather: blocking for %d confirmation(s)\n", no_pulls);
+  for (int i = 0; i < no_pulls; ++i) {
+    block_for_confirmation(pending_pulls[i]); 
+  }
 }
 
 

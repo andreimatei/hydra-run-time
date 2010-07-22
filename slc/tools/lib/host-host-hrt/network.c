@@ -321,7 +321,7 @@ static int parse_incoming_memchunk(int incoming_index, char* buf, int len) {
  * and comes all in one piece.
  */
 static void handle_incoming_mem_chunk(int incoming_index) {
-  static int ping_id;
+  //static int ping_id;
   // TODO: don't assume that the header comes all in one piece
   char buf[10000];
   char* tmp = buf;
@@ -373,7 +373,7 @@ static void handle_incoming_mem_chunk(int incoming_index) {
           int dest_node = incoming_state[incoming_index].node_index;
           send_sctp_msg(dest_node, &req, sizeof(req));
 
-          send_ping(dest_node, 99000 + ping_id++, 0, NULL);  // FIXME: remove this; just for debugging
+          //send_ping(dest_node, 99000 + ping_id++, 0, NULL);  // FIXME: remove this; just for debugging
         } else {
           // the pending slot was local; write to it
           LOG(DEBUG, "network: handle_incoming_mem_chunk: sending local confirmation for received data\n");
@@ -593,9 +593,13 @@ void* delegation_interface(void* parm) {
       // rebulding of the sending sockets collection to take place. Maybe there's another way to interupt a select
       // when this collection is modified... Send a signal to this thread?
       LOG(DEBUG, "network: delegation interface: entering select\n");
+      assert(FD_ISSET(new_sending_socket_pipe_fd[0], &copy));
+      LOG(DEBUG, "network: delegation_interface: entering select. pipe fd %d is present\n", new_sending_socket_pipe_fd[0]);
       int res = select(FD_SETSIZE, &copy, &sending, NULL, NULL);//&time);
+      LOG(DEBUG, "network: delegation_interface: out of select!\n");
       if (res <= 0) handle_error("select");
       if (!FD_ISSET(new_sending_socket_pipe_fd[0], &copy)) { // if we got anything but the pipe, we need to treat it
+        LOG(DEBUG, "network: delegation interface: got out of select. It's not the pipe.\n");
         got_work = 1;
       } else {
         LOG(DEBUG, "network: delegation interface: we have something on the pipe; need to loop\n");
@@ -918,6 +922,8 @@ void init_network() {
   }
   // init new_sending_socket_pipe_fd
   if (pipe(new_sending_socket_pipe_fd) < 0) handle_error("pipe");
+  if (fcntl(new_sending_socket_pipe_fd[1], F_SETFL, O_NONBLOCK) == -1)
+    handle_error("fcntl");
 }
 
 /*
@@ -1092,7 +1098,10 @@ void enqueue_push_request(int node_index,
   ++no_push_requests[node_index];
 
   pthread_spin_unlock(&push_requests_locks[node_index]); 
+  LOG(DEBUG, "network: enqueue_push_request: enqueued push request. Informing delegation interface.\n");
+  LOG(DEBUG, "network: enqueue_push_request: writing to pipe fd %d\n", new_sending_socket_pipe_fd[1]);
   write(new_sending_socket_pipe_fd[1], "1", 1);
+  //close(new_sending_socket_pipe_fd[1]);  // FIXME: remove this
 }
 
 /*
