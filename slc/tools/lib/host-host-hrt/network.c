@@ -373,7 +373,6 @@ static void handle_incoming_mem_chunk(int incoming_index) {
           int dest_node = incoming_state[incoming_index].node_index;
           send_sctp_msg(dest_node, &req, sizeof(req));
 
-          //send_ping(dest_node, 99000 + ping_id++, 0, NULL);  // FIXME: remove this; just for debugging
         } else {
           // the pending slot was local; write to it
           LOG(DEBUG, "network: handle_incoming_mem_chunk: sending local confirmation for received data\n");
@@ -874,7 +873,9 @@ void send_quit_message_to_secondaries() {
                        sizeof(req), 
                        secondaries[i].addr_sctp->ai_addr, 
                        secondaries[i].addr_sctp->ai_addrlen,
-                       1, SCTP_UNORDERED, 0,0,0);
+                       1, 
+                       SCTP_UNORDERED,  // flags
+                       0,0,0);
     if (res < 0) handle_error("sctp_sendmsg");
     LOG(INFO, "sent quit message to secondary %d\n", i);
   }
@@ -890,7 +891,15 @@ void send_sctp_msg(int node_index, void* buf, int len) {
       len, 
       secondaries[node_index].addr_sctp->ai_addr, 
       secondaries[node_index].addr_sctp->ai_addrlen,
-      1, SCTP_UNORDERED, 0,0,0);
+      1, 
+      0, //SCTP_UNORDERED, // flags
+      0,0,0);
+  // TODO: the unordered flag was removed for now, because the current implementation of sync
+  // seems to need for the write to the "done" istruct to be done after the writes of all the shareds.
+  // Check if this is true, and add a param to this function specifying if the message has to be ordered.
+  // Or, add another version of the function.
+
+
   if (res < 0) handle_error("sctp_sendmsg");
 }
 
@@ -1101,7 +1110,6 @@ void enqueue_push_request(int node_index,
   LOG(DEBUG, "network: enqueue_push_request: enqueued push request. Informing delegation interface.\n");
   LOG(DEBUG, "network: enqueue_push_request: writing to pipe fd %d\n", new_sending_socket_pipe_fd[1]);
   write(new_sending_socket_pipe_fd[1], "1", 1);
-  //close(new_sending_socket_pipe_fd[1]);  // FIXME: remove this
 }
 
 /*
