@@ -229,6 +229,67 @@ class DefaultVisitor(BaseVisitor):
             ctd.ctype.accept(self)
             return ctd
 
+      def visit_gather(self, ga):
+            return ga
+
+      def visit_scatteraffine(self, sa):
+            sa.a.accept(self)
+            sa.b.accept(self)
+            sa.c.accept(self)
+            return sa
+
+      def visit_memactivate(self, sa):
+            return sa
+
+      def visit_mempropagate(self, sa):
+            return sa
+
+      def visit_memkind(self, k):
+            k.itemtype.accept(self)
+            if k.size is not None:
+                  k.size.accept(self)
+            return k
+
+      def visit_funparmmem(self, parm):
+            parm.kind.accept(self)
+            return parm
+
+      def visit_createargmem(self, arg):
+            arg.kind.accept(self)
+            return arg
+
+      def visit_memextend(self, me):
+            return me
+
+      def visit_memrestrict(self, re):
+            re.offset.accept(self)
+            re.size.accept(self)
+            return re
+
+      def visit_memalloc(self, ma):
+            ma.kind.accept(self)
+            return ma
+
+      def visit_memdesc(self, md):
+            md.kind.accept(self)
+            md.cptr.accept(self)
+            return md
+
+      def visit_memdef(self, md):
+            return md
+
+      def visit_getmemp(self, gp):
+            return gp
+
+      def visit_getmema(self, gp):
+            return gp
+
+      def visit_setmemp(self, gp):
+            return gp
+
+      def visit_setmema(self, gp):
+            return gp
+
 #### Scoped visitor: keep track of scopes ####
 
 class ScopedVisitor(DefaultVisitor):
@@ -469,5 +530,102 @@ class PrintVisitor(DefaultVisitor):
           ci.index.accept(self)
           self.__out.write('])')
           return ci
+
+    def visit_gather(self, ga):
+          self.__out.write(' sl_gather(%s)' % ga.name)
+          return ga
+
+    def visit_scatteraffine(self, sa):
+          self.__out.write(' sl_scatter_affine(%s, %s, ' % (sa.name, sa.rhs))
+          sa.a.accept(self)
+          self.__out.write(', ')
+          sa.b.accept(self)
+          self.__out.write(', ')
+          sa.c.accept(self)
+          self.__out.write(')')
+          return sa
+
+    def visit_memactivate(self, sa):
+          if sa.lhs:
+                self.__out.write(' sl_activate(%s, %s)' % (sa.lhs, sa.rhs))
+          else:
+                self.__out.write(' sl_activate(%s)' % sa.rhs)
+          return sa
+
+    def visit_mempropagate(self, sa):
+          self.__out.write(' sl_propagate(%s, %s)' % (sa.dir, sa.rhs))
+          return sa
+
+    def visit_memkind(self, mk):
+          self.__out.write(' sl_%s(' % mk.name)
+          if mk.itemtype:
+                mk.itemtype.accept(self)
+                if mk.size:
+                      self.__out.write(', ')
+                      mk.size.accept(self)
+          self.__out.write(')')
+          return mk
+          
+    def visit_funparmmem(self, parm):
+          self.__out.write(' sl_%s_mem(' % parm.type)
+          parm.kind.accept(self)
+          self.__out.write(', %s)' % parm.name)
+          return parm
+
+    def visit_createargmem(self, arg):
+          self.__out.write(' sl_%s_mem(' % arg.type)
+          arg.kind.accept(self)
+          self.__out.write(', %s' % arg.name)
+          if arg.rhs:
+                self.__out.write(', %s' % arg.rhs)
+          self.__out.write(')')
+          return arg
+
+    def visit_memextend(self, me):
+          self.__out.write(' sl_extend(%s, %s)' % (me.lhs, me.rhs))
+          return me
+
+    def visit_memrestrict(self, re):
+          self.__out.write(' sl_restrict(%s, %s, ' % (re.lhs, re.rhs))
+          re.offset.accept(self)
+          self.__out.write(', ')
+          re.size.accept(self)
+          self.__out.write(')')
+          return re
+
+    def visit_memalloc(self, ma):
+          self.__out.write(' sl_alloc(')
+          ma.kind.accept(self)
+          self.__out.write(', %s)' % ma.lhs)
+          return ma
+
+    def visit_memdesc(self, md):
+          self.__out.write(' sl_desc(')
+          md.kind.accept(self)
+          self.__out.write(', %s, ' % md.lhs)
+          md.cptr.accept(self)
+          self.__out.write(')')
+          return md
+
+    def visit_memdef(self, md):
+          self.__out.write(' sl_mem(%s)' % md.name)
+          return md
+    
+    def visit_getmemp(self, gp):
+          self.__out.write(' sl_getmp(%s, %s)' % (gp.lhs, gp.name))
+          return gp
+
+    def visit_getmema(self, gp):
+          self.__out.write(' sl_getma(%s, %s)' % (gp.lhs, gp.name))
+          return gp
+
+    def visit_setmemp(self, gp):
+          self.__out.write(' sl_setmp(%s, %s)' % (gp.name, gp.rhs))
+          return gp
+
+    def visit_setmema(self, gp):
+          self.__out.write(' sl_setma(%s, %s)' % (gp.name, gp.rhs))
+          return gp
+          
 
 __all__ = ['flatten', 'BaseVisitor', 'Dispatcher', 'DefaultVisitor', 'ScopedVisitor', 'PrintVisitor']

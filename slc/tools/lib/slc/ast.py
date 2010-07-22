@@ -284,12 +284,11 @@ class Attr(Item):
             payload = {}
         for k, v in payload.items():
             setattr(self, k, v)
-            
+
 class Program(Block):
     """
     Root node for a program.
     """
-
     pass
 
 
@@ -382,14 +381,12 @@ class ArgParm(Item):
     def name(self, name):
         self._name = lex.extract_id(self, name)
 
-
 class FunParm(ArgParm):
     """
     Base node type for function parameters.
 
     Used to represent ``sl_*parm``.
     """
-
     pass
 
 class CreateArg(ArgParm):
@@ -401,7 +398,6 @@ class CreateArg(ArgParm):
     def __init__(self, init = None, *args, **kwargs):
         super(CreateArg, self).__init__(*args, **kwargs)
         self.init = init
-        
 
 class VarUse(Item):
     """
@@ -549,4 +545,234 @@ class IndexDecl(Item):
     def __init__(self, indexname = None, *args, **kwargs):
         super(IndexDecl, self).__init__(*args, **kwargs)
         self.indexname = indexname
+
+class MemKind(Item):
+    """
+    a kind suitable for memdesc / memparm
+    """
+    def __init__(self, name, itemtype = None, size = None, *args, **kwargs):
+        super(MemKind, self).__init__(*args, **kwargs)
+        self.name = name
+        if not isinstance(itemtype, Block):
+            itemtype = Block(items = itemtype)
+        self.itemtype = itemtype
+        if size is not None and not isinstance(size, Block):
+            size = Block(items = size)
+        self.size = size
+
+class MemReader(Item):
+    """
+    Base class for operations that read descriptors
+    declared with memdef:
+
+    activate(..., X)
+    propagate(X)
+    restrict(..., X)
+    extend(..., X)
+    setmp(..., X)
+    setma(..., X)
+    scatter(..., X, ...)
+    """
+    def __init__(self, rhs = None, *args, **kwargs):
+        super(MemReader, self).__init__(*args, **kwargs)
+        self.rhs = rhs
+
+    @property
+    def rhs(self): return self._rhs
+
+    @rhs.setter
+    def rhs(self, rhs):
+        if rhs is None:
+            self._rhs = rhs
+        else:
+            self._rhs = lex.maybe_extract_id(self, rhs)
+
+class MemSetter(Item):
+    """
+    Base class for operations that set descriptors
+    declared with memdef:
+
+    alloc(X)
+    desc(X, ...)
+    activate(X, ...)
+    restrict(X, ...)
+    extend(X, ...)
+    getmp(X, ...)
+    getma(X, ...)
+    scatter(X, ..., ...)
+    """
+
+    def __init__(self, lhs = None, *args, **kwargs):
+        super(MemSetter, self).__init__(*args, **kwargs)
+        self.lhs = lhs
+
+    @property
+    def lhs(self): return self._lhs
+
+    @lhs.setter
+    def lhs(self, lhs):
+        if lhs is None:
+            self._lhs = None
+        else:
+            self._lhs = lex.maybe_extract_id(self, lhs)
+
+
+class MemDef(Item):
+    """
+    a declaration for a memory stub
+    """
+
+    def __init__(self, name = None, *args, **kwargs):
+        super(MemDef, self).__init__(*args, **kwargs)
+        self.name = name
+        self.set_op = None
+
+    @property
+    def name(self): return self._name
+
+    @name.setter
+    def name(self, name):
+        if name is None:
+            self._name = None
+        else:
+            self._name = lex.extract_id(self, name)
+
+
+class MemDesc(MemSetter):
+    """
+    A declaration for a descriptor for a previously
+    existing C pointer.
+    """
+
+    def __init__(self, kind = None, cptr = None, *args, **kwargs):
+        super(MemDesc, self).__init__(*args, **kwargs)
+        self.kind = kind
+        if cptr is not None and not isinstance(cptr, Block):
+            cptr = Block(items = cptr)
+        self.cptr = cptr
+
+class MemAlloc(MemSetter):
+    def __init__(self, kind = None, *args, **kwargs):
+        super(MemAlloc, self).__init__(*args, **kwargs)
+        self.kind = kind
+
+class MemRestrict(MemSetter, MemReader):
+    """
+    Make a restriction on an existing descriptor.
+    """
+    def __init__(self, offset = None, size = None, *args, **kwargs):
+        super(MemRestrict, self).__init__(*args, **kwargs)
+        if not isinstance(offset, Block):
+            offset = Block(items = offset)        
+        self.offset = offset
+        if not isinstance(size, Block):
+            size = Block(items = size)
+        self.size = size
+
+class MemExtend(MemSetter, MemReader):
+    """
+    Extend a multiarray with a new range
+    """
+    pass
+
+
+class MemActivate(MemSetter, MemReader):
+    """
+    Activate a descriptor, optionally produce a descriptor with
+    the provider set to local
+
+    This differs from other MemOps in that the left hand side 
+    is optional. Also the entire activate node should
+    evaluate to a C pointer
+    """
+    pass
+        
+class MemPropagate(MemReader):
+    def __init__(self, dir = None, *args, **kwargs):
+        super(MemPropagate, self).__init__(*args, **kwargs)
+        self.dir = dir
+
+    @property
+    def dir(self): return self._dir
+
+    @dir.setter
+    def dir(self, dir):
+        self._dir = lex.extract_id(self, dir).lower()
+
+class Gather(VarUse):
+    pass
+
+class ScatterAffine(VarUse, MemReader):
+    
+    def __init__(self, a = None, b = None, c = None, *args, **kwargs):
+        super(ScatterAffine, self).__init__(*args, **kwargs)
+        if not isinstance(a, Block):
+            a = Block(items = a)
+        self.a = a
+        if not isinstance(b, Block):
+            b = Block(items = b)
+        self.b = b
+        if not isinstance(c, Block):
+            c = Block(items = c)
+        self.c = c
+
+class SetMemA(VarUse, MemReader):
+    pass
+
+class SetMemP(VarUse, MemReader):
+    pass
+
+class GetMemA(VarUse, MemSetter):
+    pass
+
+class GetMemP(VarUse, MemSetter):
+    pass
+
+class ArgParmMem(Item):
+    """
+    Base node type for memory arguments/parameters.
+    """
+    def __init__(self, name = None, kind = None, type = None, init = None, *args, **kwargs):
+        super(ArgParmMem, self).__init__(*args, **kwargs)
+        self.name = name
+        self.kind = kind
+        self.type = type
+        self.seen_set = False
+        self.seen_get = False
+
+    @property
+    def name(self): return self._name
+
+    @name.setter
+    def name(self, name):
+        if name is None:
+            self._name = None
+        else:
+            self._name = lex.extract_id(self, name)
+
+
+class CreateArgMem(ArgParmMem, MemReader):
+    """
+    Create arguments that are memories.
+
+    Initializer (rhs) is optional.
+
+    Attribute getset_mode indicates whether the
+    argument is used with scatter/gather or getp/setp.
+    """
+
+    GETSET = 0
+    SCATTERGATHER = 1
+
+    def __init__(self, *args, **kwargs):
+        super(CreateArgMem, self).__init__(*args, **kwargs)
+        self.getset_mode = None
+
+        
+class FunParmMem(ArgParmMem):
+    """
+    Node for function parameters for memory objects.
+    """
+    pass
+
 

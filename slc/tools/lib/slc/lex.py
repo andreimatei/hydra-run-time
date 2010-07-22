@@ -17,3 +17,8 @@ def extract_id(context, name):
     (t, i) = is_simple_identifier(name)
     if not t: die("invalid identifier: '%s'" % name, context)
     return i
+
+def maybe_extract_id(context, name):
+    (t, i) = is_simple_identifier(name)
+    if not t: return None
+    return i
