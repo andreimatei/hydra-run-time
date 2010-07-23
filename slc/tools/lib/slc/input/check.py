@@ -384,15 +384,13 @@ class CheckVisitor(DefaultVisitor):
         if p.decl.getset_mode is not None and p.decl.getset_mode != p.decl.SCATTERGATHER:
             self.err("gather on argument '%s' incompatible with previous setma/getma" % p.name, p)
         p.decl.getset_mode = p.decl.SCATTERGATHER
-        return p
-    
-    visit_gather = visit_scattergather
-
-    def visit_scatteraffine(self, p):
-        p = self.visit_scattergather(p)
         p.a.accept(self)
         p.b.accept(self)
         p.c.accept(self)
+        return p
+    
+    visit_gatheraffine = visit_scattergather
+    visit_scatteraffine = visit_scattergather
 
     def visit_memactivate(self, a):
         if a.lhs is not None:

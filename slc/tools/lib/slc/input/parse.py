@@ -135,9 +135,12 @@ def parse_propagate(item):
                           rhs = item['name'],
                           dir = item['dir'])
 
-def parse_gather(item):
-      return Gather(loc = item['loc'],
-                    name = item['name'])
+def parse_gather_affine(item):
+      return GatherAffine(loc = item['loc'],
+                          name = item['name'],
+                          a = parse_block(item['a']),
+                          b = parse_block(item['b']),
+                          c = parse_block(item['c']))
 
 def parse_scatter_affine(item):
       return ScatterAffine(loc = item['loc'],
@@ -164,7 +167,7 @@ def parse_block(items):
                   elif t == 'memextend': b += parse_memextend(item)
                   elif t == 'memactivate': b += parse_activate(item)
                   elif t == 'mempropagate': b += parse_propagate(item)
-                  elif t == 'memgather': b += parse_gather(item)
+                  elif t == 'memgather_affine': b += parse_gather_affine(item)
                   elif t == 'memscatter_affine': b += parse_scatter_affine(item)
                   elif t == 'getp': b += parse_varuse(GetP(), item)
                   elif t == 'setp': b += parse_varuse(SetP(), item)
