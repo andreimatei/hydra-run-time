@@ -1,3 +1,34 @@
+2010-07-20  Raphael 'kena' Poss  <r.c.poss@uva.nl>
+
+	Extend the test suite.
+
+	* 0_slc/1_createargs/shfloat.c. New. 
+
+2010-07-12  Raphael 'kena' Poss  <r.c.poss@uva.nl>
+
+	Extend the test suite.
+
+	* 0_slc/1_create/fiduse.c,
+	* 0_slc/1_create/fiduse2.c: New.
+
+2010-07-02  Raphael 'kena' Poss  <r.c.poss@uva.nl>
+
+	Extend the test suite.
+
+	* 0_slc/0_trivial/ret.c: New.
+
+2010-07-01  Raphael 'kena' Poss  <r.c.poss@uva.nl>
+
+	Extend the test suite.
+
+	* 0_slc/1_createargs/mutable.c: New.
+
+2010-06-21  Raphael 'kena' Poss  <r.c.poss@uva.nl>
+
+	Extend the test suite.
+
+	* 0_slc/3_index/clobber.c: New. (sl_index after function call)
+
 2010-06-13  Raphael 'kena' Poss  <r.c.poss@uva.nl>
 
 	Use standard C header names in tests.

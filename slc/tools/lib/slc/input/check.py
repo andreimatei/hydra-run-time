@@ -57,7 +57,11 @@ class CheckVisitor(DefaultVisitor):
         pdic[parm.name] = parm
 
         return parm
-        
+
+    def visit_funparmmem(self, parm):
+        p = self.visit_funparm(parm)
+        p.kind.accept(self)
+        return p
 
     def visit_fundecl(self, fd):
         fd.parm_dic = {}
@@ -130,10 +134,13 @@ class CheckVisitor(DefaultVisitor):
         scope.arg_dic = {}
         scope.local_args = []
         scope.hot_args = set()
+        scope.mem_dic = {}
+        scope.local_mems = []
 
         if self.cur_scope is not None:
             scope.hot_args.update(self.cur_scope.hot_args)
             scope.arg_dic.update(self.cur_scope.arg_dic)
+            scope.mem_dic.update(self.cur_scope.mem_dic)
 
         self.enter(cur_scope = scope)
         self.dispatch(scope, seen_as = Block)
@@ -141,7 +148,8 @@ class CheckVisitor(DefaultVisitor):
 
         return scope
 
-    def visit_getsetp(self, p):
+    def visit_getsetp_gen(self, p):
+
         if self.cur_fun is None:
             self.err("access to thread parameter outside of thread function definition", p)
             return p
@@ -157,17 +165,37 @@ class CheckVisitor(DefaultVisitor):
         if hasattr(p, 'rhs'):
             if self.cur_fun.parm_dic[p.name].type.startswith('gl'):
                 self.err("invalid write to global thread parameter '%s'" % p.name, p)
-            p.rhs.accept(self)
+            if isinstance(p.rhs, Block):
+                p.rhs.accept(self)
             p.decl.seen_set = True
         else:
             p.decl.seen_get = True
 
         return p
 
+    def visit_getsetp(self, p):
+        p = self.visit_getsetp_gen(p)
+        if not isinstance(p.decl, FunParm):
+            self.err("invalid getp/setp on memory argument '%s' (use getmp/setmp)" % p.name, p)
+        return p
+
     visit_getp = visit_getsetp
     visit_setp = visit_getsetp
 
-    def visit_getseta(self, p):
+    def visit_getsetmp(self, p):
+        p = self.visit_getsetp_gen(p)
+        if not isinstance(p.decl, FunParmMem):
+            self.err("invalid memory use of scalar parameter '%s' (use getp/setp)" % p.name, p)
+        if hasattr(p, 'lhs'):
+            p.lhs_decl = self.check_memwrite(p.lhs, p)
+        if hasattr(p, 'rhs'):
+            p.rhs_decl = self.check_memuse(p.rhs, p)
+        return p
+
+    visit_getmemp = visit_getsetmp
+    visit_setmemp = visit_getsetmp
+
+    def visit_getseta_gen(self, p, DefA = CreateArg):
         if self.cur_scope is None:
             self.err("access to create argument outside of C block", p)
             return p
@@ -175,10 +203,12 @@ class CheckVisitor(DefaultVisitor):
         adic = self.cur_scope.arg_dic
         if p.name not in adic:
             self.err("create argument '%s' undeclared (first use in this scope; reported only once)" % p.name, p)
-            a = CreateArg(loc = p.loc, name = p.name)
+            a = DefA(loc = p.loc, name = p.name)
             a.scope = self.cur_scope
             adic[p.name] = a
             self.cur_scope.local_args.append(p.name)
+            p.decl = a
+            p.scope = self.cur_scope
             return p
 
         p.decl = adic[p.name]
@@ -189,7 +219,8 @@ class CheckVisitor(DefaultVisitor):
                 self.err("write to create argument '%s' outside of create construct" % p.name, p)
                 self.err("  after create construct starting here", p.decl.create)
                 self.err("  after create construct ending here", p.decl.create.loc_end)
-            p.rhs.accept(self)
+            if isinstance(p.rhs, Block):
+                p.rhs.accept(self)
             p.decl.seen_set = True
         else:
             if p.name in p.scope.hot_args:
@@ -203,12 +234,18 @@ class CheckVisitor(DefaultVisitor):
 
         return p
 
+    def visit_getseta(self, p):
+        p = self.visit_getseta_gen(p)
+        if not isinstance(p.decl, CreateArg):
+            self.err("invalid geta/seta on memory argument '%s' (use getma/setma)" % p.name, p)
+        return p
+
     visit_geta = visit_getseta
     visit_seta = visit_getseta
 
     def visit_createarg(self, arg):
         if not self.in_arg_list:
-            self.err("create argument declaration outside of argument list", parm)
+            self.err("create argument declaration outside of argument list", arg)
             return arg
 
         assert self.cur_create is not None
@@ -233,6 +270,11 @@ class CheckVisitor(DefaultVisitor):
 
         return arg
 
+    def visit_createargmem(self, arg):
+        a = self.visit_createarg(arg)
+        a.kind.accept(self)
+        return a
+
     def visit_create(self, c):
         if self.cur_scope is None:
             self.err("'create' outside of C block", c)
@@ -256,9 +298,17 @@ class CheckVisitor(DefaultVisitor):
         # defining arguments, so that they can reference upper
         # level declarations
         for a in c.args:
-            if a.init is not None:
+            if hasattr(a, 'init') and a.init is not None:
+                # scalar initializer
+                assert isinstance(a, CreateArg)
                 a.init.accept(self)
                 a.seen_set = True
+            if hasattr(a, 'rhs') and a.rhs is not None:
+                # memory initializer
+                assert isinstance(a, CreateArgMem)
+                a.rhs_decl = self.check_memuse(a.rhs, a)
+                a.seen_set = True
+                a.getset_mode = a.GETSET
 
         c.arg_dic = {}
 
@@ -282,6 +332,125 @@ class CheckVisitor(DefaultVisitor):
             c.result_lvalue.accept(self)
 
         return c
+
+    def check_memuse(self, rhs, ctx):
+        mdic = self.cur_scope.mem_dic
+        if rhs not in mdic:
+            self.err("memory object '%s' undeclared (first use in this scope; reported only once)" % rhs, ctx)
+            m = MemDef(loc = ctx.loc, name = rhs)
+            m.scope = self.cur_scope
+            mdic[rhs] = m
+            return m
+
+        m = mdic[rhs]
+        return m
+
+    def check_memwrite(self, lhs, ctx):
+        m = self.check_memuse(lhs, ctx)
+
+        if m.set_op is None:
+            m.set_op = ctx
+        elif not isinstance(m.set_op, MemExtend):
+            if isinstance(ctx, m.set_op.__class__):
+                warn("possible duplicate initialization of '%s'" % lhs, ctx)
+                warn("  previous initialization was here", m.set_op)
+            else:
+                self.err("incompatible initialization of memory object '%s'" % lhs, ctx)
+                self.err("  previous initialization was here", m.set_op)            
+        return m
+
+    def visit_usema(self, p):
+        p = self.visit_getseta_gen(p, CreateArgMem)
+        if not isinstance(p.decl, CreateArgMem):
+            self.err("invalid memory use of scalar argument '%s' (use geta/seta)" % p.name, p)
+        if hasattr(p, 'lhs'):
+            p.lhs_decl = self.check_memwrite(p.lhs, p)
+        if hasattr(p, 'rhs'):
+            p.rhs_decl = self.check_memuse(p.rhs, p)
+        return p
+
+    def visit_getsetma(self, p):
+        p = self.visit_usema(p)
+        if p.decl.getset_mode is not None and p.decl.getset_mode != p.decl.GETSET:
+            self.err("get/set on argument '%s' incompatible with previous scatter/gather" % p.name, p)
+        p.decl.getset_mode = p.decl.GETSET
+        return p
+
+    visit_getmema = visit_getsetma
+    visit_setmema = visit_getsetma
+
+    def visit_scattergather(self, p):
+        p = self.visit_usema(p)
+        if p.decl.getset_mode is not None and p.decl.getset_mode != p.decl.SCATTERGATHER:
+            self.err("gather on argument '%s' incompatible with previous setma/getma" % p.name, p)
+        p.decl.getset_mode = p.decl.SCATTERGATHER
+        return p
+    
+    visit_gather = visit_scattergather
+
+    def visit_scatteraffine(self, p):
+        p = self.visit_scattergather(p)
+        p.a.accept(self)
+        p.b.accept(self)
+        p.c.accept(self)
+
+    def visit_memactivate(self, a):
+        if a.lhs is not None:
+            a.lhs_decl = self.check_memwrite(a.lhs, a)
+        a.rhs_decl = self.check_memuse(a.rhs, a)
+        return a
+
+    def visit_mempropagate(self, p):
+        p.rhs_decl = self.check_memuse(p.rhs, p)
+        return p
+
+    def visit_memextend(self, me):
+        me.lhs_decl = self.check_memwrite(me.lhs, me)
+        me.rhs_decl = self.check_memuse(me.rhs, me)
+        return me
+
+    def visit_memrestrict(self, mr):
+        mr.lhs_decl = self.check_memwrite(mr.lhs, mr)
+        mr.rhs_decl = self.check_memuse(mr.rhs, mr)
+        mr.offset.accept(self)
+        mr.size.accept(self)
+        return mr
+
+    def visit_memalloc(self, ma):
+        ma.lhs_decl = self.check_memwrite(ma.lhs, ma)
+        ma.kind.accept(self)
+        return ma
+    
+    def visit_memdesc(self, md):
+        md.lhs_decl = self.check_memwrite(md.lhs, md)
+        md.kind.accept(self)
+        md.cptr.accept(self)
+        return md
+
+    def visit_memdef(self, md):
+        assert self.cur_scope is not None
+
+        scope = self.cur_scope
+
+        mdic = scope.mem_dic
+        ml = scope.local_mems
+        if md.name in ml:
+            self.err("redefinition of memory object '%s'" % md.name, md)
+            self.err("previous definition of '%s' was here" % md.name, mdic[md.name])
+            return md
+        
+        # cross-link for later
+        md.scope = scope
+        ml.append(md.name)
+        mdic[md.name] = md
+
+        return md
+        
+
+# FIXME: need extra visitor to check kind coherency:
+# - extend only applies to multiarray
+# - desc only applies to arrays
+# - restrict only applies to arrays
 
 __all__ = ['CheckVisitor']
 

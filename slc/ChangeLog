@@ -1,3 +1,294 @@
+2010-07-20  Raphael 'kena' Poss  <r.c.poss@uva.nl>
+
+	Fix bug in MT-Alpha code generation.
+
+	* tools/lib/slc/mtalpha/visitors.py (TFun_2_MTATFun.visit_setp)
+	(TFun_2_MTATFun.visit_getp): Properly segregate accesses to int
+	and float registers to protect from bug in GCC.
+
+2010-07-20  Raphael 'kena' Poss  <r.c.poss@uva.nl>
+
+	Fix support for `break' in MT-Alpha code generation.
+
+	* tools/lib/slc/mtalpha/visitors.py (TFun_2_MTATFun.visit_break):
+	Do not use `__builtin_unreachable' since we are not yet using GCC
+	4.5.
+
+2010-07-16  Raphael 'kena' Poss  <r.c.poss@uva.nl>
+
+	Minor SEP initialization updates.
+
+	* lib/src/mtsep.c: Notify progress for each core. Properly report
+	the existence of the first place.
+
+2010-07-16  Raphael 'kena' Poss  <r.c.poss@uva.nl>
+
+	Add support for new performance counters.
+
+	* lib/include/svp/perf.h: New counter for exclusive allocate queue
+	size.
+	* lib/src/perf.c: Name the new counter. Also compute average.
+
+2010-07-12  Raphael 'kena' Poss  <r.c.poss@uva.nl>
+
+	Reinstate support for MT family IDs.
+
+	* tools/lib/t-spr/slimpl.m4 (sl_create),
+	* tools/lib/slc/ast.py (Create.__init__),
+	* tools/lib/slc/input/parse.py (parse_create): Propagate the FID lvalue.
+
+	* tools/lib/slc/lower/lowercreate.py
+	(Create_2_LowCreate.visit_create): Define the FID temporary here
+	and assign the FID lvalue in the body always.
+
+	* tools/lib/slc/mtalpha/visitors.py
+	(Create_2_MTACreate.visit_lowcreate): Use it.
+
+2010-07-11  Raphael 'kena' Poss  <r.c.poss@uva.nl>
+
+	More resource deadlock prevention.
+
+	* tools/include/svp/delegate.h: Make the default place identifier
+	`soft' to prevent resource deadlocks.
+	* tools/lib/slc/mtalpha/visitors.py
+	(Create_2_MTACreate.visit_lowcreate): Force suspend bit when
+	creating with no `seq' alternative.
+
+2010-07-11  Raphael 'kena' Poss  <r.c.poss@uva.nl>
+
+	Add support for new performance counters.
+
+	* lib/include/svp/perf.h: New counters for TT and FT occupancy.
+	* lib/src/perf.h: Name the new counters. Also support computer
+	columns.
+
+2010-07-11  Raphael 'kena' Poss  <r.c.poss@uva.nl>
+
+	Fix bug in `spr'.
+
+	* tools/lib/slc/lower/seq.py (TFun_2_CFun): Fix support for thread
+	function pointer declarations.
+
+2010-07-06  Raphael 'kena' Poss  <r.c.poss@uva.nl>
+
+	Enhance support for `_mutable' global thread parameters.
+
+	* tools/lib/slc/lower/seq.py (TFun_2_CFun.visit_funparm): Do not
+	declare `_mutable' parameters with the `register' qualifier, since
+	they should have an address.
+
+2010-07-05  Raphael 'kena' Poss  <r.c.poss@uva.nl>
+
+	Fix bug in `spr'.
+
+	A large inefficiency would cause exponential space complexity
+	during transformation in the depth of C scope nesting. This would
+	cause exceedingly large compilation times and/or stack blowouts
+	for large programs.
+
+	* tools/lib/slc/visitors.py (ScopedVisitor): Remember the current
+	stack of C scopes.
+
+	* tools/lib/slc/lower/split.py (SplitCreates.visit_lowcreate):
+	Also memoize the stack of current scopes, so that they are not
+	duplicated when duplicating the `Create' objects.
+
+2010-07-02  Raphael 'kena' Poss  <r.c.poss@uva.nl>
+
+	Allow `return' to terminate the current thread.
+
+	* tools/lib/t-sppalpha/slimpl.m4,
+	* tools/lib/t-spr/slimpl.m4,
+	* tools/lib/t-utc0/slimpl.m4 (sl_def, sl_enddef): Alias `return'
+	to `sl_end_thread'. (Syntax sugar)
+
+2010-07-02  Raphael 'kena' Poss  <r.c.poss@uva.nl>
+
+	Allow the `utc0' target to run again.
+
+	* tools/bin/spp (main): Allow module `utc0'. 
+
+2010-07-02  Raphael 'kena' Poss  <r.c.poss@uva.nl>
+
+	Fix bug in MT-Alpha code generation.
+
+	When a program of the following form is compiled:
+
+	{
+	   foo();
+	   p[...] = ...;
+	}
+
+	Then the instruction sequence becomes:
+
+	   jsr
+	   ldah $gp.... !gpdisp!... # gp reload 1st half
+	   stq ...
+	   ...
+	   lda $gp, ... !gpdisp!... # gp reload 2nd half
+	   ...
+	   ret
+
+	As an optimization, we remove all the load instructions that
+	precede "ret" (end thread) because they are not necessary. However
+	when doing so we may remove half of a GP reload. This makes the
+	other half invalid (cannot be assembled on its own).
+
+	This is fixed in this changeset by removing both halves of an
+	unneeded GP reload.
+
+	* tools/lib/slc/mtalpha/asmproc/base.py (munchret): Keep track of
+	the deleted `lda' instructions that correspond to GP reloads.
+
+	* tools/lib/slc/mtalpha/asmproc/base.py (killgpdisp): New. Remove
+	the `ldah' instructions corresponding to killed GP reloads.
+
+	* tools/lib/slc/mtalpha/asmproc/base.py (_filter_inner): Register
+	the new phase.
+
+2010-07-01  Raphael 'kena' Poss  <r.c.poss@uva.nl>
+
+	Enhance undocumented headers.
+
+	* lib/include/undocumented.h: Emit warning on use (should not be
+	used).
+	* lib/include/sac_helpers.h: Use standard header names.
+
+2010-07-01  Raphael 'kena' Poss  <r.c.poss@uva.nl>
+
+	Fix support for `_mutable' parameter definitions.
+
+	* tools/lib/t-spr/slimpl.m4,
+	* tools/lib/t-sppalpha/slimpl.m4: Fix definitions of
+	`sl_glparm_mutable' and `sl_glfparm_mutable'.
+
+	* tools/lib/slc/input/parse.py (parse_argparm): Tolerate parameter
+	types ending with `_parm'.
+
+	* tools/lib/slc/mtalpha/visitors.py (TFun_2_MTATFun.visit_fundef):
+	Fix typo `aname' -> `name'.
+
+2010-06-26  Raphael 'kena' Poss  <r.c.poss@uva.nl>
+
+	Optimize `slr' for the `ptl' target.
+
+	Data layout for `ptl' and `seqc' are the same since they both use
+	the host data layout. Acknowledge that and optimize the former by
+	using the same `slr' tag as the latter.
+
+	* tools/lib/host-host-ptl/slrt.c: Remove.
+	* tools/lib/host-host-seqc/slrt.c: Copy to...
+	* tools/lib/host-host-ptl/slrt.c: ...here.
+
+2010-06-26  Raphael 'kena' Poss  <r.c.poss@uva.nl>
+
+	Enhance portability. 
+
+	* tools/lib/load.c: Do not try to use `argv' from the environment,
+	since this is non-portable.
+
+2010-06-24  Raphael 'kena' Poss  <r.c.poss@uva.nl>
+
+	Fix packaging.
+
+	* tools/lib/Makefile.am (pythondir, install-data-hook): Let the
+	Python files be installed to the regular Python lib dir. Make a
+	symbolic link in $pkglibdir instead of a copy.
+
+2010-06-24  Raphael 'kena' Poss  <r.c.poss@uva.nl>
+
+	Change installation directory for the Python library.
+
+	* tools/lib/Makefile.am (pythondir): Force install Python files to
+	$pkglibdir, so that the path to the Python library is not
+	dependent on the Python version.
+
+	* build-aux/slc.m4: Update settings for `$PYTHONPATH' accordingly.
+
+2010-06-22  Raphael 'kena' Poss  <r.c.poss@uva.nl>
+
+	Extend the `ptl' back-end.
+
+	* tools/lib/t-ptl/include/sl_support.h: Allow to change the
+	µTC-ptl that gets included when using a custom runtime.
+
+2010-06-22  Raphael 'kena' Poss  <r.c.poss@uva.nl>
+
+	Minor fix.
+	
+	* lib/src/tlstack_malloc.c: Fix typo in comment.
+
+2010-06-22  Raphael 'kena' Poss  <r.c.poss@uva.nl>
+
+	More diversity with memory allocators.
+
+	Requested by UH: it should be possible to disable the TLS-based
+	heap allocator. Also, the stack-like TLS-based allocator should
+	work side-by-side with the TLS-based heap allocator.
+
+	* lib/src/tlstack_malloc.c: New. This implement stack-like
+	allocation at the bottom of the TLS stack space.
+	* lib/src/mtalpha.mk: Update accordingly.
+
+	* lib/src/malloc_wrappers.c: New.
+	* lib/src/mtalpha.mk: New target `libmalloc_notls.a' which can
+	disable the TLS-based heap allocator when linked against a
+	program. Place this target and `libm.a' in variant-independent
+	directories.
+
+	* tools/bin/cce.in: Use variant-independent directories in the
+	library search path.
+
+2010-06-21  Raphael 'kena' Poss  <r.c.poss@uva.nl>
+
+	Fix bug in MT-Alpha code generation.
+
+	The thread index would not be set properly if the `sl_index'
+	declaration was placed later than the start of the thread function
+	body (e.g. after a function call). Reported by M. Hicks and
+	M. Lankamp.
+
+	* tools/lib/slc/mtalpha/visitors.py (TFun_2_MTATFun.visit_fundef),
+	* tools/lib/t-sppalpha/include/sl_support.h (__sl_declindex):
+	Force a dependency on the `asm' construct to avoid (erroneous)
+	elision by the code generator.
+
+2010-06-17  Raphael 'kena' Poss  <r.c.poss@uva.nl>
+
+	Use exclusive create to allocate initial place.
+
+	* lib/src/mtinit.c: Do it.
+
+2010-06-17  Raphael 'kena' Poss  <r.c.poss@uva.nl>
+
+	Extend language for exclusive creates.
+
+	* tools/lib/t-spr/slimpl.m4: New attribute ``sl__exclusive``.
+
+	* tools/lib/slc/lower/split.py (SplitCreates.visit_lowcreate):
+	Avoid generating alternative when delegating exclusively.
+
+	* tools/lib/slc/mtalpha/visitors.py
+	(Create_2_MTACreate.visit_lowcreate): Do not warn when delegating
+	exclusively and no alternative is available.
+
+2010-06-17  Raphael 'kena' Poss  <r.c.poss@uva.nl>
+
+	Enhance the place allocator.
+
+	* lib/include/svp/sep.h: Define new policies for exclusive places
+	and sharing.
+	
+	* lib/src/mtsep.c: Support allocation of exclusive and shared
+	places. Generate separate place identifiers for both. Properly
+	indicate that the root place is shared.
+
+2010-06-17  Raphael 'kena' Poss  <r.c.poss@uva.nl>
+
+	Whitespace.
+
+	* lib/src/mtsep.c: Re-indent. 
+
 2010-06-14  Raphael 'kena' Poss  <r.c.poss@uva.nl>
 
 	* doc/NEWS.txt: Initialize for 3.1.x.

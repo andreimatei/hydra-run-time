@@ -16,6 +16,8 @@ class Create_2_LowCreate(DefaultVisitor):
 
         cr.cvar_exitcode = CVarDecl(loc = cr.loc_end, name = 'C$R$%s' % cr.label, ctype = 'long')
         decls += cr.cvar_exitcode
+        cr.cvar_fid = CVarDecl(loc = cr.loc, name = 'C$F$%s' % cr.label, ctype = 'long')
+        decls += cr.cvar_fid
 
         for item in ('place', 'start', 'limit', 'step', 'block'):
             var = CVarDecl(loc = cr.loc, name = 'C$%s$%s' % (item, cr.label), ctype = 'long')
@@ -39,28 +41,38 @@ class Create_2_LowCreate(DefaultVisitor):
 
         newbody = Block(loc = cr.body.loc, loc_end = cr.body.loc_end)
         for a in cr.args:
-            argvar = CVarDecl(loc = a.loc, name = 'C$a$%s' % a.name, ctype = a.ctype)
-            
-            decls += argvar
-            a.cvar = argvar
+            if isinstance(a, CreateArgMem):
+                if a.rhs is not None:
+                    setma = SetMemA(loc = cr.loc, name = a.name, rhs = a.rhs)
+                    setma.rhs_decl = cr.scope.mem_dic[a.rhs]
+                    newbody += (Opaque(';') + setma)
+            else:
+                assert isinstance(a, CreateArg)
+                argvar = CVarDecl(loc = a.loc, name = 'C$a$%s' % a.name, ctype = a.ctype)
 
-            if a.init is not None:
-                initvar = CVarDecl(loc = a.loc, name = 'C$ai$%s' % a.name, ctype = a.ctype)
+                decls += argvar
+                a.cvar = argvar
 
-                decls += initvar
-                a.cvar_init = initvar
+                if a.init is not None:
+                    initvar = CVarDecl(loc = a.loc, name = 'C$ai$%s' % a.name, ctype = a.ctype)
 
-                newbl.append(CVarSet(loc = a.loc, decl = initvar, 
-                                     rhs = a.init.accept(self)) + ';')
+                    decls += initvar
+                    a.cvar_init = initvar
 
-                seta = SetA(loc = a.loc, name = a.name, 
-                            rhs = CVarUse(decl = initvar))
-                seta.decl = a
-                seta.scope = cr.scope
-                a.seen_set = True
-                
-                newbody += (Opaque(';') + seta)
+                    newbl.append(CVarSet(loc = a.loc, decl = initvar, 
+                                         rhs = a.init.accept(self)) + ';')
 
+                    seta = SetA(loc = a.loc, name = a.name, 
+                                rhs = CVarUse(decl = initvar))
+                    seta.decl = a
+                    seta.scope = cr.scope
+                    a.seen_set = True
+
+                    newbody += (Opaque(';') + seta)
+
+        if cr.fid_lvalue is not None:
+            newbody += (flatten(cr.loc, "; (") + cr.fid_lvalue.accept(self) + ') = ' +
+                        CVarUse(loc = cr.loc, decl = cr.cvar_fid))
 
         lc.body = newbody
         lc.body += cr.body.accept(self)
