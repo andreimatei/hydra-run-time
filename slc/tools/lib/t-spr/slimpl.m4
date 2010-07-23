@@ -284,9 +284,12 @@ m4_define([[sl_scatter_affine]],[[m4_dnl
 [['c':[r""" ]]m4_ifblank([[$5]],0,[[$5]])[[ """]}, r"""]]m4_dnl
 ]])
 
-m4_define([[sl_gather]],[[m4_dnl
+m4_define([[sl_gather_affine]],[[m4_dnl
 [[""", {'loc':r"""]]__file__:__line__[[""",]]m4_dnl
-[['type':'memgather',]]m4_dnl
+[['type':'memgather_affine',]]m4_dnl
+[['a':[r""" ]]m4_ifblank([[$2]],1,[[$2]])[[ """],]]m4_dnl
+[['b':[r""" ]]m4_ifblank([[$3]],0,[[$3]])[[ """],]]m4_dnl
+[['c':[r""" ]]m4_ifblank([[$4]],0,[[$4]])[[ """],]]m4_dnl
 [['name':"""$1"""}, r""" ]]m4_dnl
 ]])
 

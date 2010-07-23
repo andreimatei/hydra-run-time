@@ -229,7 +229,10 @@ class DefaultVisitor(BaseVisitor):
             ctd.ctype.accept(self)
             return ctd
 
-      def visit_gather(self, ga):
+      def visit_gatheraffine(self, ga):
+            ga.a.accept(self)
+            ga.b.accept(self)
+            ga.c.accept(self)
             return ga
 
       def visit_scatteraffine(self, sa):
@@ -531,9 +534,15 @@ class PrintVisitor(DefaultVisitor):
           self.__out.write('])')
           return ci
 
-    def visit_gather(self, ga):
-          self.__out.write(' sl_gather(%s)' % ga.name)
-          return ga
+    def visit_gatheraffine(self, sa):
+          self.__out.write(' sl_gather_affine(%s, ' % sa.name)
+          sa.a.accept(self)
+          self.__out.write(', ')
+          sa.b.accept(self)
+          self.__out.write(', ')
+          sa.c.accept(self)
+          self.__out.write(')')
+          return sa
 
     def visit_scatteraffine(self, sa):
           self.__out.write(' sl_scatter_affine(%s, %s, ' % (sa.name, sa.rhs))

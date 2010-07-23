@@ -699,13 +699,9 @@ class MemPropagate(MemReader):
     def dir(self, dir):
         self._dir = lex.extract_id(self, dir).lower()
 
-class Gather(VarUse):
-    pass
-
-class ScatterAffine(VarUse, MemReader):
-    
+class AffineBase(VarUse):
     def __init__(self, a = None, b = None, c = None, *args, **kwargs):
-        super(ScatterAffine, self).__init__(*args, **kwargs)
+        super(AffineBase, self).__init__(*args, **kwargs)
         if not isinstance(a, Block):
             a = Block(items = a)
         self.a = a
@@ -715,6 +711,12 @@ class ScatterAffine(VarUse, MemReader):
         if not isinstance(c, Block):
             c = Block(items = c)
         self.c = c
+
+class GatherAffine(AffineBase):
+    pass
+
+class ScatterAffine(AffineBase, MemReader):
+    pass
 
 class SetMemA(VarUse, MemReader):
     pass
