@@ -1,4 +1,4 @@
-<# t-spr/slimpl.m4: this file is part of the SL toolchain.
+# t-spr/slimpl.m4: this file is part of the SL toolchain.
 # 
 # Copyright (C) 2008,2009,2010 Universiteit van Amsterdam
 #
