@@ -167,6 +167,7 @@ class Create_2_HydraCall(ScopedVisitor):
         newbl.append(create_call + ';\n')
 
         self.__first_tc = CVarUse(decl = first_tc_var)
+        # FIXME: we also have __cur_fam_context. Keep only one
         self.__fam_context = CVarUse(decl = fam_context_var)  
         
         # consume body
@@ -197,6 +198,33 @@ class Create_2_HydraCall(ScopedVisitor):
         newbl.append(sync_call_assignment)
                                         
         return newbl
+    
+    def visit_memactivate(self, activate):
+        #FIXME
+        #attn: lhs is optional (might be None)
+        pass
+
+    def visit_scatteraffine(self, scatter):
+        newbl = []
+        a = scatter.a
+        b = scatter.b
+        c = scatter.c
+        stub = scatter.rhs_decl.cvar_stub
+        desc = scatter.rhs_decl.cvar_desc
+        create = scatter.decl.create
+        print "seeing scatter !!!"
+        fam_context_decl = self.__cur_fam_context
+        first_range = CVarUse(decl = desc) + ".ranges[0]";
+        newbl.append(flatten(scatter.loc, "_memscatter_affine(&") + CVarUse(decl = fam_context_decl) +
+                     ", " + CVarUse(decl = stub) + ', ' + first_range + ',' + a + ',' + b + ',' + c
+                    )
+        # create a stub and treat it as a sl_setma(stub)
+        # set the S bit on the stub that is being passed
+        scatter.rhs_decl = None
+        scatter.rhs = "stub_2_long(_stub_2_canonical_stub(" + CVarUse(decl = stub) + " , 1)"
+        newbl.append(visit_setmema(self, scatter))
+        
+        return newbl
 
 class TFun_2_HydraCFunctions(DefaultVisitor):
     def __init__(self, *args, **kwargs):
@@ -204,11 +232,27 @@ class TFun_2_HydraCFunctions(DefaultVisitor):
         #self.__shlist = None
         #self.__gllist = None
 
+    def visit_getmemp(self, getp):
+        newbl = []
+        param = self.__paramNames_2_params[getp.name]
+       
+        if not param.isShared:
+            stub_decl = getp.lhs_decl.cvar_stub
+            desc_decl = getp.lhs_decl.cvar_desc
+            stub_read_cmd = '_long_2_stub(read_istruct(&_cur_tc->globals[%d], _get_parent_ident()))' % param.index
+        else:
+            #FIXME
+            pass
+    
+        # emit the initialization of the local stub
+        newbl.append(flatten(getp.loc, CVarUse(decl = stub_decl) + ' = ' + stub_read_cmd));
+        return newbl
 
     def visit_getp(self, getp):
         newbl = []
         param = self.__paramNames_2_params[getp.name]
-        
+       
+        #FIXME: remove this part with read_cmd; it was added for trying to support a form of mem parm, needs to go now 
         if not param.isShared:
             read_cmd = 'read_istruct(&_cur_tc->globals[%d], _get_parent_ident())' % param.index
         else: #shared
@@ -297,6 +341,9 @@ class TFun_2_HydraCFunctions(DefaultVisitor):
             parm.index = self.__gl_parm_index
             self.__gl_parm_index += 1
         return parm
+
+    def visit_funparmmem(self, parm):
+        return visit_funparm(self, parm)
 
     def visit_fundecl(self, fundecl, keep = False, omitextern = False):
         self.__sh_parm_index = 0  # counter for the number of shareds seen
@@ -512,7 +559,32 @@ class TFun_2_HydraCFunctions(DefaultVisitor):
     def visit_endthread(self, et):
         return flatten(et.loc, " return 0 ")
 
+class Mem_2_HRT(DefaultVisitor):
 
-__all__ = ["Create_2_HydraCall", "TFun_2_HydraCFunctions"]
+    def visit_memdef(self, d):
+        scope = d.scope
+        stub_decl = CVarDecl(loc = d.loc, name = "_" + d.name + "_stub", ctype = "memdesc_stub_t")
+        scope.decls += stub_decl
+        d.cvar_stub = stub_decl
+        d.cvar_desc = None
+        # is descriptor needed?
+        if (isinstance(d.set_op, MemActivate) or (isinstance(d.set_op, MemDesc))):
+            desc_decl = CVarDecl(loc = d.loc, name = "_" + d.name + "_desc", ctype = "memdesc_t")
+            scope.decls += desc_decl
+            d.cvar_desc = desc_decl
+        return []
+
+    def visit_memdesc(self, desc):
+        no_elems = desc.kind.size
+        elem_size = Opaque( "sizeof(") + desc.kind.itemtype + ")"
+        def_node = desc.lhs_decl
+        cpointer = desc.cptr
+        new_items = Block()
+        new_items += (flatten(desc.loc, "_memdesc(&") + CVarUse(decl = def_node.cvar_desc) +
+                "," + cpointer + ',' + no_elems + ',' + elem_size + ')')
+        return new_items
+
+
+__all__ = ["Create_2_HydraCall", "TFun_2_HydraCFunctions", "Mem_2_HRT"]
 
 

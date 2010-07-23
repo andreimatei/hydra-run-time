@@ -42,6 +42,7 @@ _chains = {
     'hrt' : _common_prefix + [
         ('lseta', LinkSetA()),
         ('autores', AutoResolve()),
+        ('flatten_mem', Mem_2_HRT()),
         ('flattencr',Create_2_HydraCall()),
         ('flattenfun',TFun_2_HydraCFunctions()),
         ] + _common_suffix,

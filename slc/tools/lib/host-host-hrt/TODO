@@ -1,3 +1,6 @@
+allign and padd descs in a fam context (or TC?)
+
+
 scatter blocks until all confirmations come; if i have multiple scatter's in a create,
         maybe i want to block on the reunion of the 2 sets of confirmations at once...
 
