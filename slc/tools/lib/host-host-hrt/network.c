@@ -1047,7 +1047,10 @@ void populate_remote_tcs(
   send_sctp_msg(node_index, &req, sizeof(req));
 }
 
-void write_remote_istruct(int node_index, i_struct* istructp, long val, const tc_t* reader) {
+void write_remote_istruct(int node_index, 
+                          i_struct* istructp, 
+                          long val, 
+                          const tc_t* reader) {
   req_write_istruct req;
   req.type = REQ_WRITE_ISTRUCT;
   req.identifier = -1;

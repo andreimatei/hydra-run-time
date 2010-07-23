@@ -191,7 +191,9 @@ struct tc_t {
   // will hold the first range described by the respective descriptor, and will be accessible after reading
   // the istruct (the shared or the global)
   mem_range_t shared_first_ranges[MAX_ARGS_PER_FAM];
+  int shared_no_ranges[MAX_ARGS_PER_FAM];
   mem_range_t global_first_ranges[MAX_ARGS_PER_FAM];
+  int global_no_ranges[MAX_ARGS_PER_FAM];
 
   fam_context_t* fam_context;  // family context of the thread of the family 
                                // currently occupying the TC

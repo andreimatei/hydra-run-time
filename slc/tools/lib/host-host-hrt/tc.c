@@ -1248,9 +1248,10 @@ extern void write_istruct_different_proc(
   }
 }
 
-/* wrapper function for reading an istruct when we don't know whether the reader and the writer
-   are running on the same proc or TC.
-   reading_tc corresponds to the TC that will (or already has) read the istruct
+/* 
+ * wrapper function for reading an istruct when we don't know whether the reader and the writer
+ * are running on the same proc or TC.
+ * reading_tc corresponds to the TC that will (or already has) read the istruct
  */
 void write_istruct(//i_struct_fat_pointer istruct, 
                    int node_index,  // destination node, if we're writing a remote istruct
@@ -1286,6 +1287,12 @@ void write_istruct(//i_struct_fat_pointer istruct,
     write_remote_istruct(node_index, (i_struct*)istructp, val, reading_tc->tc);  // cast to strip volatile
   }
 }
+
+/*--------------------------------------------------
+* void write_istruct_ex(int node_index,
+*                       volatile i_stru) {
+* }
+*--------------------------------------------------*/
 
 /*
  * Write an istruct without worrying about concurrency with the reader. This is for very specific use,
