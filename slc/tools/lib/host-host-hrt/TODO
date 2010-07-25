@@ -38,3 +38,8 @@ KNOWN ISSUES
     - in network.c, no_tcp_incoming_sockets needs locking before incrementing and reading it
 - tc.c
     - we need to always to map memory chunks in 1MB increments (cause that what the sigsegv handler does)
+
+compiler:
+  - sl_getma() doesn't work on globals (look in am/visitor.py at do_visit_seta)
+          - actually, getma is broken for shareds also; Raphael didn't implement it (as it's not in the am
+              visitor). There need to be .cvar for each (mem) argument declaration

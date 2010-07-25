@@ -43,39 +43,37 @@ class Create_2_HydraCall(ScopedVisitor):
                             index += 1
         assert(0)
 
-    def visit_seta(self, seta):
-        b = seta.rhs.accept(self)
+    def do_visit_seta(self, loc, decl, rhs):
+        b = rhs.accept(self)
         setter = None
 
-        print 'visit_seta: seeing ctype:' 
-        print seta.decl.ctype[0].text
-
-        if seta.decl.ctype[0].text == 'mem_t':
-            index = self.get_arg_index(arg = seta.decl, shared = False)
-            b = flatten(None, '_create_mem_pointer(&') + b + ', %d, ' % index + \
-                        CVarUse(decl = self.__cur_fam_context) + ')'
-
-        if seta.decl.type.startswith("sh"):
+        if decl.type.startswith("sh"):
             # find my own index
-            index = self.get_arg_index(arg = seta.decl, shared = True)
-            setter = (flatten(seta.loc, "write_istruct(") + 
+            index = self.get_arg_index(arg = decl, shared = True)
+            setter = (flatten(loc, "write_istruct(") + 
                     self.__first_tc + ".node_index, &" +
                     self.__first_tc + ('.tc->shareds[%d], ' % index) + '(long)(' + b + ')' +
                     ', &' + self.__first_tc + ');\n')
         else:
             # find my own index
-            index = self.get_arg_index(arg = seta.decl, shared = False)
+            index = self.get_arg_index(arg = decl, shared = False)
             # setting a global is done by first writing to a local var (so that the parent get read it
             # back if it does a geta) and the calling "write_global" with the value of the local var (so
             # that we don't execute the rhs again)
-            setter = CVarSet(loc = seta.loc, decl = seta.decl.cvar, rhs = b) + ';  // setting local copy'
-            setter += (flatten(seta.loc, "write_global(") +
-                self.__fam_context + ', %s' % index + ', (long)' + CVarUse(decl = seta.decl.cvar) + ');\n')
+            if (not isinstance(decl, CreateArgMem)):
+                setter = CVarSet(loc = loc, decl = decl.cvar, rhs = b) + ';  // setting local copy'
+                setter += (flatten(loc, "write_global(") +
+                    self.__fam_context + ', %s' % index + ', (long)' + CVarUse(decl = decl.cvar) + ');\n')
+            else:  # for ArgMem's, we currently don't write to a temporary, so sl_getma() won't work
+                setter = (flatten(loc, "write_global(") +
+                    self.__fam_context + ', %s' % index + ',' + rhs + ');\n')
 
         self.__arg_setters.append(setter)
         return None
-        #return CVarSet(loc = seta.loc, decl = seta.decl.cvar, rhs = b) 
+        #return CVarSet(loc = loc, decl = decl.cvar, rhs = b) 
 
+    def visit_seta(self, seta):
+        return do_visit_seta(self, seta.loc, seta.decl, seta.rhs)
 
     def visit_createarg(self, arg):
         # for shareds, append a pointer to the corresponding local variable to a list
@@ -205,7 +203,6 @@ class Create_2_HydraCall(ScopedVisitor):
         pass
 
     def visit_scatteraffine(self, scatter):
-        newbl = []
         a = scatter.a
         b = scatter.b
         c = scatter.c
@@ -215,16 +212,16 @@ class Create_2_HydraCall(ScopedVisitor):
         print "seeing scatter !!!"
         fam_context_decl = self.__cur_fam_context
         first_range = CVarUse(decl = desc) + ".ranges[0]";
-        newbl.append(flatten(scatter.loc, "_memscatter_affine(&") + CVarUse(decl = fam_context_decl) +
-                     ", " + CVarUse(decl = stub) + ', ' + first_range + ',' + a + ',' + b + ',' + c
-                    )
+        scatter_call = (flatten(scatter.loc, "_memscatter_affine(") + CVarUse(decl = fam_context_decl) +
+                     ", " + CVarUse(decl = stub) + ', ' + first_range + ',' + a + ',' + b + ',' + c + ');' )
+                    
+        self.__arg_setters.append(scatter_call)
         # create a stub and treat it as a sl_setma(stub)
         # set the S bit on the stub that is being passed
-        scatter.rhs_decl = None
-        scatter.rhs = "stub_2_long(_stub_2_canonical_stub(" + CVarUse(decl = stub) + " , 1)"
-        newbl.append(visit_setmema(self, scatter))
-        
-        return newbl
+        new_rhs = flatten(None, "stub_2_long(_stub_2_canonical_stub(") + CVarUse(decl = stub) + " , 1))"
+        self.do_visit_seta(scatter.loc, scatter.decl, new_rhs) 
+
+        return None
 
 class TFun_2_HydraCFunctions(DefaultVisitor):
     def __init__(self, *args, **kwargs):
@@ -342,8 +339,8 @@ class TFun_2_HydraCFunctions(DefaultVisitor):
             self.__gl_parm_index += 1
         return parm
 
-    def visit_funparmmem(self, parm):
-        return visit_funparm(self, parm)
+    #def visit_funparmmem(self, parm):
+    #    return self.visit_funparm(parm)
 
     def visit_fundecl(self, fundecl, keep = False, omitextern = False):
         self.__sh_parm_index = 0  # counter for the number of shareds seen
@@ -567,7 +564,9 @@ class Mem_2_HRT(DefaultVisitor):
         scope.decls += stub_decl
         d.cvar_stub = stub_decl
         d.cvar_desc = None
-        # is descriptor needed?
+        # is descriptor needed? it is _not_ needed for FIXME: figure out when the descriptor is needed
+        # and when it's not (is there any situation where it's not?)
+        print 'in memdef. type of set_op is %s ' % type(d.set_op)
         if (isinstance(d.set_op, MemActivate) or (isinstance(d.set_op, MemDesc))):
             desc_decl = CVarDecl(loc = d.loc, name = "_" + d.name + "_desc", ctype = "memdesc_t")
             scope.decls += desc_decl
@@ -583,7 +582,6 @@ class Mem_2_HRT(DefaultVisitor):
         new_items += (flatten(desc.loc, "_memdesc(&") + CVarUse(decl = def_node.cvar_desc) +
                 "," + cpointer + ',' + no_elems + ',' + elem_size + ')')
         return new_items
-
 
 __all__ = ["Create_2_HydraCall", "TFun_2_HydraCFunctions", "Mem_2_HRT"]
 
