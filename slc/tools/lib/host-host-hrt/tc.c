@@ -1257,7 +1257,8 @@ void write_istruct(//i_struct_fat_pointer istruct,
                    int node_index,  // destination node, if we're writing a remote istruct
                    volatile i_struct* istructp, 
                    long val, 
-                   const tc_ident_t* reading_tc) {
+                   const tc_ident_t* reading_tc,
+                   int is_mem) {
   //LOG(DEBUG, "write_istruct: writing istruct %p (my tc:%d)\n", istructp, _cur_tc->ident.tc_index);
   //if (istruct.node_index == NODE_INDEX) {
   if (node_index == NODE_INDEX) {
@@ -1284,7 +1285,11 @@ void write_istruct(//i_struct_fat_pointer istruct,
     }
   } else {  // writing to different node
     LOG(DEBUG, "write_istruct: writing a remote istruct on node %d\n", node_index);
-    write_remote_istruct(node_index, (i_struct*)istructp, val, reading_tc->tc);  // cast to strip volatile
+    if (!is_mem) {
+      write_remote_istruct(node_index, (i_struct*)istructp, val, reading_tc->tc);  // cast to strip volatile
+    } else {
+      write_remote_istruct_mem(node_index, (i_struct*)istructp, _long_2_stub(val), reading_tc->tc);  // cast to strip volatile
+    }
   }
 }
 
@@ -2009,7 +2014,7 @@ int main(int argc, char** argv) {
   }
 }
 
-void write_global(fam_context_t* ctx, int index, long val) {
+void write_global(fam_context_t* ctx, int index, long val, int is_mem) {
   int i;
   // write the global to every TC that will run part of the family
   for (i = 0; i < ctx->no_ranges; ++i) {
@@ -2018,7 +2023,7 @@ void write_global(fam_context_t* ctx, int index, long val) {
     tc_t* dest = (tc_t*)TC_START_VM_EX(id.node_index, id.tc_index);
     assert(dest == id.tc);  // TODO: if this assert proves to hold, remove the line above
     //i_struct_fat_pointer p;
-    write_istruct(id.node_index, &(id.tc->globals[index]), val, &id);
+    write_istruct(id.node_index, &(id.tc->globals[index]), val, &id, is_mem);
   }
 }
 
@@ -2082,12 +2087,12 @@ static void sighandler_foo(int sig, siginfo_t *si, void *ucontext __attribute__(
  * TODO: Temporary; 
  * convert between stubs and longs so stubs can be passed in istructs
  */
-memdesc_stub_t long_2_stub(long x) {
+memdesc_stub_t _long_2_stub(long x) {
   memdesc_stub_t res = *(memdesc_stub_t*)&x;
   return res;
 }
 
-long stub_2_long(memdesc_stub_t stub) {
+long _stub_2_long(memdesc_stub_t stub) {
   long res = *(long*)&stub;
   return res;
 }

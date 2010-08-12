@@ -64,6 +64,16 @@ class Opaque(Item):
     Opaque chunk of C text.
     """
 
+    @property
+    def text(self): return self._text
+
+    @text.setter
+    def text(self, val):
+        if not (isinstance(val, str) or val is None):
+            print val
+        assert isinstance(val, str) or val is None
+        self._text = val
+
     def __init__(self, text = None, *args, **kwargs):
         super(Opaque, self).__init__(*args, **kwargs)
         self.text = text

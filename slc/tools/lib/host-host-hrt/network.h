@@ -13,6 +13,8 @@ typedef enum request_type {
   RESP_ALLOCATE,  // response for an allocation request
   REQ_CREATE,
   REQ_WRITE_ISTRUCT,
+  REQ_WRITE_ISTRUCT_MEM,  // writes an istructure that corresponds to a mem stub. The request also
+                          // contains the first range and the number of ranges of the descriptor
   REQ_CONFIRMATION,
   REQ_PULL_DATA,
   REQ_PULL_DATA_DESCRIBED,
@@ -95,6 +97,19 @@ typedef struct req_write_istruct {
   tc_t* reader_tc;  // the tc that's potentially blocked on the istruct (valid on the destination node)
 }req_write_istruct;
 
+typedef struct req_write_istruct_mem {
+  request_type type;
+  int node_index;  // originating node
+  int identifier;
+  int response_identifier;
+
+  i_struct* istruct;
+  memdesc_stub_t val;  // value to be written
+  mem_range_t first_range;
+  int no_ranges;
+  tc_t* reader_tc;  // the tc that's potentially blocked on the istruct (valid on the destination node)
+}req_write_istruct_mem;
+
 typedef struct req_confirmation {
   request_type type;
   int node_index;  // originating node
@@ -154,6 +169,10 @@ void populate_remote_tcs(
     );
 void allocate_remote_tcs(int node_index, int proc_index, int no_tcs, int* tcs, int* no_allocated_tcs);
 void write_remote_istruct(int node_index, i_struct* istructp, long val, const tc_t* reader_tc);
+void write_remote_istruct_mem(int node_index, 
+                              i_struct* istructp, 
+                              memdesc_stub_t val, 
+                              const tc_t* reader);
 pending_request_t* get_pending_request_slot(tc_t* blocking_tc);
 void send_sctp_msg(int node_index, void* buf, int len);
 void enqueue_push_request(int node_index, 

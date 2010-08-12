@@ -1,5 +1,15 @@
-allign and padd descs in a fam context (or TC?)
+remove the use of the first range argument in all the function that currently take it. 
+Use the first range from the descriptor, which should always be valid. Pass this first range along
+with the stub (if this is done already, write the value to the address of the descriptor and make sure
+that the page fault handler maps the page)
 
+Is there a need for a descriptor table in a FC or a TC? We seem to have an issue for shareds (and for
+    globals in continuation creates) where a thread allocates a descriptor on the stack and passes it to
+    some other thread. At some point, that other thread might want to pull the descriptor (when? currently
+    this is not done), but the stack might have been overwritten.
+    - if there is a need for a descriptor table, allign and padd descs in a fam context (or TC?)
+
+receive memchunks directly where they have to be placed in memory, avoid buffering
 
 scatter blocks until all confirmations come; if i have multiple scatter's in a create,
         maybe i want to block on the reunion of the 2 sets of confirmations at once...

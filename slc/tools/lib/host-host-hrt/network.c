@@ -100,6 +100,7 @@ static void terminate_delegation_interface() {
 static void handle_req_allocate(const req_allocate* req);
 static void handle_resp_allocate(const resp_allocate* req);
 static void handle_req_write_istruct(const req_write_istruct* req);
+static void handle_req_write_istruct_mem(const req_write_istruct_mem* req);
 static void handle_req_create(const req_create* req);
 static void handle_req_confirmation(const req_confirmation* req);
 static void handle_req_pull_data(const req_pull_data* req);
@@ -149,6 +150,10 @@ static void handle_sctp_request(int sock) {
     case REQ_WRITE_ISTRUCT:
       assert(read == sizeof(req_write_istruct));
       handle_req_write_istruct((req_write_istruct*)req);
+      break;
+    case REQ_WRITE_ISTRUCT_MEM:
+      assert(read == sizeof(req_write_istruct_mem));
+      handle_req_write_istruct_mem((req_write_istruct_mem*)req);
       break;
     case REQ_CONFIRMATION:
       assert(read == sizeof(req_confirmation));
@@ -326,8 +331,7 @@ static void handle_incoming_mem_chunk(int incoming_index) {
   char buf[10000];
   char* tmp = buf;
   int sock = tcp_incoming_sockets[incoming_index];
-  while (1) {
-
+  while (1) {  // loop until this we can't read from this socket any more
 
     int r = read(sock, buf, 10000);
     assert(r > 0);
@@ -433,7 +437,8 @@ fd_set get_sending_sockets() {
   FD_ZERO(&res);
   for (int i = 0; i < no_secondaries; ++i) {
     if (outgoing_state[i].active || push_queue_not_empty(i)) {
-      LOG(DEBUG, "network: get_sending_sockets: found socket that wants to send data for secondary %d\n", i);
+      LOG(DEBUG, "network: get_sending_sockets: found socket that wants to send data for secondary %d "
+          "because of condition %d\n", i, outgoing_state[i].active ? 0 : 1);
       if (secondaries[i].socket_tcp == -1) {
         // open a connection
         LOG(DEBUG, "network: get_sending_sockets: opening TCP connection to secondary %d\n", i);
@@ -593,7 +598,7 @@ void* delegation_interface(void* parm) {
       // when this collection is modified... Send a signal to this thread?
       LOG(DEBUG, "network: delegation interface: entering select\n");
       assert(FD_ISSET(new_sending_socket_pipe_fd[0], &copy));
-      LOG(DEBUG, "network: delegation_interface: entering select. pipe fd %d is present\n", new_sending_socket_pipe_fd[0]);
+      LOG(DEBUG, "network: delegation_interface: entering select.\n");
       int res = select(FD_SETSIZE, &copy, &sending, NULL, NULL);//&time);
       LOG(DEBUG, "network: delegation_interface: out of select!\n");
       if (res <= 0) handle_error("select");
@@ -1063,9 +1068,41 @@ void write_remote_istruct(int node_index,
   send_sctp_msg(node_index, &req, sizeof(req));
 }
 
+void write_remote_istruct_mem(int node_index, 
+                              i_struct* istructp, 
+                              memdesc_stub_t val, 
+                              const tc_t* reader) {
+  req_write_istruct_mem req;
+  req.type = REQ_WRITE_ISTRUCT_MEM;
+  req.identifier = -1;
+  req.node_index = NODE_INDEX;
+  req.response_identifier = -1;
+
+  req.istruct = istructp;
+  req.val = val;
+  req.first_range = get_stub_pointer(val)->ranges[0];
+  req.no_ranges = get_stub_pointer(val)->no_ranges;
+  req.reader_tc = (tc_t*)reader;
+  send_sctp_msg(node_index, &req, sizeof(req));
+}
+
 static void handle_req_write_istruct(const req_write_istruct* req) {
   LOG(DEBUG, "network: handle_req_write_istruct: got istruct write request\n");
   write_istruct_different_proc(req->istruct, req->val, req->reader_tc);
+}
+
+static void handle_req_write_istruct_mem(const req_write_istruct_mem* req) {
+  LOG(DEBUG, "network: handle_req_write_istruct_mem: got istruct write request\n");
+
+  // copy the first range and no_ranges to the descriptor; prepare for a possible segfault
+  memdesc_t* desc = get_stub_pointer(req->val);
+  cur_incoming_mem_range_start = desc;
+  cur_incoming_mem_range_len = (unsigned long)desc + sizeof(*desc); 
+  desc->no_ranges = req->no_ranges;
+  desc->ranges[0] = req->first_range;
+
+  // write the i-structure
+  write_istruct_different_proc(req->istruct, _stub_2_long(req->val), req->reader_tc);
 }
 
 static void handle_req_create(const req_create* req) {

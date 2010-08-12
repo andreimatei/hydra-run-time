@@ -50,30 +50,48 @@ class Create_2_HydraCall(ScopedVisitor):
         if decl.type.startswith("sh"):
             # find my own index
             index = self.get_arg_index(arg = decl, shared = True)
-            setter = (flatten(loc, "write_istruct(") + 
-                    self.__first_tc + ".node_index, &" +
-                    self.__first_tc + ('.tc->shareds[%d], ' % index) + '(long)(' + b + ')' +
-                    ', &' + self.__first_tc + ');\n')
+            setter = (flatten(loc, "write_istruct(") 
+                    + self.__first_tc + ".node_index, &" + self.__first_tc 
+                    + ('.tc->shareds[%d], ' % index) 
+                    + '(long)(' + b + ')' 
+                    + ', &' + self.__first_tc 
+                    )
+            # emit the 'is_mem' argument
+            if (not isinstance(decl, CreateArgMem)):
+                setter += ', 0'
+            else:
+                setter += ', 1'
+
+            setter += ');\n'
+
         else:
             # find my own index
             index = self.get_arg_index(arg = decl, shared = False)
-            # setting a global is done by first writing to a local var (so that the parent get read it
-            # back if it does a geta) and the calling "write_global" with the value of the local var (so
+            # setting a global is done by first writing to a local var (so that the parent can read it
+            # back if it does a geta) and then calling "write_global" with the value of the local var (so
             # that we don't execute the rhs again)
             if (not isinstance(decl, CreateArgMem)):
                 setter = CVarSet(loc = loc, decl = decl.cvar, rhs = b) + ';  // setting local copy'
                 setter += (flatten(loc, "write_global(") +
-                    self.__fam_context + ', %s' % index + ', (long)' + CVarUse(decl = decl.cvar) + ');\n')
+                    self.__fam_context + ', %s' % index + ', (long)' + CVarUse(decl = decl.cvar) + ', 0);\n')
             else:  # for ArgMem's, we currently don't write to a temporary, so sl_getma() won't work
+                # TODO: write to a temporary (we need a .cvar in decl)
                 setter = (flatten(loc, "write_global(") +
-                    self.__fam_context + ', %s' % index + ',' + rhs + ');\n')
+                    self.__fam_context + ', %s' % index + ',' + rhs + ', 1);\n')
 
         self.__arg_setters.append(setter)
         return None
         #return CVarSet(loc = loc, decl = decl.cvar, rhs = b) 
 
     def visit_seta(self, seta):
-        return do_visit_seta(self, seta.loc, seta.decl, seta.rhs)
+        return self.do_visit_seta(seta.loc, seta.decl, seta.rhs)
+
+    def visit_setmema(self, seta):
+        #TODO: implement this. I don't think seta.rhs can be passed directly to do_visit_seta;
+        #maybe I want to say seta.rhs_decl.cvar_stub?
+
+        #return do_visit_seta(self, seta.loc, seta.decl, seta.rhs)
+        assert False
 
     def visit_createarg(self, arg):
         # for shareds, append a pointer to the corresponding local variable to a list
@@ -198,9 +216,33 @@ class Create_2_HydraCall(ScopedVisitor):
         return newbl
     
     def visit_memactivate(self, activate):
-        #FIXME
-        #attn: lhs is optional (might be None)
-        pass
+        # memactivate has an optional .lhs (and .lhs_decl), which is a memdef for a descriptor that
+        # will be initialized to the local copy of the data
+        new_items = Block()
+        new_items += (flatten(activate.loc, '')
+                + '_memactivate(&'
+                + CVarUse(decl = activate.rhs_decl.cvar_stub) + ', '
+                #+ CVarUse(decl = activate.rhs_decl.cvar_desc) + '.ranges[0], '  #FIXME: remove this arg
+                #+ CVarUse(decl = activate.rhs_decl.cvar_desc) + '.no_ranges, '
+                )
+        if activate.lhs is not None:
+            new_items += (flatten(None, '&')
+                +  CVarUse(decl = activate.lhs_decl.cvar_desc) + ', '
+                + '&' + CVarUse(decl = activate.lhs_decl.cvar_stub)
+                )
+        else:  # no lhs; pass NULL for new_desc and new_stub
+            new_items += '0, 0' 
+        new_items += ')'
+        
+        return new_items
+
+    def visit_mempropagate(self, prop):
+        #print 'in propagate. rhs = ' + prop.rhs
+        new_items = Block()
+        new_items += (flatten(prop.loc, '')
+            + '_mempropagate(' + CVarUse(decl = prop.rhs_decl.cvar_stub) + ')'
+            )
+        return new_items
 
     def visit_scatteraffine(self, scatter):
         a = scatter.a
@@ -208,20 +250,41 @@ class Create_2_HydraCall(ScopedVisitor):
         c = scatter.c
         stub = scatter.rhs_decl.cvar_stub
         desc = scatter.rhs_decl.cvar_desc
+        # save a pointer to the stub in the argument declaration
+        scatter.decl.scatter_stub = stub
+        scatter.decl.fam_context = self.__cur_fam_context
         create = scatter.decl.create
-        print "seeing scatter !!!"
         fam_context_decl = self.__cur_fam_context
+        #FIXME: remove the first_range argument in the call to memscatter_affine
         first_range = CVarUse(decl = desc) + ".ranges[0]";
-        scatter_call = (flatten(scatter.loc, "_memscatter_affine(") + CVarUse(decl = fam_context_decl) +
-                     ", " + CVarUse(decl = stub) + ', ' + first_range + ',' + a + ',' + b + ',' + c + ');' )
+        scatter_call = (flatten(scatter.loc, "_memscatter_affine(") 
+                        + CVarUse(decl = fam_context_decl) 
+                        + ", " + CVarUse(decl = stub) + ', ' 
+                        #+ first_range + ', '
+                        + a + ',' + b + ',' + c + ');' )
                     
         self.__arg_setters.append(scatter_call)
         # create a stub and treat it as a sl_setma(stub)
         # set the S bit on the stub that is being passed
-        new_rhs = flatten(None, "stub_2_long(_stub_2_canonical_stub(") + CVarUse(decl = stub) + " , 1))"
+        new_rhs = flatten(None, "_stub_2_long(_stub_2_canonical_stub(") + CVarUse(decl = stub) + " , 1))"
         self.do_visit_seta(scatter.loc, scatter.decl, new_rhs) 
 
         return None
+
+    def visit_gatheraffine(self, gather):
+        a = gather.a
+        b = gather.b
+        c = gather.c
+        cvar_stub = gather.decl.scatter_stub
+        fam_context = gather.decl.fam_context
+        new_items = Block()
+        new_items += (flatten(gather.loc, '')
+                + '_memgather_affine('
+                + CVarUse(decl = fam_context) + ', '
+                + CVarUse(decl = cvar_stub) + ', '
+                + a + ', ' + b + ', ' + c + ')'
+                )
+        return new_items
 
 class TFun_2_HydraCFunctions(DefaultVisitor):
     def __init__(self, *args, **kwargs):
@@ -232,23 +295,23 @@ class TFun_2_HydraCFunctions(DefaultVisitor):
     def visit_getmemp(self, getp):
         newbl = []
         param = self.__paramNames_2_params[getp.name]
+        stub_decl = getp.lhs_decl.cvar_stub
+        desc_decl = getp.lhs_decl.cvar_desc
        
         if not param.isShared:
-            stub_decl = getp.lhs_decl.cvar_stub
-            desc_decl = getp.lhs_decl.cvar_desc
             stub_read_cmd = '_long_2_stub(read_istruct(&_cur_tc->globals[%d], _get_parent_ident()))' % param.index
         else:
-            #FIXME
-            pass
+            stub_read_cmd = '_long_2_stub(read_istruct(&_cur_tc->shareds[%d], prev))' % param.index
     
         # emit the initialization of the local stub
-        newbl.append(flatten(getp.loc, CVarUse(decl = stub_decl) + ' = ' + stub_read_cmd));
+        newbl.append(flatten(getp.loc, '') + CVarUse(decl = stub_decl) + ' = ' + stub_read_cmd);
         return newbl
 
     def visit_getp(self, getp):
         newbl = []
         param = self.__paramNames_2_params[getp.name]
        
+        """
         #FIXME: remove this part with read_cmd; it was added for trying to support a form of mem parm, needs to go now 
         if not param.isShared:
             read_cmd = 'read_istruct(&_cur_tc->globals[%d], _get_parent_ident())' % param.index
@@ -268,6 +331,7 @@ class TFun_2_HydraCFunctions(DefaultVisitor):
             print '!!!!!! found reading a mem_pointer_t    ' + read_cmd
             newbl.append(flatten(None, '_activate_from_istruct(') + '(long)(%s))' % read_cmd)
             return newbl
+        """
 
         if not param.isShared:
             newbl.append(flatten(None, '((') + getp.decl.ctype + ')'
@@ -317,7 +381,7 @@ class TFun_2_HydraCFunctions(DefaultVisitor):
             elif self.__state == 2 or self.__state == 3: #end and generic
                 newbl.append(flatten(setp.loc,  # end and generic are passed the array of shareds as an argument
                              'write_istruct(next->node_index, &shareds[%d],' % param.index) \
-                             + b + ', next);')
+                             + b + ', next, 0);')
             else:
                 assert(0)
         else:  # no need to write to anything; just generate the rhs
@@ -327,6 +391,8 @@ class TFun_2_HydraCFunctions(DefaultVisitor):
         return newbl
 
     def visit_funparm(self, parm):
+        print 'seeing param ' + parm.name
+        print 'type of param is ' + parm.type
         self.__paramNames_2_params[parm.name] = parm
         assert not (parm.type.startswith("shf") or parm.type.startswith("glf"))
         if parm.type.startswith("sh"):
@@ -339,8 +405,9 @@ class TFun_2_HydraCFunctions(DefaultVisitor):
             self.__gl_parm_index += 1
         return parm
 
-    #def visit_funparmmem(self, parm):
-    #    return self.visit_funparm(parm)
+    def visit_funparmmem(self, parm):
+        print 'seeing memparm ' + parm.name
+        return self.visit_funparm(parm)
 
     def visit_fundecl(self, fundecl, keep = False, omitextern = False):
         self.__sh_parm_index = 0  # counter for the number of shareds seen
@@ -529,7 +596,7 @@ class TFun_2_HydraCFunctions(DefaultVisitor):
                    _is_last_tc(), parent->node_index);
             if (_is_last_tc() && parent->node_index != -1) {
                 printf("USER: I am the last thread in a family. Unblocking parent.\\n");
-                write_istruct(parent->node_index, done, 1, parent);
+                write_istruct(parent->node_index, done, 1, parent, 0);
             }
 
             _cur_tc->finished = 1;
@@ -564,13 +631,25 @@ class Mem_2_HRT(DefaultVisitor):
         scope.decls += stub_decl
         d.cvar_stub = stub_decl
         d.cvar_desc = None
-        # is descriptor needed? it is _not_ needed for FIXME: figure out when the descriptor is needed
+        # is descriptor needed? it is _not_ needed for sl_getmp 
+        # FIXME: figure out when the descriptor is needed
         # and when it's not (is there any situation where it's not?)
         print 'in memdef. type of set_op is %s ' % type(d.set_op)
-        if (isinstance(d.set_op, MemActivate) or (isinstance(d.set_op, MemDesc))):
+        
+        descriptor_needed = 1
+        if isinstance(d.set_op, GetMemP):
+            descriptor_needed = 0
+
+        if descriptor_needed:
+            print 'inserting descriptor declaration in scope'
             desc_decl = CVarDecl(loc = d.loc, name = "_" + d.name + "_desc", ctype = "memdesc_t")
             scope.decls += desc_decl
             d.cvar_desc = desc_decl
+            # initialize stub to be associated with descriptor
+            scope.decls += (CVarUse(decl = stub_decl) + ' = _create_memdesc_stub(&' 
+                        + CVarUse(decl = desc_decl) + ', NODE_INDEX, 1, 0);\n'
+                        )
+        
         return []
 
     def visit_memdesc(self, desc):
@@ -580,7 +659,20 @@ class Mem_2_HRT(DefaultVisitor):
         cpointer = desc.cptr
         new_items = Block()
         new_items += (flatten(desc.loc, "_memdesc(&") + CVarUse(decl = def_node.cvar_desc) +
-                "," + cpointer + ',' + no_elems + ',' + elem_size + ')')
+                "," + cpointer + ',' + no_elems + ',' + elem_size + ');\n')
+        return new_items
+
+    def visit_memrestrict(self, re):
+        print 'visiting restrict. lhs is ' + re.lhs
+        print 'rhs is ' + re.rhs
+        new_items = Block()
+        new_items += (flatten(re.loc, "") + CVarUse(decl = re.lhs_decl.cvar_stub) + ' = ' +
+                      "_memrestrict(" 
+                      + CVarUse(decl = re.rhs_decl.cvar_stub) + ', '         #original stub
+                      + '&' + CVarUse(decl = re.lhs_decl.cvar_desc) + ', '   #new descriptor
+                      #+ CVarUse(decl = re.rhs_decl.cvar_desc) + '.ranges[0], '  # TODO: remove this argument (first range)
+                      + re.offset + ', ' + re.size + ')'
+                      )
         return new_items
 
 __all__ = ["Create_2_HydraCall", "TFun_2_HydraCFunctions", "Mem_2_HRT"]

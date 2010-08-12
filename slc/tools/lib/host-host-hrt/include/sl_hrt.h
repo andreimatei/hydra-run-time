@@ -25,13 +25,6 @@ typedef struct mem_range {
   //struct mem_range* next;
 }mem_range_t;
 
-//--------------------------------------------------
-// enum memdesc_type {
-//                    REGULAR = 0, 
-//                    RESTRICT  /* a descriptor which is the result of a memrestrict operation */
-//                   };
-//-------------------------------------------------- 
-
 typedef struct memdesc {
   //enum memdesc_type type;
   //memdesc_stub_t orig_stub;  // valid only if type == RESTRICT
@@ -62,15 +55,7 @@ static inline unsigned int get_stub_node(memdesc_stub_t stub) {
   return stub.node;
 }
 
-//--------------------------------------------------
-// static inline int get_stub_S(memdesc_stub_t stub) {
-//   //return (stub & 0010000000000000L) > 0;
-//   return stub.S;
-// }
-//-------------------------------------------------- 
-
 static inline memdesc_t* get_stub_pointer(memdesc_stub_t stub) {
-  //return (memdesc_t*)(stub & 0x000FFFFFFFFFFFFFL); 
   return (memdesc_t*)((long)(stub.pointer) << 5);
 }
 
@@ -164,7 +149,7 @@ typedef struct {
                             //remotely.
   int index;  // the index of this fam_context among all the fam_contexts allocated on it's node
 
-  memdesc_t mems[MAX_ARGS_PER_FAM];  // FIXME: switch to a structure padded to a multiple of 32
+  //memdesc_t mems[MAX_ARGS_PER_FAM];  // FIXME: switch to a structure padded to a multiple of 32
 
   //long shareds[MAX_ARGS_PER_FAM];  // shareds written by the last thread in the fam. They don't need to
                                    // be i-structs since they will only be read after the sync
@@ -187,13 +172,13 @@ struct tc_t {
   // i-structures for globals and shareds received by the threads running in this TC
   i_struct shareds[MAX_ARGS_PER_FAM];
   i_struct globals[MAX_ARGS_PER_FAM];
-  // space if shareds[i]/globals[i] is a memdesc_stub_t, then shared/global_first_ranges[i]
-  // will hold the first range described by the respective descriptor, and will be accessible after reading
-  // the istruct (the shared or the global)
-  mem_range_t shared_first_ranges[MAX_ARGS_PER_FAM];
-  int shared_no_ranges[MAX_ARGS_PER_FAM];
-  mem_range_t global_first_ranges[MAX_ARGS_PER_FAM];
-  int global_no_ranges[MAX_ARGS_PER_FAM];
+  // // space if shareds[i]/globals[i] is a memdesc_stub_t, then shared/global_first_ranges[i]
+  // // will hold the first range described by the respective descriptor, and will be accessible after reading
+  // // the istruct (the shared or the global)
+  // mem_range_t shared_first_ranges[MAX_ARGS_PER_FAM];
+  // int shared_no_ranges[MAX_ARGS_PER_FAM];
+  // mem_range_t global_first_ranges[MAX_ARGS_PER_FAM];
+  // int global_no_ranges[MAX_ARGS_PER_FAM];
 
   fam_context_t* fam_context;  // family context of the thread of the family 
                                // currently occupying the TC
@@ -295,9 +280,12 @@ void _memdesc(memdesc_t* memdesc, void* p, unsigned int no_elements, unsigned in
  * Create a new descriptor referring to part of the first range of an existing descriptor.
  * The new descriptor, upon activation, will return the same pointer as the original one.
  */
-memdesc_stub_t _memrestrict(memdesc_stub_t orig_stub, memdesc_t* new_desc, //memdesc_stub_t* new_stub, 
-                  mem_range_t first_range,  // first range from new_desc
-                  int start_elem, int no_elems);
+memdesc_stub_t _memrestrict(
+    memdesc_stub_t orig_stub, 
+    memdesc_t* new_desc, //memdesc_stub_t* new_stub, 
+    //mem_range_t first_range,  // first range from new_desc
+    int start_elem, 
+    int no_elems);
 
 /*
  * Adds objects to a descriptor (everything that was part of stub_to_copy)
@@ -319,8 +307,8 @@ memdesc_stub_t _memlocalize(memdesc_t* new_desc, //memdesc_stub_t* new_stub,
  * Return a pointer to the first range of the descriptor.
  */
 void* _memactivate(memdesc_stub_t* stub,
-                   mem_range_t first_range,
-                   unsigned int no_ranges,
+                   //mem_range_t first_range,
+                   //unsigned int no_ranges,
                    memdesc_t* new_desc,
                    memdesc_stub_t* new_stub
                    );
@@ -329,25 +317,26 @@ void* _memactivate(memdesc_stub_t* stub,
  */
 void _mempropagate(memdesc_stub_t stub);
 
-//--------------------------------------------------
-// /*
-//  * Propagate local changes to the parent (as opposed to the data provider)
-//  */
-// void _mempropagate_up(memdesc_stub_t stub, int parent_node);
-//-------------------------------------------------- 
-
 /*
  * Scatters the first range of a descriptor so that each thread i in a family gets a consistent view on
  * elements [a*i + a, a*i + b].
  */
-void _memscatter_affine(fam_context_t* fc, memdesc_stub_t stub, mem_range_t first_range, int a, int b, int c);
+void _memscatter_affine(fam_context_t* fc, 
+                        memdesc_stub_t stub, 
+                        //mem_range_t first_range, 
+                        int a, 
+                        int b, 
+                        int c);
 
 /*
  * Gathers from a descriptor that was scattered with _memscatter_affine(.. a,b,c)
  */
-void _gathermem_affine(fam_context_t* fc, 
-                       //memdesc_stub_t stub, 
-                       mem_range_t first_range, int a, int b, int c);
+void _memgather_affine(fam_context_t* fc, 
+                       memdesc_stub_t stub, 
+                       //mem_range_t first_range, 
+                       int a, 
+                       int b, 
+                       int c);
 
 /* Used by a thread func to get it's range of indexes */
 static inline long _get_start_index() {
@@ -429,7 +418,8 @@ void write_istruct(//volatile i_struct_fat_pointer istructp,
                    int node_index,
                    volatile i_struct* istructp,
                    long val, 
-                   const tc_ident_t* reading_tc);
+                   const tc_ident_t* reading_tc,
+                   int is_mem);
 
 //void* _activate(mem_pointer_t p);
 
@@ -462,14 +452,14 @@ static inline long read_istruct_same_tc(i_struct* istruct) {
 long read_istruct_different_tc(volatile i_struct* istruct, int same_proc);
 long read_istruct(volatile i_struct* istructp, const tc_ident_t* writing_tc);
 
-void write_global(fam_context_t* ctx, int index, long val);
+void write_global(fam_context_t* ctx, int index, long val, int is_mem);
 
 /*
  * TODO: Temporary; 
  * convert between stubs and longs so stubs can be passed in istructs
  */
-memdesc_stub_t long_2_stub(long x);
-long stub_2_long(memdesc_stub_t stub);
+memdesc_stub_t _long_2_stub(long x);
+long _stub_2_long(memdesc_stub_t stub);
 
 /*
  * Generate a stub suitable for passing to a child based on an existing stub.
