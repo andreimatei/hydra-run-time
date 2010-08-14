@@ -44,6 +44,7 @@ class Create_2_LowCreate(DefaultVisitor):
             if isinstance(a, CreateArgMem):
                 if a.rhs is not None:
                     setma = SetMemA(loc = cr.loc, name = a.name, rhs = a.rhs)
+                    setma.decl = a
                     setma.rhs_decl = cr.scope.mem_dic[a.rhs]
                     newbody += (Opaque(';') + setma)
             else:

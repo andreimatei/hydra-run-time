@@ -562,55 +562,6 @@ fam_context_t* allocate_fam(
   return fc;
 }
 
-/*--------------------------------------------------
-* / * Allocate a family for thread function "root fam" * /
-* fam_context_t* allocate_root_fam(thread_func func, int argc, char** argv) {
-* 
-*   //find empty TCs and fam_context
-*   int dest_proc = 0;
-*   assert(fam_contexts[0][0].empty);
-*   fam_context_t* fc = &fam_contexts[dest_proc][0];
-*   fc->empty = 0;
-*   fc->no_ranges = 1;
-*   fc->ranges[0].index_start = 0;
-*   fc->ranges[0].index_end = 0;
-*   fc->ranges[0].dest.proc_index = dest_proc;
-*   fc->ranges[0].dest.node_index = NODE_INDEX;//_cur_tc->ident.node_index;
-*   fc->ranges[0].dest.tc_index = atomic_increment_next_tc(dest_proc);
-*   assert(fc->ranges[0].dest.tc_index != -1);
-*   fc->ranges[0].dest.tc = (tc_t*)TC_START_VM(fc->ranges[0].dest.tc_index);
-* 
-*   tc_ident_t dummy_parent;
-*   dummy_parent.node_index = -1; // no parent
-* 
-*   populate_tc(fc->ranges[0].dest.tc,
-*               func,
-*               fc->ranges[0].index_start,
-*               fc->ranges[0].index_end,
-*               dummy_parent, dummy_parent, dummy_parent, 1,
-*               NULL, NULL);
-* 
-*   // transmit argc
-*   write_istruct_no_checks(&(fc->ranges[0].dest.tc->globals[0]), argc);
-*   // transmit argv
-*   write_istruct_no_checks(&(fc->ranges[0].dest.tc->globals[1]), (long)argv);
-* 
-*   return fc;
-* }
-* 
-*--------------------------------------------------*/
-
-/*--------------------------------------------------
-* inline int test_same_node(tc_t* l, tc_t* r) {
-*   return l->ident.node_index == r->ident.node_index;
-* }
-* inline int test_same_proc(tc_t* l, tc_t* r) {
-*   return test_same_node(l,r) && l->ident.proc_index == r->ident.proc_index;
-* }
-* inline int test_same_tc(tc_t* l, tc_t* r) {
-*   return test_same_proc(l, r) && l->ident.tc_index == r->ident.tc_index;
-* }
-*--------------------------------------------------*/
 static inline int test_same_node(const tc_ident_t* l, const tc_ident_t* r) {
   return l->node_index == r->node_index;
 }

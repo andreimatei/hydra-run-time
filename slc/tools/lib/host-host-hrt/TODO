@@ -41,6 +41,14 @@ add a version of send_sctp_msg that send messages with the SCTP_UNORDERED flag, 
 
 
 
+TO DISCUSS:
+
+- if scatter/gather is not used, a chunk can be modified by the first part of a family through propagate
+before being sent to the second chunk (thread 1 is mapped on node 1, thread 2 on node 2, (a,b,c) = (1,0,1)
+so each thread gets 2 cells but only updates one, first thread does propagate before second thread
+does activate. Is this ok? Should we block propagates somehow creation until all data has been distributed
+(how would we know when all activates are done?)
+
 
 KNOWN ISSUES
 
