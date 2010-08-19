@@ -186,6 +186,7 @@ void populate_tc(tc_t* tc,
                  tc_ident_t parent, tc_ident_t prev, tc_ident_t next,
                  int is_last_tc,
                  i_struct* final_shareds, 
+                 memdesc_t* final_descs,
                  i_struct* done,
                  const tc_ident_t* current_tc);
 /*
@@ -582,6 +583,7 @@ void populate_local_tcs(
     tc_ident_t parent, tc_ident_t prev, tc_ident_t next,
     int final_ranges,  // 1 if these tcs are the last ones of the family
     i_struct* final_shareds, // pointer to the shareds in the FC (NULL if !final_ranges)
+    memdesc_t* final_descs,  // pointer to the descriptor table in the FC (NULL if !final_ranges)
     i_struct* done          // pointer to done in the FC (NULL if !final_ranges)
     ) {
 
@@ -598,6 +600,7 @@ void populate_local_tcs(
                 i == no_tcs - 1 ? next : ranges[i+1].dest, // next
                 final_ranges && (i==(no_tcs-1)), //(i == no_ranges - 1)  // is_last_tc
                 (final_ranges && i == (no_tcs - 1)) ? final_shareds : NULL,
+                (final_ranges && i == (no_tcs - 1)) ? final_descs : NULL,
                 done,
                 _cur_tc != NULL ? &_cur_tc->ident : NULL
                 );
@@ -670,6 +673,7 @@ tc_ident_t create_fam(fam_context_t* fc,
             //i < fc->no_ranges-1 ? fc->ranges[i+1].dest : _cur_tc->ident,  // next
             i == (fc->no_ranges),  // final ranges
             fc->shareds,
+            fc->shared_descs,
             &fc->done
             );
       } else {  // creating root_fam
@@ -689,6 +693,7 @@ tc_ident_t create_fam(fam_context_t* fc,
             dummy_parent,  // next
             i == fc->no_ranges,  // final ranges
             fc->shareds,
+            fc->shared_descs,
             &fc->done
             );
       }
@@ -706,18 +711,13 @@ tc_ident_t create_fam(fam_context_t* fc,
                           //i < fc->no_ranges-1 ? fc->ranges[i+1].dest : _cur_tc->ident,  // next
                           i == (fc->no_ranges),  // final ranges
                           fc->shareds,
+                          fc->shared_descs,
                           &fc->done
                           );  
       LOG(DEBUG, "create_fam: sent remote create request\n");
     }
   }
 
-  /*
-  for (int i = 0; i < fc->no_ranges; ++i) {
-    unblock_tc(fc->ranges[i].dest.tc,
-              0); //TODO: check if it is the same processor and modify this arg
-  }
-  */
   return fc->ranges[0].dest;
 }
 
@@ -904,6 +904,9 @@ static void rt_init() {
   assert((void*)&allocate_tc_locks[0].lock == (void*)&allocate_tc_locks[0].c[0]);
   assert((void*)&allocate_tc_locks[0].lock == (void*)&allocate_tc_locks[0]);
 
+  // check that the descriptors in the tables in FC's are properly aligned
+  assert(((unsigned long)(&fam_contexts[0][0].shared_descs[0])) % 32 == 0);
+  assert(((unsigned long)(&fam_contexts[0][1].shared_descs[0])) % 32 == 0);
 
   //init_network();
   init_mem_comm();
@@ -1116,6 +1119,7 @@ void populate_tc(tc_t* tc,
                  tc_ident_t parent, tc_ident_t prev, tc_ident_t next,
                  int is_last_tc,
                  i_struct* final_shareds, 
+                 memdesc_t* final_descs,
                  i_struct* done,
                  const tc_ident_t* current_tc // the TC of the caller; can be passed a dummy or NULL
                  ) {
@@ -1138,8 +1142,12 @@ void populate_tc(tc_t* tc,
   tc->parent_ident = parent;
   tc->prev = prev; tc->next = next;
   tc->is_last_tc = is_last_tc;
-  if (!is_last_tc) assert(final_shareds == NULL);
+  if (!is_last_tc) {
+    assert(final_shareds == NULL);
+    assert(final_descs == NULL);
+  }
   tc->final_shareds = final_shareds;
+  tc->final_descs = final_descs;
   tc->done = done;
   //for (int i = 0; i < num_shareds; ++i) tc->shareds[i].state = EMPTY;
   //for (int i = 0; i < num_globals; ++i) tc->globals[i].state = EMPTY;
@@ -1210,6 +1218,8 @@ void write_istruct(//i_struct_fat_pointer istruct,
                    long val, 
                    const tc_ident_t* reading_tc,
                    int is_mem) {
+  //TODO: remove the argument is_mem
+
   //LOG(DEBUG, "write_istruct: writing istruct %p (my tc:%d)\n", istructp, _cur_tc->ident.tc_index);
   //if (istruct.node_index == NODE_INDEX) {
   if (node_index == NODE_INDEX) {
@@ -1236,19 +1246,58 @@ void write_istruct(//i_struct_fat_pointer istruct,
     }
   } else {  // writing to different node
     LOG(DEBUG, "write_istruct: writing a remote istruct on node %d\n", node_index);
+    //assert(!is_mem);  // remote write of mem args should be handled directly by write_argmem().
     if (!is_mem) {
       write_remote_istruct(node_index, (i_struct*)istructp, val, reading_tc->tc);  // cast to strip volatile
     } else {
-      write_remote_istruct_mem(node_index, (i_struct*)istructp, _long_2_stub(val), reading_tc->tc);  // cast to strip volatile
+      // we should only get here for globals. Remote write of mem args for shareds 
+      // should be handled directly by write_argmem().
+      write_remote_istruct_mem(node_index, 
+                               (i_struct*)istructp,  // cast to strip volatile
+                               _long_2_stub(val), 
+                               get_stub_pointer(_long_2_stub(val)),
+                               0,  // don't copy over the descriptor
+                               reading_tc->tc);
     }
   }
 }
 
-/*--------------------------------------------------
-* void write_istruct_ex(int node_index,
-*                       volatile i_stru) {
-* }
-*--------------------------------------------------*/
+/*
+ * Writes a shared arg mem for the next sibling thread or the parent. Besides passing along the stub, it also
+ * copies the associated descriptor to a different location and updates the stub to point to this new location. 
+ */
+void write_argmem(int node_index,
+                  volatile i_struct* istructp,
+                  memdesc_stub_t stub,
+                  memdesc_t* desc_dest,
+                  const tc_ident_t* reading_tc) {
+  memdesc_t* orig_desc = get_stub_pointer(stub);
+  if (!memdesc_desc_local(stub)) {
+    pull_desc(get_stub_pointer(stub), &stub, get_stub_pointer(stub));
+  }
+
+  if (desc_dest != get_stub_pointer(stub)) {
+    assert(memdesc_desc_local(stub));  // TODO: pull the descriptor if it ain't local and remove this assertion
+    if (node_index == NODE_INDEX) {
+      *desc_dest  = *get_stub_pointer(stub);
+    }
+    // if the stub is passed to a different node, the descriptor will be initialized in the new location
+    // at the time when the remote istructure is written to
+    set_stub_pointer(&stub, desc_dest);
+  }
+  if (node_index != NODE_INDEX) {
+    stub.node = node_index;  // we're copying the descriptor over, so it will be local
+    write_remote_istruct_mem(node_index, 
+                             (i_struct*)istructp, 
+                             stub, 
+                             orig_desc,
+                             1,   // copy over the descriptor
+                             reading_tc->tc);  // cast to strip volatile
+  } else {
+    write_istruct(node_index, istructp, _stub_2_long(stub), reading_tc, 1);
+  }
+}
+
 
 /*
  * Write an istruct without worrying about concurrency with the reader. This is for very specific use,

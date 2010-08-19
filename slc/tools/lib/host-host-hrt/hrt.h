@@ -65,6 +65,7 @@ void populate_local_tcs(
     tc_ident_t parent, tc_ident_t prev, tc_ident_t next,
     int final_ranges,  // 1 if these tcs are the last ones of the family
     i_struct* final_shareds, // pointer to the shareds in the FC (NULL if !final_ranges)
+    memdesc_t* final_descs,  // pointer to the descriptor table in the FC (NULL if !final_ranges)
     i_struct* done          // pointer to done in the FC (NULL if !final_ranges)
     );
 

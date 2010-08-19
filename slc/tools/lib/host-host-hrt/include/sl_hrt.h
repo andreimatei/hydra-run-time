@@ -143,16 +143,19 @@ typedef struct {
   //tc_ident_t* blocked_tc;
   thread_range_t ranges[100];  //TODO: replace this with something else 
   int no_ranges;
-  i_struct shareds[MAX_ARGS_PER_FAM];  // shareds written by the last thread in the fam. Technically, 
+  i_struct shareds[MAX_ARGS_PER_FAM];  // shareds written by the last thread in the fam. Conceptually, 
                             //they don't need to be istructs, since they will only be read after the sync,
                             //but we made them istructs anyway to use the infrastructure for writing them
                             //remotely.
   int index;  // the index of this fam_context among all the fam_contexts allocated on it's node
 
-  //memdesc_t mems[MAX_ARGS_PER_FAM];  // FIXME: switch to a structure padded to a multiple of 32
+  memdesc_t shared_descs[MAX_ARGS_PER_FAM];  // space for the descriptors corresponding to the stubs written by the
+                                             // last thread in the fam. They will be copied here when the shared
+                                             // is written to, and the pointer of withing the stub will be modified
+                                             // to point here, because otherwise the descriptor would remain on the
+                                             // child's stack which can be erased before the parent is done with the
+                                             // descriptor.
 
-  //long shareds[MAX_ARGS_PER_FAM];  // shareds written by the last thread in the fam. They don't need to
-                                   // be i-structs since they will only be read after the sync
 } fam_context_t;
 
 struct tc_t {
@@ -180,7 +183,9 @@ struct tc_t {
   // mem_range_t global_first_ranges[MAX_ARGS_PER_FAM];
   // int global_no_ranges[MAX_ARGS_PER_FAM];
 
-  fam_context_t* fam_context;  // family context of the thread of the family 
+  memdesc_t shared_descs[MAX_ARGS_PER_FAM];  // space for the descriptors associated with the shared mem args
+
+  //fam_context_t* fam_context;  // family context of the thread of the family 
                                // currently occupying the TC
   tc_ident_t parent_ident;  // identifier of the TC where the parent is running; will
                             // have .node_index == -1 for families that don't have a parent
@@ -194,6 +199,10 @@ struct tc_t {
   i_struct* done;  // pointer to the done istruct from the FC (this might be on a different node)
   i_struct* final_shareds;  // pointer to the shareds in the FC (this might be on a different node).
                             // used by the last thread in a family to write shareds for the parent
+
+  memdesc_t* final_descs;   // pointer to the descriptor table in the FC (this might be on a different node).
+                            // used by the last thread in a family to write the descriptors corresponding to the
+                            // shared mem arguments passed back to the parent
 
   heap_t heap;
 };//TCS[NO_TCS];
@@ -289,9 +298,8 @@ memdesc_stub_t _memrestrict(
 
 /*
  * Adds objects to a descriptor (everything that was part of stub_to_copy)
- * no_ranges[OUT] -> will be set to the new number of ranges in stub.
  */
-void _memextend(memdesc_stub_t stub, memdesc_stub_t stub_to_copy, int* no_ranges);
+void _memextend(memdesc_stub_t stub, memdesc_stub_t stub_to_copy);
 
 /*
  * Pulls data and descriptor for a stub. Updates orig to make it LL, and also returns the new value.
@@ -366,6 +374,11 @@ static inline i_struct* _get_final_shareds_pointer() {
   return _cur_tc->final_shareds;
 }
 
+static inline memdesc_t* _get_final_descs_pointer() {
+  return _cur_tc->final_descs;
+}
+
+
 static inline i_struct* _get_done_pointer() {
   return _cur_tc->done;
 }
@@ -409,44 +422,20 @@ void write_istruct_different_proc(
     volatile i_struct* istructp,
     long val,
     tc_t* potentially_blocked_tc);
-/*
-void write_istruct(volatile i_struct* istructp, 
-                   long val, 
-                   const tc_ident_t* reading_tc);
-*/
-void write_istruct(//volatile i_struct_fat_pointer istructp, 
-                   int node_index,
+void write_istruct(int node_index,
                    volatile i_struct* istructp,
                    long val, 
                    const tc_ident_t* reading_tc,
                    int is_mem);
 
-//void* _activate(mem_pointer_t p);
-
-//--------------------------------------------------
-// static inline void* _activate_from_istruct(long x) {
-//   mem_pointer_t* p = (mem_pointer_t*)&x;
-//   // FIXME: pull from remote node
-//   memdesc_t mem;
-//   return mem.ranges[0].p;
-// }
-//-------------------------------------------------- 
-
-//--------------------------------------------------
-// /*
-//  * Create a descriptor for a memory range
-//  * len: in bytes
-//  */
-// static inline memdesc_t create_memdesc(void* p, int len) {
-//   memdesc_t r; r.no_ranges = 1; r.ranges[0].p = p; r.ranges[0].len = len;
-//   return r;
-// }
-//-------------------------------------------------- 
-
+void write_argmem(int node_index,
+                  volatile i_struct* istructp,
+                  memdesc_stub_t stub,
+                  memdesc_t* desc_dest,
+                  const tc_ident_t* reading_tc);
 
 static inline long read_istruct_same_tc(i_struct* istruct) {
   assert(istruct->state == WRITTEN);
-  //istruct->state = EMPTY;
   return istruct->data;
 }
 long read_istruct_different_tc(volatile i_struct* istruct, int same_proc);
@@ -455,8 +444,7 @@ long read_istruct(volatile i_struct* istructp, const tc_ident_t* writing_tc);
 void write_global(fam_context_t* ctx, int index, long val, int is_mem);
 
 /*
- * TODO: Temporary; 
- * convert between stubs and longs so stubs can be passed in istructs
+ * Convert between stubs and longs so stubs can be passed in istructs
  */
 memdesc_stub_t _long_2_stub(long x);
 long _stub_2_long(memdesc_stub_t stub);

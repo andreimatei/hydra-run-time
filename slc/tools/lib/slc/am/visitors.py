@@ -48,7 +48,7 @@ class Create_2_HydraCall(ScopedVisitor):
         #b = rhs.accept(self)
         setter = None
 
-        if decl.type.startswith("sh"):
+        if decl.type.startswith("sh"):      # shared argument
             # find my own index
             index = self.get_arg_index(arg = decl, shared = True)
             
@@ -98,13 +98,7 @@ class Create_2_HydraCall(ScopedVisitor):
         return self.do_visit_seta(seta.loc, seta.decl, b)
 
     def visit_setmema(self, seta):
-        #TODO: implement this. I don't think seta.rhs can be passed directly to do_visit_seta;
-        #maybe I want to say seta.rhs_decl.cvar_stub?
-
-        #return do_visit_seta(self, seta.loc, seta.decl, seta.rhs)
-        print 'in visit_setmema. rhs = ' + seta.rhs
         return self.do_visit_seta(seta.loc, seta.decl, CVarUse(decl = seta.rhs_decl.cvar_stub))
-        #return self.do_visit_seta(seta.loc, seta.decl, seta.rhs)
 
     def visit_createarg(self, arg):
         # for shareds, append a pointer to the corresponding local variable to a list
@@ -115,7 +109,6 @@ class Create_2_HydraCall(ScopedVisitor):
         return arg
     
     def visit_createargmem(self, arg):
-        print 'in createargmem'
 
         # for shareds, append a pointer to the corresponding local variable to a list
         # of arguments that will be passed to sync
@@ -250,7 +243,7 @@ class Create_2_HydraCall(ScopedVisitor):
         b = scatter.b
         c = scatter.c
         stub = scatter.rhs_decl.cvar_stub
-        desc = scatter.rhs_decl.cvar_desc
+        #desc = scatter.rhs_decl.cvar_desc
         # save a pointer to the stub and to the fam context in the argument declaration
         scatter.decl.scatter_stub = stub
         scatter.decl.fam_context = self.__cur_fam_context  #TODO: the fam context should be saved
@@ -258,18 +251,16 @@ class Create_2_HydraCall(ScopedVisitor):
                                         # Discuss with Raphael
         create = scatter.decl.create
         fam_context_decl = self.__cur_fam_context
-        #FIXME: remove the first_range argument in the call to memscatter_affine
-        first_range = CVarUse(decl = desc) + ".ranges[0]";
         scatter_call = (flatten(scatter.loc, "_memscatter_affine(") 
                         + CVarUse(decl = fam_context_decl) 
                         + ", " + CVarUse(decl = stub) + ', ' 
-                        #+ first_range + ', '
                         + a + ',' + b + ',' + c + ');' )
                     
         self.__arg_setters.append(scatter_call)
         # create a stub and treat it as a sl_setma(stub)
         # set the S bit on the stub that is being passed
-        new_rhs = flatten(None, "_stub_2_long(_stub_2_canonical_stub(") + CVarUse(decl = stub) + " , 1))"
+        #new_rhs = flatten(None, "_stub_2_long(_stub_2_canonical_stub(") + CVarUse(decl = stub) + " , 1))"
+        new_rhs = CVarUse(decl = stub)
         self.do_visit_seta(scatter.loc, scatter.decl, new_rhs) 
 
         return None
@@ -388,9 +379,10 @@ class TFun_2_HydraCFunctions(DefaultVisitor):
 
 
     def visit_setmemp(self, setp):
-        b = (Opaque('') + '_stub_2_long(_stub_2_canonical_stub(' 
+        b = (Opaque('') + '_stub_2_canonical_stub(' 
             + CVarUse(decl = setp.rhs_decl.cvar_stub) + ', '
-            + CVarUse(decl = setp.rhs_decl.cvar_stub) + '.S))')
+            + CVarUse(decl = setp.rhs_decl.cvar_stub) + '.S)')
+        b_long = (Opaque('_stub_2_long(') + b + ')')
         #b = setp.rhs.accept(self)
         param = self.__paramNames_2_params[setp.name]
         newbl = []
@@ -400,18 +392,50 @@ class TFun_2_HydraCFunctions(DefaultVisitor):
         assert(param.isShared)
 
         #TODO: see if the same optimization regarding seen_get can be used like in setp
-        if self.__state == 0: #begin
-            newbl.append(flatten(None,#setp.loc,
-                             'write_istruct_same_tc(&_cur_tc->shareds[%d],' %
-                              param.index) + b + ')')
-        elif self.__state == 1: #middle
-            newbl.append(flatten(None,#setp.loc,
-                             'write_istruct_same_tc(&_cur_tc->shareds[%d],' %
-                              param.index) + b + ')')
+
+        if self.__state == 0 or self.__state == 1:  # begin and middle
+            newbl.append(flatten(setp.loc, 'write_argmem(NODE_INDEX, &_cur_tc->shareds[%d], ' % param.index)
+                    + b + ', '
+                    + '&_cur_tc->shared_descs[%d], ' % param.index
+                    + '&_cur_tc->ident)'
+                   )
+        #if self.__state == 0: #begin
+        #    newbl.append(flatten(None,#setp.loc,
+        #                     'write_istruct_same_tc(&_cur_tc->shareds[%d],' %
+        #                      param.index) + b_long + ')')
+        #elif self.__state == 1: #middle
+        #    newbl.append(flatten(None,#setp.loc,
+        #                     'write_istruct_same_tc(&_cur_tc->shareds[%d],' %
+        #                      param.index) + b_long + ')')
         elif self.__state == 2 or self.__state == 3: #end and generic
-            newbl.append(flatten(setp.loc,  # end and generic are passed the array of shareds as an argument
-                             'write_istruct(next->node_index, &shareds[%d],' % param.index) \
-                             + b + ', next, 1);')
+            # copy the descriptor to the descriptor table in the family context
+            #newbl.append(Opaque("if (!memdesc_desc_local(") 
+            #            + CVarUse(setp.rhs_decl.cvar_stub) + ') {\n'
+            #            + "\tpull_desc( 
+            #            ) 
+            
+            # TODO: pull descriptor if it's not local and remove this assert
+            #newbl.append(Opaque("assert(memdesc_desc_local(") 
+            #            + CVarUse(setp.rhs_decl.cvar_stub) + "));  // TODO: pull the desc if it's not local"
+            #            )
+
+            newbl.append(Opaque('write_argmem(next->node_index, &shareds[%d], ' % param.index)
+                         + b + ', &shared_descs[%d], ' % param.index + ' next)'
+                         )
+
+
+            #newbl.append((flatten(None, "shared_descs[%d]" % param.index))
+            #        + ' = *get_stub_pointer(' +  CVarUse(setp.rhs_decl.cvar_stub) + ');')
+
+            # modify the stub to point to the new copy
+            #newbl.append(Opaque("set_stub_pointer(") + CVarUse(setp.rhs_decl.cvar_stub) + ', '
+            #            + '&fam_context->shared_descs[%d]' % param.index
+            #                + ');')
+
+            # write the stub
+            #newbl.append(flatten(setp.loc,  # end and generic are passed the array of shareds as an argument
+            #                 'write_istruct(next->node_index, &shareds[%d],' % param.index) \
+            #                 + b + ', next, 1);')
         else:
             assert(0)
 
@@ -508,16 +532,19 @@ class TFun_2_HydraCFunctions(DefaultVisitor):
             newitems += flatten(fundef.loc_end, "return 0; \n}")
 
             self.__state = 2  #end
-            newitems += flatten(fundef.loc, ("long %s_end(const tc_ident_t* next, " +
-                                "i_struct* shareds __attribute__((unused)), long __index) {\n") % fundef.name)
+            newitems += flatten(fundef.loc, ("long %s_end(const tc_ident_t* next, "
+                                + "i_struct* shareds __attribute__((unused)), "
+                                + "memdesc_t* shared_descs, long __index) {\n") % fundef.name)
             newitems += end_body.accept(self)
             newitems += flatten(fundef.loc_end, "return 0; \n}")
 
         
         self.__state = 3  #generic
-        newitems += flatten(fundef.loc, ("long %s_generic(const tc_ident_t* " +
-                            "prev __attribute__((unused)), const tc_ident_t* next __attribute__((unused)), " +
-                            "i_struct* shareds __attribute__((unused)), long __index __attribute__((unused))) {\n") % fundef.name)
+        newitems += flatten(fundef.loc, ("long %s_generic(const tc_ident_t* prev __attribute__((unused)), "
+                            + "const tc_ident_t* next __attribute__((unused)), "
+                            + "i_struct* shareds __attribute__((unused)), "
+                            + "memdesc_t* shared_descs __attribute__((unused)), "
+                            + "long __index __attribute__((unused))) {\n") % fundef.name)
         newitems += generic_body.accept(self)
         newitems += flatten(fundef.loc_end, "return 0; \n}")
        
@@ -527,12 +554,20 @@ class TFun_2_HydraCFunctions(DefaultVisitor):
                     gen_loop_fun_name(fundef.name) + "(void)" +" {\n"
         newitems += "long __index, __start_index = _get_start_index(), " +\
             "__end_index = _get_end_index();\n"
+        # in the following block of code, attribute(unused) is used because of the special generation
+        # of the function for the root family, in which case those variables would be unused.
         newitems += """
             //fam_context_t* fam_context = _get_fam_context();
             const tc_ident_t* parent = _get_parent_ident();
             const tc_ident_t* prev __attribute__((unused)) = _get_prev_ident();
             const tc_ident_t* next = _get_next_ident();
-            i_struct* shareds __attribute__((unused)) = _get_final_shareds_pointer();
+            i_struct* shareds __attribute__((unused)) = _is_last_tc() ? 
+                                                            _get_final_shareds_pointer() :
+                                                            next->tc->shareds;
+            memdesc_t* shared_descs __attribute__((unused)) = _is_last_tc() ? 
+                                        _get_final_descs_pointer() :
+                                        next->tc->shared_descs;
+                                                                    
             i_struct* done = _get_done_pointer();       
 
             if (__end_index - __start_index > 4) {\n
@@ -544,7 +579,7 @@ class TFun_2_HydraCFunctions(DefaultVisitor):
                 """ + fundef.name + """_middle(__index); // TODO: check for break return value
                 }
             """ \
-            + fundef.name + """_end(next, shareds, __end_index);"""
+            + fundef.name + """_end(next, shareds, shared_descs, __end_index);"""
             #+ fundef.name + """_end(next, &fam_context->shareds[0], __end_index);"""
         else:
             newitems += "exit(1);  // main should never be created as a family of more than one thread"
@@ -554,6 +589,7 @@ class TFun_2_HydraCFunctions(DefaultVisitor):
                 for (__index = __start_index; __index <= __end_index; ++__index) {
                     const tc_ident_t* p, *n;
                     i_struct* s = _cur_tc->shareds;
+                    memdesc_t* shared_descs = _cur_tc->shared_descs;
                     if (__index == __start_index) {
                         p = _get_prev_ident();
                     } else {
@@ -564,14 +600,16 @@ class TFun_2_HydraCFunctions(DefaultVisitor):
                         if (_is_last_tc()) {
                             // write to the family context
                             s = _get_final_shareds_pointer();
+                            shared_descs = _get_final_descs_pointer();
                         } else {
                             // write to the next tc
                             s = next->tc->shareds;
+                            shared_descs = next->tc->shared_descs;
                         }
                     } else {
                         n = &_cur_tc->ident;
                     }
-                    """ + fundef.name + """_generic(p, n, s, __index); // TODO: check for break value
+                    """ + fundef.name + """_generic(p, n, s, shared_descs, __index); // TODO: check for break value
                 }
 
             }
@@ -615,16 +653,24 @@ class Mem_2_HRT(DefaultVisitor):
         d.cvar_stub = stub_decl
         d.cvar_desc = None
         # is descriptor needed? it is _not_ needed for sl_getmp 
+        # possible values for set_op include MemDesc, GetMemP, MemActivate (lhs), MemExtend (lhs)
         # TODO: figure out if there are other operations when the descriptor is not needed
         descriptor_needed = 1
         if isinstance(d.set_op, GetMemP):
             descriptor_needed = 0
+
 
         if descriptor_needed:
             print 'inserting descriptor declaration in scope'
             desc_decl = CVarDecl(loc = d.loc, name = "_" + d.name + "_desc", ctype = "memdesc_t")
             scope.decls += desc_decl
             d.cvar_desc = desc_decl
+            # if the initialization operation is extend, we have to init no_ranges since this will not be
+            # done as part of extend. For the other operations, this initialization will be a byproduct
+            # of those operations.
+            if isinstance(d.set_op, MemExtend):
+                print 'adding no_range initialization'
+                scope.decls += CVarUse(decl = desc_decl) + Opaque('.no_ranges = 0;')
             # initialize stub to be associated with descriptor
             scope.decls += (CVarUse(decl = stub_decl) + ' = _create_memdesc_stub(&' 
                         + CVarUse(decl = desc_decl) + ', NODE_INDEX, 1, 0);\n'
@@ -649,10 +695,9 @@ class Mem_2_HRT(DefaultVisitor):
         new_items += (flatten(activate.loc, '')
                 + '_memactivate(&'
                 + CVarUse(decl = activate.rhs_decl.cvar_stub) + ', '
-                #+ CVarUse(decl = activate.rhs_decl.cvar_desc) + '.ranges[0], '  #FIXME: remove this arg
-                #+ CVarUse(decl = activate.rhs_decl.cvar_desc) + '.no_ranges, '
                 )
         if activate.lhs is not None:
+            assert activate.lhs_decl.cvar_desc is not None
             new_items += (flatten(None, '&')
                 +  CVarUse(decl = activate.lhs_decl.cvar_desc) + ', '
                 + '&' + CVarUse(decl = activate.lhs_decl.cvar_stub)
@@ -672,8 +717,6 @@ class Mem_2_HRT(DefaultVisitor):
         return new_items
 
     def visit_memrestrict(self, re):
-        print 'visiting restrict. lhs is ' + re.lhs
-        print 'rhs is ' + re.rhs
         new_items = Block()
         new_items += (flatten(re.loc, "") + CVarUse(decl = re.lhs_decl.cvar_stub) + ' = ' +
                       "_memrestrict(" 
@@ -682,6 +725,13 @@ class Mem_2_HRT(DefaultVisitor):
                       #+ CVarUse(decl = re.rhs_decl.cvar_desc) + '.ranges[0], '  # TODO: remove this argument (first range)
                       + re.offset + ', ' + re.size + ')'
                       )
+        return new_items
+    
+    def visit_memextend(self, extend):
+        new_items = Block()
+        new_items += (flatten(extend.loc, "_memextend(")
+                + CVarUse(decl = extend.lhs_decl.cvar_stub) + ', '
+                + CVarUse(decl = extend.rhs_decl.cvar_stub) + ')')
         return new_items
 
 __all__ = ["Create_2_HydraCall", "TFun_2_HydraCFunctions", "Mem_2_HRT"]

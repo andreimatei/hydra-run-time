@@ -107,6 +107,8 @@ static void handle_req_pull_data(const req_pull_data* req);
 static void handle_req_pull_data_described(const req_pull_data_described* req);
 static void handle_req_ping(const req_ping* req);
 static void handle_resp_ping(const resp_ping* req);
+static void handle_req_pull_desc(const req_pull_desc* req);
+static void handle_resp_pull_desc(const resp_pull_desc* req);
 
 static int push_queue_not_empty(int node_index);
 static int dequeue_push_request(int node_index, push_request_t* req);
@@ -168,6 +170,16 @@ static void handle_sctp_request(int sock) {
       LOG(DEBUG, "network: handle_sctp_request: got REQ_PULL_DATA_DESCRIBED\n");
       assert(read == sizeof(req_pull_data_described));
       handle_req_pull_data_described((req_pull_data_described*)req);
+      break;
+    case REQ_PULL_DESC:
+      LOG(DEBUG, "network: handle_sctp_request: got REQ_PULL_DESC\n");
+      assert(read == sizeof(req_pull_desc));
+      handle_req_pull_desc((const req_pull_desc*)req);
+      break;
+    case RESP_PULL_DESC:
+      LOG(DEBUG, "network: handle_sctp_request: got RESP_PULL_DESC\n");
+      assert(read == sizeof(resp_pull_desc));
+      handle_resp_pull_desc((const resp_pull_desc*)req);
       break;
     case REQ_PING:
       LOG(DEBUG, "network: handle_sctp_request: got REQ_PING\n");
@@ -283,14 +295,50 @@ char* parse_memchunk_header(char* buf, int len __attribute__((__unused__)), int 
  * Read from a buffer and copies to local memory.
  * Returns 1 if we got all that was required by the incoming_state[invoming_index]; 0 if more data is needed.
  * len - [IN] - size of buf
+ * bytes_used - [OUT] - counter for the number of bytes consumed from buf
  */
-static int parse_incoming_memchunk(int incoming_index, char* buf, int len) {
+static int parse_incoming_memchunk(int incoming_index, char* buf, int len, int* bytes_used) {
   LOG(DEBUG, "network: parse_incoming_memchunk: incoming_index = %d, len = %d\n", incoming_index, len);
+  *bytes_used = 0;
   memdesc_t* desc = &incoming_state[incoming_index].desc;
-  void* mem_dest = desc->ranges[incoming_state[incoming_index].cur_range].p +
-                   incoming_state[incoming_index].offset_within_range;
   int bytes_needed = 0;
   int i;
+
+  do {
+    i = incoming_state[incoming_index].cur_range;
+    // compute how much data is still to be received for this range
+    bytes_needed = desc->ranges[i].no_elements * desc->ranges[i].sizeof_element - 
+                   incoming_state[incoming_index].offset_within_range;
+    void* mem_dest = desc->ranges[i].p + incoming_state[incoming_index].offset_within_range;
+    LOG(DEBUG, "network: parse_incoming_mem_chunk: we need %d bytes for range %d\n", bytes_needed, i);
+    int read = MIN(bytes_needed, len);
+    *bytes_used += read;
+    memcpy(mem_dest, buf, read);
+    LOG(DEBUG, "network: parse_incoming_mem_chunk: copied %d bytes at %p\n", read, mem_dest);
+    bytes_needed -= read;
+    len -= read;
+    buf += read;
+    incoming_state[incoming_index].offset_within_range += read;
+    if (bytes_needed == 0) {
+      incoming_state[incoming_index].cur_range++;
+      incoming_state[incoming_index].offset_within_range = 0;
+    }
+  } while (len > 0 && incoming_state[incoming_index].cur_range < desc->no_ranges);
+
+  if (incoming_state[incoming_index].cur_range == desc->no_ranges) {
+    return 1;
+  } else {
+    return 0;
+  }
+
+  /*
+  // if we filled up
+  if (incoming_state[incoming_index].cur_range == desc->no_ranges) {
+    LOG(DEBUG, "network: parse_incoming_mem_chunk: finished receiving memory for incoming_state slot %d\n",
+        incoming_index);
+    assert(len == 0);
+  }
+
   for (i = incoming_state[incoming_index].cur_range; i < desc->no_ranges; ++i) {
     if (i > incoming_state[incoming_index].cur_range) {
       mem_dest = desc->ranges[incoming_state[incoming_index].cur_range].p;
@@ -300,6 +348,7 @@ static int parse_incoming_memchunk(int incoming_index, char* buf, int len) {
     bytes_needed = desc->ranges[i].no_elements * desc->ranges[i].sizeof_element - 
                    incoming_state[incoming_index].offset_within_range;
     int read = MIN(bytes_needed, len);
+    *bytes_used += read;
     memcpy(mem_dest, buf, read);
     LOG(DEBUG, "network: parse_incoming_mem_chunk: copied %d bytes at %p\n", read, mem_dest);
     bytes_needed -= read;
@@ -319,6 +368,7 @@ static int parse_incoming_memchunk(int incoming_index, char* buf, int len) {
   } else {
     return 0;
   }
+  */
 }
 
 /*
@@ -333,58 +383,83 @@ static void handle_incoming_mem_chunk(int incoming_index) {
   int sock = tcp_incoming_sockets[incoming_index];
   while (1) {  // loop until this we can't read from this socket any more
 
+    LOG(DEBUG, "network: handle_incoming_mem_chunk: reading from socket.\n");
     int r = read(sock, buf, 10000);
     assert(r > 0);
-    // if this is the first time we're receiving data for this incoming_state slot, read the header
-    if (incoming_state[incoming_index].cur_range == -1) {
-      tmp = parse_memchunk_header(buf, r, incoming_index);
-    }
-    
-    if (!incoming_state[incoming_index].remote_confirm) {
-      int slot_index;
-      if ((slot_index = incoming_state[incoming_index].pending_req_index) != -1) {
-        struct timeval t; gettimeofday(&t, NULL);
-        pending_request_t* pending = &pending_requests[slot_index];
-        LOG(DEBUG, "network: handle_incoming_mem_chunk: it seems we have received some memory data," \
-            "The TC pulling the data has been blocked for %ld ms.\n", 
-            timediff(t,pending->blocking_tc->blocking_time));
+
+    while (tmp < (buf + r)) {  // loop until all the data was consumed
+      LOG(DEBUG, "network: handle_incoming_mem_chunk: we have some data to parse (%d bytes).\n",
+          (buf + r) - tmp);
+      // if this is the first time we're receiving data for this incoming_state slot, read the header
+      if (incoming_state[incoming_index].cur_range == -1) {
+        LOG(DEBUG, "network: handle_incoming_mem_chunk: parsing a header since incoming_state is not initialized.\n");
+        // this will initialize incoming_state[incoming_index]
+        char* old_tmp = tmp;
+        tmp = parse_memchunk_header(tmp, r - (tmp - buf), incoming_index);
+        LOG(DEBUG, "network: handle_incoming_mem_chunk: done parsing header. It consumed %d bytes.\n",
+            tmp - old_tmp);
       }
-    }
-  
-    // init the range that we're currently receiving, so that the SIGSEGV handler maps it for us if needed
-    memdesc_t* desc = &incoming_state[incoming_index].desc;
-    int range_no = incoming_state[incoming_index].cur_range;
-    cur_incoming_mem_range_start = desc->ranges[range_no].p;
-    cur_incoming_mem_range_len = desc->ranges[range_no].no_elements * desc->ranges[range_no].sizeof_element; 
 
-    int finished = parse_incoming_memchunk(incoming_index, tmp, r - (tmp - buf));
-    if (finished) {  // we've got all the data
-      LOG(DEBUG, "network: handle_incoming_mem_chunk: finished receiving data for a memdesc\n");
-      // clear the state
-      cur_incoming_mem_range_start = NULL;
-      cur_incoming_mem_range_len = 0;
-      incoming_state[incoming_index].cur_range = -1;
-      int slot_index;
-      if ((slot_index = incoming_state[incoming_index].pending_req_index) != -1) {
-        if (incoming_state[incoming_index].remote_confirm) {
-          // send a confirmation
-          req_confirmation req;
-          req.type = REQ_CONFIRMATION;
-          req.node_index = NODE_INDEX;
-          req.identifier = incoming_state[incoming_index].pending_req_index;
-          req.response_identifier = -1;
-          LOG(DEBUG, "network: handle_incoming_mem_chunk: sending remote confirmation for received data\n");
-          int dest_node = incoming_state[incoming_index].node_index;
-          send_sctp_msg(dest_node, &req, sizeof(req));
-
-        } else {
-          // the pending slot was local; write to it
-          LOG(DEBUG, "network: handle_incoming_mem_chunk: sending local confirmation for received data\n");
+      if (!incoming_state[incoming_index].remote_confirm) {  // if it was this node who requested the data
+        int slot_index;
+        if ((slot_index = incoming_state[incoming_index].pending_req_index) != -1) {
+          struct timeval t; gettimeofday(&t, NULL);
           pending_request_t* pending = &pending_requests[slot_index];
-          write_istruct_different_proc(&pending->istruct, 1, pending->blocking_tc);
+          LOG(DEBUG, "network: handle_incoming_mem_chunk: it seems we have received some memory data," \
+              "The TC pulling the data has been blocked for %ld ms.\n", 
+              timediff(t,pending->blocking_tc->blocking_time));
         }
-      }  
-    }
+      }
+
+      // init the range that we're currently receiving, so that the SIGSEGV handler maps it for us if needed
+      memdesc_t* desc = &incoming_state[incoming_index].desc;
+      int range_no = incoming_state[incoming_index].cur_range;
+      cur_incoming_mem_range_start = desc->ranges[range_no].p;
+      cur_incoming_mem_range_len = desc->ranges[range_no].no_elements * desc->ranges[range_no].sizeof_element; 
+
+      int bytes_used = 0;
+      LOG(DEBUG, "network: handle_incoming_mem_chunk: parsing a memchunk\n");
+      LOG(DEBUG, "network: handle_incoming_mem_chunk: r = %d, buf = %p, tmp = %p\n", r, buf, tmp);
+
+      int finished = parse_incoming_memchunk(incoming_index, tmp, r - (tmp - buf), &bytes_used);
+      LOG(DEBUG, "network: handle_incoming_mem_chunk: done parsing a memchunk. finished = %d\n", finished);
+      tmp += bytes_used;
+      if (finished) {  // we've got all the data
+        LOG(DEBUG, "network: handle_incoming_mem_chunk: finished receiving data for a memdesc\n");
+        
+        // assert that we've used up all the data read from the socket
+        // // FIXME: the current code seems to not handle the case where a single remote node quickly seends different
+        // // memory chunks (with different headers). If the read() in this function grabs more than one header, we
+        // // ignore the second one (hence the next assert). Fix this somehow.
+        // //assert(bytes_used == r - (tmp - buf));
+        
+        // clear the state
+        cur_incoming_mem_range_start = NULL;
+        cur_incoming_mem_range_len = 0;
+        incoming_state[incoming_index].cur_range = -1;
+        int slot_index;
+        if ((slot_index = incoming_state[incoming_index].pending_req_index) != -1) {
+          if (incoming_state[incoming_index].remote_confirm) {
+            // send a confirmation
+            req_confirmation req;
+            req.type = REQ_CONFIRMATION;
+            req.node_index = NODE_INDEX;
+            req.identifier = incoming_state[incoming_index].pending_req_index;
+            req.response_identifier = -1;
+            LOG(DEBUG, "network: handle_incoming_mem_chunk: sending remote confirmation for received data\n");
+            int dest_node = incoming_state[incoming_index].node_index;
+            send_sctp_msg(dest_node, &req, sizeof(req));
+
+          } else {
+            // the pending slot was local; write to it
+            LOG(DEBUG, "network: handle_incoming_mem_chunk: sending local confirmation for received data\n");
+            pending_request_t* pending = &pending_requests[slot_index];
+            write_istruct_different_proc(&pending->istruct, 1, pending->blocking_tc);
+          }
+        }  
+      }
+    }  // loop until all the data that was read from the socket is consumed 
+    LOG(DEBUG, "network: handle_incoming_mem_chunk: all the data that was read so far from the socket was consumed\n");
 
     if (r == 10000) {  // maybe there's more data
       //poll with 0 timeout to return immediately
@@ -396,14 +471,17 @@ static void handle_incoming_mem_chunk(int incoming_index) {
       int res = select(sock, &set, NULL, NULL, &tv);
       if (res < 0) handle_error("select");
       if (FD_ISSET(sock, &set)) {
+        LOG(DEBUG, "network: handle_incoming_mem_chunk: socket has more data for us. looping.\n");
         continue;
       } else {
+        LOG(DEBUG, "network: handle_incoming_mem_chunk: socket doesn't have more data for us. quitting.\n");
         break;
       }
     } else {
+      LOG(DEBUG, "network: handle_incoming_mem_chunk: not testing socket since we didn't fill our buffer before. quitting.\n");
       break;
     }
-  }
+  }  // loop until we can't read from the socket any more
 }
 
 void open_tcp_conn(int node_index) {
@@ -489,10 +567,11 @@ void build_push_header(const tcp_sending_state_t* s, char* buf, int buf_size, in
 }
 
 static void push_data(int node_index) {
-  // TODO: as implemented now, i send the header in blocking mode, but with MSG_MORE set,
-  // and then i continue in non blocking mode... test if this does the right thing (i.e. don't block if I 
+  // TODO: as implemented now, we send the header in blocking mode, but with MSG_MORE set,
+  // and then we continue in non blocking mode... test if this does the right thing (i.e. don't block if we
   // send a GB).
   assert(outgoing_state[node_index].active);
+  LOG(DEBUG, "network: push_data: entering push_data with node_index = %d\n", node_index);
   tcp_sending_state_t* s = &outgoing_state[node_index];
   int sock = secondaries[node_index].socket_tcp;
   int res;
@@ -500,18 +579,21 @@ static void push_data(int node_index) {
   assert(s->cur_range < s->req.no_ranges);
   if (!s->header_sent) {
     // send the header in a blocking fashion
+    LOG(DEBUG, "network: push_data: sending header\n");
     char c[1000];
     int len;
     build_push_header(s, c, 1000, &len);
     res = send(sock, c, len, MSG_MORE);
     assert(res == len);
+    s->header_sent = 1;
     s->cur_range = 0;
   }
   // send data in non-blocking mode
+  LOG(DEBUG, "network: push_data: sending data. cur_range = %d total ranges = %d\n", s->cur_range, s->req.no_ranges);
   mem_range_t r = s->req.ranges[s->cur_range];
   int tot_send = r.no_elements * r.sizeof_element;
   int to_send = tot_send - s->bytes_sent;
-  assert(to_send > 0);
+  assert((to_send > 0) || (r.no_elements == 0));
   int flags = MSG_DONTWAIT;
   if (s->cur_range < s->req.no_ranges - 1)  // if there are more ranges to come
     flags |= MSG_MORE;  // TODO: verify that select still returns this socket so we can continue sending
@@ -523,6 +605,7 @@ static void push_data(int node_index) {
     LOG(WARNING, "network: push_data: send returned -1 and errno was EWOULDBLOCK or EAGAIN\n");
   }
   if (res == to_send) {
+    LOG(DEBUG, "network: push_data: finished sending a range\n");
     s->cur_range++;
     s->bytes_sent = 0;
     if (s->cur_range == s->req.no_ranges) {  // we just finished sending the last part of the last range
@@ -590,13 +673,6 @@ void* delegation_interface(void* parm) {
       copy = all_sockets;
       // build collection of sockets that need to send data
       sending = get_sending_sockets();
-      //struct timeval time;
-      //time.tv_sec = 0;
-      //time.tv_usec = 30000;  // 1 miliseconds
-      // TODO: do something about this timeout, at least make it bigger; it's only purpose is to allow
-      // rebulding of the sending sockets collection to take place. Maybe there's another way to interupt a select
-      // when this collection is modified... Send a signal to this thread?
-      LOG(DEBUG, "network: delegation interface: entering select\n");
       assert(FD_ISSET(new_sending_socket_pipe_fd[0], &copy));
       LOG(DEBUG, "network: delegation_interface: entering select.\n");
       int res = select(FD_SETSIZE, &copy, &sending, NULL, NULL);//&time);
@@ -614,11 +690,6 @@ void* delegation_interface(void* parm) {
         assert(res == 1);
       }
     }
-    //if (res == 0) {
-    ////LOG(DEBUG, "network: delegation interface: got out of select just to rebuild sending sockets\n");
-    //  continue;  // this is done to rebuild the sending sockets collection
-    //}
-    //print_msg = 1;
     LOG(DEBUG, "network: delegation interface: got out of select; we actually have work to do\n");
 
     if (FD_ISSET(sock_sctp, &copy)) {
@@ -1033,6 +1104,7 @@ void populate_remote_tcs(
     tc_ident_t parent, tc_ident_t prev, tc_ident_t next,
     int final_ranges,  // 1 if these tcs are the last ones of the family
     i_struct* final_shareds, // pointer to the shareds in the FC (NULL if !final_ranges)
+    memdesc_t* final_descs,  // pointer to the descriptor table in the FC (NULL if !final_ranges)
     i_struct* done          // pointer to done in the FC, valid on the parent node (NULL if !final_ranges)
     ) {
   req_create req;
@@ -1048,6 +1120,7 @@ void populate_remote_tcs(
   req.parent = parent; req.prev = prev; req.next = next;
   req.final_ranges = final_ranges;
   req.final_shareds = final_shareds;
+  req.final_descs = final_descs;
   req.done = done;
   send_sctp_msg(node_index, &req, sizeof(req));
 }
@@ -1068,9 +1141,20 @@ void write_remote_istruct(int node_index,
   send_sctp_msg(node_index, &req, sizeof(req));
 }
 
+/*
+ * Sends a request to write a stub to a remote istruct. The request also carries the first range and 
+ * the number of ranges of the descriptor, which will be written to the descriptor on the remote node.
+ * The values for the first range and the number of ranges are read from a descriptor which might be
+ * different than the descriptor pointed to by the stub. This is because the pointer of the stub might
+ * have been changed before calling this function to point to a location valid only on the destination 
+ * node. This happens because, before copying them to the next thread, pointers in stubs are set to
+ * point to locations in the next TC or in the FC. See write_argmem in tc.c
+ */
 void write_remote_istruct_mem(int node_index, 
                               i_struct* istructp, 
                               memdesc_stub_t val, 
+                              memdesc_t* desc,
+                              int copy_desc,
                               const tc_t* reader) {
   req_write_istruct_mem req;
   req.type = REQ_WRITE_ISTRUCT_MEM;
@@ -1080,8 +1164,13 @@ void write_remote_istruct_mem(int node_index,
 
   req.istruct = istructp;
   req.val = val;
-  req.first_range = get_stub_pointer(val)->ranges[0];
-  req.no_ranges = get_stub_pointer(val)->no_ranges;
+  req.desc_set = copy_desc;
+  if (copy_desc) {
+    req.desc = *desc;
+  } else {
+    req.first_range = desc->ranges[0]; //get_stub_pointer(val)->ranges[0];
+    req.no_ranges = desc->no_ranges; //get_stub_pointer(val)->no_ranges;
+  }
   req.reader_tc = (tc_t*)reader;
   send_sctp_msg(node_index, &req, sizeof(req));
 }
@@ -1098,8 +1187,16 @@ static void handle_req_write_istruct_mem(const req_write_istruct_mem* req) {
   memdesc_t* desc = get_stub_pointer(req->val);
   cur_incoming_mem_range_start = desc;
   cur_incoming_mem_range_len = (unsigned long)desc + sizeof(*desc); 
-  desc->no_ranges = req->no_ranges;
-  desc->ranges[0] = req->first_range;
+  // initialize the local descriptor, or at least the first range and no_ranges, depending on what
+  // the request provides
+  if (req->desc_set) {
+    *desc = req->desc;
+    assert(req->val.node == NODE_INDEX);  // the stub should indicate that the descriptor is to be
+                                          // found on this node
+  } else {
+    desc->no_ranges = req->no_ranges;
+    desc->ranges[0] = req->first_range;
+  }
 
   // write the i-structure
   write_istruct_different_proc(req->istruct, _stub_2_long(req->val), req->reader_tc);
@@ -1114,6 +1211,7 @@ static void handle_req_create(const req_create* req) {
                      req->parent, req->prev, req->next,
                      req->final_ranges,
                      req->final_shareds,
+                     req->final_descs,
                      req->done);
   LOG(DEBUG, "network: handle_req_create: finished populating local TC's\n");
 }
@@ -1192,6 +1290,8 @@ static int dequeue_push_request(int node_index, push_request_t* req) {
 static void handle_req_pull_data(const req_pull_data* req) {
   memdesc_t* desc = req->desc;
   mem_range_t ranges[desc->no_ranges];
+  LOG(DEBUG, "network: handle_req_pull_data: received a request to pull from a desc with %d ranges\n",
+      desc->no_ranges);
   for (int i = 0; i < desc->no_ranges; ++i) {
     ranges[i] = desc->ranges[i];
   }
@@ -1211,9 +1311,31 @@ static void handle_req_pull_data_described(const req_pull_data_described* req) {
   enqueue_push_request(req->node_index,  // destination node
                        req->identifier,  // pending request slot to be written on the remote node
                        0,                // no remote confirmation needed 
-                       &req->range,      // memory to push
-                       1                 // only one range to push 
+                       req->desc.ranges,
+                       req->desc.no_ranges
+                       //&req->range,      // memory to push
+                       //1                 // only one range to push 
                        );
+}
+
+static void handle_req_pull_desc(const req_pull_desc* req) {
+  resp_pull_desc resp;
+  resp.type = RESP_PULL_DESC;  
+  resp.node_index = NODE_INDEX;
+  resp.response_identifier = req->identifier;  // this is the index of a pending request that will be unblocked
+
+  resp.desc = *req->desc_pointer;
+  resp.destination = req->destination;
+  send_sctp_msg(req->node_index, &resp, sizeof(resp));
+}
+
+static void handle_resp_pull_desc(const resp_pull_desc* req) {
+  // copy the descriptor
+  *req->destination = req->desc;
+  // unblock the pending request
+  pending_request_t* pending = &pending_requests[req->response_identifier];
+  LOG(DEBUG, "network: handle_resp_pull_desc: unblocking tc %p\n", pending->blocking_tc);
+  write_istruct_different_proc(&pending->istruct, 1, pending->blocking_tc);
 }
 
 static void handle_req_ping(const req_ping* req) {

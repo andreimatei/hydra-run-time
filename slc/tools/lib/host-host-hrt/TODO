@@ -54,6 +54,7 @@ KNOWN ISSUES
 
 - network:
     - in network.c, no_tcp_incoming_sockets needs locking before incrementing and reading it
+    - if a header for a memory transfer is not read fully at once from the socket, the code won't work
 - tc.c
     - we need to always to map memory chunks in 1MB increments (cause that what the sigsegv handler does)
 

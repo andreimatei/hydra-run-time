@@ -10,6 +10,13 @@ extern unsigned long cur_incoming_mem_range_len;
 
 
 void init_mem_comm();
+int memdesc_desc_local(memdesc_stub_t stub);
+/*
+ * Pull a descriptor from the descriptor provider of stub and updates the stub to point to the local copy.
+ * Note that if the descriptor has a single range, no network operation is done, since info about the first 
+ * range is provided directly to this function.
+ */
+void pull_desc(memdesc_t* new_desc, memdesc_stub_t* stub, memdesc_t* orig_desc);
 
 #endif
 

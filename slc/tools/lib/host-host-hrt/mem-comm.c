@@ -25,7 +25,7 @@ static void* get_elem_pointer(const mem_range_t* range, int start_elem) {
   return range->p + (start_elem * range->sizeof_element);
 }
 
-static int memdesc_desc_local(memdesc_stub_t stub) {
+int memdesc_desc_local(memdesc_stub_t stub) {
   return (stub.node == NODE_INDEX);
 }
 
@@ -79,12 +79,35 @@ memdesc_stub_t _stub_2_canonical_stub(memdesc_stub_t stub, int S) {
  * Note that if the descriptor has a single range, no network operation is done, since info about the first 
  * range is provided directly to this function.
  */
-static void pull_desc(memdesc_t* new_desc, memdesc_stub_t* stub,
-                      mem_range_t first_range, unsigned int no_ranges) {
-  assert(no_ranges == 1); // TODO: if > 1, pull the metadata from the remote node
-  assert(stub->node != NODE_INDEX);  // should never pull from the local node
-  new_desc->no_ranges = 1;
-  new_desc->ranges[0] = first_range;
+void pull_desc(memdesc_t* new_desc, memdesc_stub_t* stub, memdesc_t* orig_desc) {//,
+                      //mem_range_t first_range, unsigned int no_ranges) {
+  //memdesc_t* old_desc = get_stub_pointer(stub);
+  //assert(old_desc->no_ranges == 1); // TODO: if > 1, pull the metadata from the remote node
+  //FIXME: pull if no_ranges > 1
+  if (orig_desc->no_ranges > 1) {
+
+    if (stub->node == NODE_INDEX) {
+      // just copy the descriptor
+      *new_desc = *orig_desc;
+    } else {
+      // get pending request slot
+      pending_request_t* pending = get_pending_request_slot(_cur_tc);
+      assert(pending != NULL);  // TODO: handle error
+      req_pull_desc req;
+      req.type = REQ_PULL_DESC;
+      req.node_index = NODE_INDEX;
+      req.identifier = pending->id;
+      req.response_identifier = -1;
+      req.desc_pointer = orig_desc;
+      req.destination = new_desc;
+      send_sctp_msg(stub->node, &req, sizeof(req));
+      block_for_confirmation(pending);
+    }
+  } else {
+    //assert(stub->node != NODE_INDEX);  // should never pull from the local node
+    new_desc->no_ranges = 1;
+    new_desc->ranges[0] = orig_desc->ranges[0]; //first_range;
+  }
   // we have the descriptor now, so set the descriptor provider to the local node
   stub->node = NODE_INDEX; 
   // make the stub point to the new (local) descriptor
@@ -111,12 +134,14 @@ static void pull_data(memdesc_stub_t* stub) {
     req.node_index = NODE_INDEX;
     req.identifier = pending->id;  
     req.response_identifier = -1;
-    assert(get_stub_pointer(*stub)->no_ranges == 1);  
-    //TODO: so far, we only support this (1 range) for pulling with
-    // a local descriptor. This is usually sufficient, since usually you would get a
-    // local descriptor by a restrict operation, which produces a desc with one range
+    //assert(get_stub_pointer(*stub)->no_ranges == 1);  
+    ////TODO: so far, we only support this (1 range) for pulling with
+    //// a local descriptor. This is usually sufficient, since usually you would get a
+    //// local descriptor by a restrict operation, which produces a desc with one range
 
-    req.range = get_stub_pointer(*stub)->ranges[0];
+    //req.range = get_stub_pointer(*stub)->ranges[0];
+    req.desc = *get_stub_pointer(*stub);
+    LOG(DEBUG, "mem-comm: pull_data: sending pull described request\n");
     send_sctp_msg(stub->data_provider, &req, sizeof(req));
   } else {
     // build a req_pull_data
@@ -127,6 +152,7 @@ static void pull_data(memdesc_stub_t* stub) {
     req.response_identifier = -1;
     req.desc = get_stub_pointer(*stub);
     assert(stub->data_provider == stub->node);
+    LOG(DEBUG, "mem-comm: pull_data: sending pull request\n");
     send_sctp_msg(stub->node, &req, sizeof(req));
   }
 
@@ -138,19 +164,16 @@ static void pull_data(memdesc_stub_t* stub) {
 
 /*
  * Adds objects to a descriptor (everything that was part of stub_to_copy).
- * no_ranges[OUT] -> will be set to the new number of ranges in stub.
  */
-void _memextend(memdesc_stub_t stub, memdesc_stub_t stub_to_copy, int* no_ranges) {
+void _memextend(memdesc_stub_t stub, memdesc_stub_t stub_to_copy) {
   assert(memdesc_data_local(stub) && memdesc_desc_local(stub));
   assert(stub_to_copy.data_provider == NODE_INDEX && memdesc_desc_local(stub_to_copy));
-  //assert(memdesc_data_local(stub_to_copy) && memdesc_desc_local(stub_to_copy));
   memdesc_t* src = get_stub_pointer(stub_to_copy);
   memdesc_t* dest = get_stub_pointer(stub);
+  assert((dest->no_ranges + src->no_ranges) <= MAX_RANGES_PER_MEM);
   for (int i = 0; i < src->no_ranges; ++i) {
-    dest->ranges[dest->no_ranges] = src->ranges[i];
-    dest->no_ranges++;
+    dest->ranges[dest->no_ranges++] = src->ranges[i];
   }
-  *no_ranges = dest->no_ranges;
 }
 
 /*--------------------------------------------------
@@ -204,15 +227,19 @@ void* _memactivate(memdesc_stub_t* stub,
   if (!memdesc_data_local(*stub)) {
     pull_data(stub);
   }
-  //pull_desc(new_desc, stub, first_range, no_ranges);
   if (new_stub != NULL) {
+    assert(new_desc != NULL);
+
     new_stub->have_data = 1;
     new_stub->data_provider = NODE_INDEX;
     new_stub->S = 0;
     // .pointer and .node remain as in the original
     new_stub->node = stub->node;
-    new_stub->pointer = stub->pointer;
+    //new_stub->pointer = stub->pointer;
+    pull_desc(new_desc, new_stub, get_stub_pointer(*stub));
   }
+  
+  /*
   memdesc_t* old_desc = get_stub_pointer(*stub);
   if (new_desc != NULL) {
     // initialize the first range of the new descriptor. The first range needs to be valid,
@@ -220,9 +247,14 @@ void* _memactivate(memdesc_stub_t* stub,
     new_desc->no_ranges = old_desc->no_ranges;//no_ranges;
     new_desc->ranges[0] = old_desc->ranges[0];//first_range;
   }
+  */
+
+  
+  //FIXME: new_stub->pointer has to be set to new_desc and the descriptor has to be pulled
 
   //return first_range.orig_p;
-  return old_desc->ranges[0].orig_p;
+  //return old_desc->ranges[0].orig_p;
+  return get_stub_pointer(*stub)->ranges[0].orig_p;
 }
 
 
@@ -338,10 +370,11 @@ static pending_request_t* pull_elems(int node_index,
   req.identifier = pending->id;  
   // TODO: check this function again
   req.response_identifier = -1;
-  req.range.p = get_elem_pointer(&first_range, first_elem);
-  req.range.orig_p = NULL;  // sholdn't be used
-  req.range.no_elements = last_elem - first_elem + 1;
-  req.range.sizeof_element = first_range.sizeof_element;
+  req.desc.no_ranges = 1;
+  req.desc.ranges[0].p = get_elem_pointer(&first_range, first_elem);
+  req.desc.ranges[0].orig_p = NULL;  // sholdn't be used
+  req.desc.ranges[0].no_elements = last_elem - first_elem + 1;
+  req.desc.ranges[0].sizeof_element = first_range.sizeof_element;
   send_sctp_msg(node_index, &req, sizeof(req));
 
   return pending;
@@ -367,8 +400,8 @@ void _memscatter_affine(fam_context_t* fc,
     thread_range_t r = fc->ranges[i];
     if (r.dest.node_index != cur_node) {
       if (cur_node != -1) {
-        assert(no_pushes < MAX_NODES);
         if (cur_node != NODE_INDEX) {
+          assert(no_pushes < MAX_NODES);
           LOG(DEBUG, "mem-comm: scatter: scattering to node %d\n", cur_node);
           pending_request_t* p = 
             push_elems(cur_node, stub, first_range,
@@ -405,12 +438,11 @@ void _memscatter_affine(fam_context_t* fc,
 }
 
 /*
- * Gathers from a descriptor that was scattered with _memscatter_affine(.. a,b,c)
+ * Gathers from a descriptor that was scattered with _memscatter_affine.
  */
 void _memgather_affine(
     fam_context_t* fc,
     memdesc_stub_t stub, 
-    //mem_range_t first_range,
     int a, int b, int c) {
   int start_thread, end_thread;
   int cur_node = -1;
@@ -422,7 +454,7 @@ void _memgather_affine(
   for (int i = 0; i < fc->no_ranges; ++i) {
     thread_range_t r = fc->ranges[i];
     if (r.dest.node_index != cur_node) {
-      if (cur_node != -1) {
+      if (cur_node != -1 && cur_node != NODE_INDEX) {
         pending_pulls[no_pulls++] = 
           pull_elems(cur_node, first_range, a*start_thread + b, a*end_thread + c);
       }
@@ -437,14 +469,16 @@ void _memgather_affine(
   } 
   // pull from the last node
   assert(cur_node != -1);
-  pending_pulls[no_pulls++] = 
-    pull_elems(cur_node, first_range, a*start_thread + b, a*end_thread + c);
-  // block until all the push operations complete
-  // TODO: this is ugly; we block on one operation at a time.
-  // What we'd really want is a semaphore 
-  LOG(DEBUG, "mem-comm: gather: blocking for %d confirmation(s)\n", no_pulls);
-  for (int i = 0; i < no_pulls; ++i) {
-    block_for_confirmation(pending_pulls[i]); 
+  if (cur_node != NODE_INDEX) {
+    pending_pulls[no_pulls++] = 
+      pull_elems(cur_node, first_range, a*start_thread + b, a*end_thread + c);
+    // block until all the push operations complete
+    // TODO: this is ugly; we block on one operation at a time.
+    // What we'd really want is a semaphore 
+    LOG(DEBUG, "mem-comm: gather: blocking for %d confirmation(s)\n", no_pulls);
+    for (int i = 0; i < no_pulls; ++i) {
+      block_for_confirmation(pending_pulls[i]); 
+    }
   }
 }
 

@@ -18,6 +18,8 @@ typedef enum request_type {
   REQ_CONFIRMATION,
   REQ_PULL_DATA,
   REQ_PULL_DATA_DESCRIBED,
+  REQ_PULL_DESC,  // request to pull a descriptor
+  RESP_PULL_DESC,
   REQ_PING,
   RESP_PING
 }request_type;
@@ -83,6 +85,7 @@ typedef struct req_create {
   tc_ident_t parent, prev, next;
   int final_ranges;  // 1 if these tcs are the last ones of the family
   i_struct* final_shareds; // pointer to the shareds in the FC (NULL if !final_ranges)
+  memdesc_t* final_descs;  // pointer to the descriptor table in the FC (NULL if !final_ranges)
   i_struct* done;          // pointer to done in the FC, valid on the parent node (NULL if !final_ranges)
 }req_create;
 
@@ -105,8 +108,12 @@ typedef struct req_write_istruct_mem {
 
   i_struct* istruct;
   memdesc_stub_t val;  // value to be written
+  
+  int desc_set;        // 1 if the .desc field is valid, 0 if .first_range and .no_ranges are valid
   mem_range_t first_range;
   int no_ranges;
+  memdesc_t desc;  // the descriptor associated with the stub;
+  
   tc_t* reader_tc;  // the tc that's potentially blocked on the istruct (valid on the destination node)
 }req_write_istruct_mem;
 
@@ -116,6 +123,27 @@ typedef struct req_confirmation {
   int identifier;  // index of the pending request slot to unblock
   int response_identifier;
 }req_confirmation;
+
+typedef struct {
+  request_type type;
+  int node_index;  // originating node
+  int identifier;  // index of the pending request slot to unblock
+  int response_identifier;
+
+  memdesc_t* desc_pointer;  // the address of the descriptor that needs to be pulled
+  memdesc_t* destination;   // where the descriptor is to be put on the requesting node
+}req_pull_desc;
+
+typedef struct {
+  request_type type;
+  int node_index;  // originating node
+  int identifier;  
+  int response_identifier;  // index of the pending request slot to unblock
+
+  memdesc_t desc;
+  memdesc_t* destination;   // where the descriptor is to be put on the requesting node
+}resp_pull_desc;
+
 
 /*
  * Request to pull data from a descriptor on this node
@@ -138,7 +166,8 @@ typedef struct {
   int identifier;  // index of the pending request slot that needs to be written when the data is received
   int response_identifier;
  
-  mem_range_t range; 
+  //mem_range_t range; 
+  memdesc_t desc;  // descriptor of the data that needs to be pulled
 }req_pull_data_described;
 
 extern struct delegation_interface_params_t delegation_if_arg;
@@ -165,6 +194,7 @@ void populate_remote_tcs(
     tc_ident_t parent, tc_ident_t prev, tc_ident_t next,
     int final_ranges,  // 1 if these tcs are the last ones of the family
     i_struct* final_shareds, // pointer to the shareds in the FC (NULL if !final_ranges)
+    memdesc_t* final_descs,  // pointer to the descriptor table in the FC (NULL if !final_ranges)
     i_struct* done          // pointer to done in the FC, valid on the parent node (NULL if !final_ranges)
     );
 void allocate_remote_tcs(int node_index, int proc_index, int no_tcs, int* tcs, int* no_allocated_tcs);
@@ -172,6 +202,8 @@ void write_remote_istruct(int node_index, i_struct* istructp, long val, const tc
 void write_remote_istruct_mem(int node_index, 
                               i_struct* istructp, 
                               memdesc_stub_t val, 
+                              memdesc_t* desc,
+                              int copy_desc,
                               const tc_t* reader);
 pending_request_t* get_pending_request_slot(tc_t* blocking_tc);
 void send_sctp_msg(int node_index, void* buf, int len);
