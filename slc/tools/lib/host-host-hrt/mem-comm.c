@@ -33,10 +33,12 @@ static int memdesc_data_local(memdesc_stub_t stub) {
   return (stub.data_provider == NODE_INDEX) || stub.S || stub.have_data;
 }
 
-static int memdesc_get_effective_data_prov(memdesc_stub_t stub) {
-  if (stub.have_data) return NODE_INDEX;
-  else return stub.data_provider;
-}
+/*--------------------------------------------------
+* static int memdesc_get_effective_data_prov(memdesc_stub_t stub) {
+*   if (stub.have_data) return NODE_INDEX;
+*   else return stub.data_provider;
+* }
+*--------------------------------------------------*/
 
 /*
  * Create a new descriptor referring to part of the first range of an existing descriptor.
