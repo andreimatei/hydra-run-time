@@ -39,14 +39,32 @@ _chains = {
         ('flattencr',Create_2_Loop()),
         ('flattenfun',TFun_2_CFun()),
         ] + _common_suffix,
+    # FIXME: after the build errors are corrected, swap hrt with hrt_seq. hrt_seq is a copy of old hrt (naked), and hrt is where development happens for hybrid.
     'hrt' : _common_prefix + [
+        ('flatten_mem', Mem_2_HRT()),
+        #('test1', Test_Visitor()),
+        #('sep1', Separator()),
+        ('splitcr', SplitCreates()),
+        #('test2', Test_Visitor()),
+        #('sep2', Separator()),
+        ('lseta', LinkSetA()),
+        ('autores', AutoResolve()),
+        ('splitfun', SplitFuns()),
+        #('test3', Test_Visitor()),
+        #('flatten_mem', ScopedVisitor(Dispatcher({'fmta':Mem_2_HRT(),
+        #                                          'fseq':Mem_2_Seq()}))),
+        ('flattencr', ScopedVisitor(Dispatcher({'cmta':Create_2_HydraCall(),
+                                                'cseq':Create_2_Loop()}))),
+        ('flattenfun', ScopedVisitor(Dispatcher({'fmta':TFun_2_HydraCFunctions(),
+                                                 'fseq':TFun_2_CFun()}))),
+        ] + _common_suffix,
+    'hrt+seq' : _common_prefix + [
         ('lseta', LinkSetA()),
         ('autores', AutoResolve()),
         ('flatten_mem', Mem_2_HRT()),
         ('flattencr',Create_2_HydraCall()),
         ('flattenfun',TFun_2_HydraCFunctions()),
         ] + _common_suffix,
-    # FIXME: support hrt+seq here
     'mta' : _common_prefix + [
         ('lseta', LinkSetA()),
         ('autores', AutoResolve()),

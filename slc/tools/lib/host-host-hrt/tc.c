@@ -173,7 +173,8 @@ padded_spinlock_t fam_contexts_locks[MAX_PROCS_PER_NODE];
 int tc_valid[NO_TCS_PER_PROC * MAX_PROCS_PER_NODE];  // 1 if a TC has been created, 0 if not (due to a
                                                         // memory hole)
 
-void _fam___root_fam(void);
+//void _fam___root_fam(void);
+void __slFfmta___root_fam(void);
 void unblock_tc(tc_t* tc, int same_processor);
 void block_tc_and_unlock(tc_t* tc, pthread_spinlock_t* lock);
 void suspend_on_istruct(volatile i_struct* istructp, int same_proc);
@@ -331,8 +332,11 @@ int allocate_local_tcs(int proc_index,
 }
 */
 
+int first_allocate = 1;
+
 /*
  * Allocates a family context and thread contexts. The FC is initialized with ranges.
+ * Returns NULL if resources couldn't be allocated (either no FC, or no TC's).
  */
 fam_context_t* allocate_fam(
     //thread_func func,
@@ -342,6 +346,11 @@ fam_context_t* allocate_fam(
     long step,
     struct mapping_node_t* parent_id __attribute__((unused)), 
     const struct mapping_decision* mapping) {
+
+  if (!first_allocate)
+    return NULL;  // FIXME: remove this. added to test fallback code path
+  first_allocate = 0;
+
 
   assert(mapping != NULL);
   //find an empty fam_context within the family contexts of the current proc
@@ -353,7 +362,11 @@ fam_context_t* allocate_fam(
     for (i = 0; i < NO_FAM_CONTEXTS_PER_PROC; ++i) {
       if (fam_contexts[_cur_tc->ident.proc_index][i].empty) break;
     }
-    assert(i < NO_FAM_CONTEXTS_PER_PROC); //TODO: return FAIL value
+    // return failure if no FC could be allocated
+    if (i == NO_FAM_CONTEXTS_PER_PROC) {
+      return NULL;
+    }
+    // initialize the allocated FC
     fc = &fam_contexts[_cur_tc->ident.proc_index][i];
     fc->empty = 0;
     fc->done.state = EMPTY;
@@ -414,8 +427,11 @@ fam_context_t* allocate_fam(
     }
   }
 
+  // if no TC's could be allocated anywhere, return failure
   if (last_allocated_proc_index == -1) {
-    assert(0); // TODO: return fail
+    // free the allocated family context
+    fc->empty = 1;  // mark the FC as reusable
+    return NULL;
   }
 
   LOG(DEBUG, "finished allocating resources. Load to redistribute: %d\%\n", 
@@ -647,7 +663,9 @@ tc_ident_t create_fam(fam_context_t* fc,
       parent = _cur_tc->ident;
     } else {
       // this means we're allocating root_fam. The parent shouldn't matter.
-      assert(func == _fam___root_fam);
+      //assert(func == _fam___root_fam);
+      //assert(func == __root_fam);
+      assert(func == __slFfmta___root_fam);
       parent.node_index = -1; parent.tc = NULL; parent.proc_index = -1; parent.tc_index = -1;
     }
     if (start_index == 0) {
@@ -677,7 +695,9 @@ tc_ident_t create_fam(fam_context_t* fc,
             &fc->done
             );
       } else {  // creating root_fam
-        assert(func == &_fam___root_fam);
+        //assert(func == &_fam___root_fam);
+        //assert(func == &__root_fam);
+        assert(func == &__slFfmta___root_fam);
         tc_ident_t dummy_parent;
         // set up a dummy parent; it needs to point to the same node, but different proc and different
         // TC than the reader, because we want the reader to use read_istruct_different_proc
@@ -1936,7 +1956,9 @@ static int start(int argc, char** argv) {
                                     0, 0, 1, NULL, &mapping);
   //fam_context_t* fam = allocate_root_fam(&_fam___root_fam, argc, argv);
   LOG(DEBUG, "creating root_fam\n"); 
-  create_fam(fc, &_fam___root_fam);
+  //create_fam(fc, &_fam___root_fam);
+  //create_fam(fc, &__root_fam);
+  create_fam(fc, &__slFfmta___root_fam);
 
   // transmit argc
   write_istruct_no_checks(&(fc->ranges[0].dest.tc->globals[0]), argc);

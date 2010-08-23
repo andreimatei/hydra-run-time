@@ -1,12 +1,18 @@
 import sys
 import pprint
+from ..msg import warn
 from ..visitors import *
 from ..ast import *
 
+def die(msg):
+    print >>sys.stderr, "%s: %s" % (sys.argv[0], msg)
+    sys.exit(1)
 
 def gen_loop_fun_name(orig_name):  # takes a thread function name and generates a name that will be used as
                                    # the name of the function that implements the corresponding loop
-    return Opaque("_fam_") + orig_name
+    #return Opaque("_fam_") + orig_name
+    #return Opaque("__slFmta") + orig_name
+    return orig_name
 
 class Create_2_HydraCall(ScopedVisitor):
 
@@ -30,7 +36,7 @@ class Create_2_HydraCall(ScopedVisitor):
     def get_arg_index(self, arg, shared):  # returns the index of a specified argument, among shareds of globals
         index = 0
         for a in self.__cur_cr.args:
-            if (a == arg):
+            if (a.name == arg.name):
                 return index
             else:
                 if shared is None:
@@ -41,6 +47,8 @@ class Create_2_HydraCall(ScopedVisitor):
                     else:
                         if (not(shared)) and (not(a.type.startswith("sh"))):
                             index += 1
+
+        die("get_arg_index: can't find index for arg %s (shared = %s)" % (arg.name, shared))
         assert(0)
 
     def do_visit_seta(self, loc, decl, val):
@@ -98,6 +106,8 @@ class Create_2_HydraCall(ScopedVisitor):
         return self.do_visit_seta(seta.loc, seta.decl, b)
 
     def visit_setmema(self, seta):
+        print 'Create_2_HydraCall: visit_setmema: arg %s (%d)' % (seta.decl.name, id(seta.decl))
+        #print 'Create_2_HydraCall: visiting setmema. rhs = %s. id = %d' % (seta.rhs, id(seta.rhs_decl))
         return self.do_visit_seta(seta.loc, seta.decl, CVarUse(decl = seta.rhs_decl.cvar_stub))
 
     def visit_createarg(self, arg):
@@ -109,17 +119,18 @@ class Create_2_HydraCall(ScopedVisitor):
         return arg
     
     def visit_createargmem(self, arg):
+        #print 'Create_2_HydraCall: visit_createargmem: adding cvar to arg %s (%d)' % (arg.name, id(arg))
 
         # for shareds, append a pointer to the corresponding local variable to a list
         # of arguments that will be passed to sync
         if arg.type.startswith("sh"):
-            decls = arg.create.scope.decls
-            var = CVarDecl(loc = arg.loc, name = 'C$a$%s' % arg.create.label, ctype = 'memdesc_stub_t')
-            decls += var
-            arg.cvar = var
+            #decls = arg.create.scope.decls
+            #var = CVarDecl(loc = arg.loc, name = 'C$a$%s' % arg.create.label, ctype = 'memdesc_stub_t')
+            #decls += var
+            #arg.cvar = var
 
-            self.__callist.append(flatten(None, ', &'))
-            self.__callist.append(CVarUse(decl = arg.cvar))
+            self.__callist.append(Opaque(', &'))
+            self.__callist.append(CVarUse(decl = arg.mem_decl.cvar_stub))
         return arg
 
 
@@ -138,9 +149,6 @@ class Create_2_HydraCall(ScopedVisitor):
             
         #Create place: cr.cvar_place  (CVarUse(decl = cr.cvar_place))
 
-        if lc.target_next is not None:
-            warn("alternative %s not used)" %
-                 lc.target_next.name, lc)
 
 
         newbl = []
@@ -154,6 +162,7 @@ class Create_2_HydraCall(ScopedVisitor):
                 # not yet split
                 funvar = Opaque(cr.fun)
         else:
+            die('function pointers not yet supported')
             assert False #TODO
 
         
@@ -193,6 +202,17 @@ class Create_2_HydraCall(ScopedVisitor):
         allocate_call = CVarSet(decl = fam_context_var, 
                                rhs = rrhs)
         newbl.append(allocate_call + ';\n')
+        
+        # if allocation failed, jump to next target, if available
+        newbl.append(Opaque('if (') + CVarUse(decl = fam_context_var) + ' == 0) {\n')
+        if lc.target_next is not None:
+            #warn("alternative %s not used)" %
+            #     lc.target_next.name, lc)
+            newbl.append(CGoto(target = lc.target_next) + ';\n}\n')
+            pass
+        else:
+            # abort the program
+            newbl.append(Opaque('printf(stderr, ""); exit(1);\n}\n'))
 
         #expand call to create_fam()
         first_tc_var = CVarDecl(loc = cr.loc_end, name = 'first_tc$%s' % lbl,
@@ -231,7 +251,7 @@ class Create_2_HydraCall(ScopedVisitor):
             sync_call += node
         sync_call += ')'
         
-        sync_call_assignment = CVarSet(decl = cr.cvar_exitcode, rhs = sync_call)
+        sync_call_assignment = CVarSet(decl = cr.cvar_exitcode, rhs = sync_call) + ';'
        
         newbl.append(sync_call_assignment)
                                         
@@ -280,10 +300,10 @@ class Create_2_HydraCall(ScopedVisitor):
                 )
         return new_items
     
-    def visit_getmema(self, getma):
-        new_items = (Opaque('') + CVarUse(loc = getma.loc, decl = getma.lhs_decl.cvar_stub) + ' = '
-                    + CVarUse(loc = getma.loc, decl = getma.decl.cvar))
-        return new_items
+    #def visit_getmema(self, getma):
+    #    new_items = (Opaque('') + CVarUse(loc = getma.loc, decl = getma.lhs_decl.cvar_stub) + ' = '
+    #                + CVarUse(loc = getma.loc, decl = getma.decl.cvar))
+    #    return new_items
 
 class TFun_2_HydraCFunctions(DefaultVisitor):
     def __init__(self, *args, **kwargs):
@@ -399,43 +419,10 @@ class TFun_2_HydraCFunctions(DefaultVisitor):
                     + '&_cur_tc->shared_descs[%d], ' % param.index
                     + '&_cur_tc->ident)'
                    )
-        #if self.__state == 0: #begin
-        #    newbl.append(flatten(None,#setp.loc,
-        #                     'write_istruct_same_tc(&_cur_tc->shareds[%d],' %
-        #                      param.index) + b_long + ')')
-        #elif self.__state == 1: #middle
-        #    newbl.append(flatten(None,#setp.loc,
-        #                     'write_istruct_same_tc(&_cur_tc->shareds[%d],' %
-        #                      param.index) + b_long + ')')
         elif self.__state == 2 or self.__state == 3: #end and generic
-            # copy the descriptor to the descriptor table in the family context
-            #newbl.append(Opaque("if (!memdesc_desc_local(") 
-            #            + CVarUse(setp.rhs_decl.cvar_stub) + ') {\n'
-            #            + "\tpull_desc( 
-            #            ) 
-            
-            # TODO: pull descriptor if it's not local and remove this assert
-            #newbl.append(Opaque("assert(memdesc_desc_local(") 
-            #            + CVarUse(setp.rhs_decl.cvar_stub) + "));  // TODO: pull the desc if it's not local"
-            #            )
-
             newbl.append(Opaque('write_argmem(next->node_index, &shareds[%d], ' % param.index)
                          + b + ', &shared_descs[%d], ' % param.index + ' next)'
                          )
-
-
-            #newbl.append((flatten(None, "shared_descs[%d]" % param.index))
-            #        + ' = *get_stub_pointer(' +  CVarUse(setp.rhs_decl.cvar_stub) + ');')
-
-            # modify the stub to point to the new copy
-            #newbl.append(Opaque("set_stub_pointer(") + CVarUse(setp.rhs_decl.cvar_stub) + ', '
-            #            + '&fam_context->shared_descs[%d]' % param.index
-            #                + ');')
-
-            # write the stub
-            #newbl.append(flatten(setp.loc,  # end and generic are passed the array of shareds as an argument
-            #                 'write_istruct(next->node_index, &shareds[%d],' % param.index) \
-            #                 + b + ', next, 1);')
         else:
             assert(0)
 
@@ -472,7 +459,8 @@ class TFun_2_HydraCFunctions(DefaultVisitor):
             qual = "extern"
 
         if not keep:
-            newitems = flatten(fundecl.loc, "%s void " % qual) + gen_loop_fun_name(fundecl.name) + "();";
+            #newitems = flatten(fundecl.loc, "%s void " % qual) + gen_loop_fun_name(fundecl.name) + "();";
+            newitems = flatten(fundecl.loc, "%s void " % qual) + fundecl.name + "();";
             return newitems
         else:
             return None
@@ -518,7 +506,7 @@ class TFun_2_HydraCFunctions(DefaultVisitor):
  
         newitems = Block()   
 
-        if fundef.name <> "__root_fam":  # for main, we just need the generic variant
+        if fundef.name <> "__slFfmta___root_fam":  # for main, we just need the generic variant
             self.__state = 0  #begin
             newitems = flatten(fundef.loc, ("long %s_begin(const tc_ident_t* prev __attribute__((unused)), " +
                                            "long __index) {\n") % fundef.name)
@@ -572,7 +560,7 @@ class TFun_2_HydraCFunctions(DefaultVisitor):
 
             if (__end_index - __start_index > 4) {\n
             """
-        if fundef.name <> "__root_fam":  # for main, we won't need this branch (and we can't generate it either
+        if fundef.name <> "__slFfmta___root_fam":  # for main, we won't need this branch (and we can't generate it either
                                      # cause we haven't generated the non-generic flavours of the thread func)
             newitems += fundef.name + """_begin(prev, __start_index);
                 for (__index = __start_index + 1; __index < __end_index; ++__index) {
@@ -622,7 +610,7 @@ class TFun_2_HydraCFunctions(DefaultVisitor):
 
             _cur_tc->finished = 1;
         """
-        if fundef.name <> '__root_fam':
+        if fundef.name <> '__slFfmta___root_fam':
             newitems += "_return_to_scheduler();\n"
         else:
             newitems += "end_main();"
@@ -647,21 +635,22 @@ class TFun_2_HydraCFunctions(DefaultVisitor):
 class Mem_2_HRT(DefaultVisitor):
 
     def visit_memdef(self, d):
+        #print 'Mem_2_HRT: visiting memdef %s. id = %d' % (d.name, id(d))
         scope = d.scope
         stub_decl = CVarDecl(loc = d.loc, name = "_" + d.name + "_stub", ctype = "memdesc_stub_t")
         scope.decls += stub_decl
         d.cvar_stub = stub_decl
         d.cvar_desc = None
+        d.visited_by = 'mem_2_hrt'  # FIXME: remove this
         # is descriptor needed? it is _not_ needed for sl_getmp 
-        # possible values for set_op include MemDesc, GetMemP, MemActivate (lhs), MemExtend (lhs)
+        # possible values for set_op include MemDesc, GetMemP, SetMemA, MemActivate (lhs), MemExtend (lhs)
         # TODO: figure out if there are other operations when the descriptor is not needed
-        descriptor_needed = 1
-        if isinstance(d.set_op, GetMemP):
-            descriptor_needed = 0
-
+        descriptor_needed = True
+        if isinstance(d.set_op, GetMemP) or isinstance(d.set_op, SetMemA):
+            descriptor_needed = False
 
         if descriptor_needed:
-            print 'inserting descriptor declaration in scope'
+            #print 'inserting descriptor declaration in scope'
             desc_decl = CVarDecl(loc = d.loc, name = "_" + d.name + "_desc", ctype = "memdesc_t")
             scope.decls += desc_decl
             d.cvar_desc = desc_decl
@@ -669,7 +658,7 @@ class Mem_2_HRT(DefaultVisitor):
             # done as part of extend. For the other operations, this initialization will be a byproduct
             # of those operations.
             if isinstance(d.set_op, MemExtend):
-                print 'adding no_range initialization'
+                #print 'adding no_range initialization'
                 scope.decls += CVarUse(decl = desc_decl) + Opaque('.no_ranges = 0;')
             # initialize stub to be associated with descriptor
             scope.decls += (CVarUse(decl = stub_decl) + ' = _create_memdesc_stub(&' 
@@ -734,6 +723,35 @@ class Mem_2_HRT(DefaultVisitor):
                 + CVarUse(decl = extend.rhs_decl.cvar_stub) + ')')
         return new_items
 
-__all__ = ["Create_2_HydraCall", "TFun_2_HydraCFunctions", "Mem_2_HRT"]
+
+class Test_Visitor(ScopedVisitor):
+
+    def visit_lowcreate(self, lc):
+        # consume body
+        lc.body.accept(self)
+        
+        cr = self.cur_scope.creates[lc.label]
+        for a in cr.args:
+            a.accept(self) # accumulate the call/protolists
+
+        return lc
+
+
+
+    def visit_setmema(self, seta):
+        print '~~~~ Test_Visitor: visit_setmema: setmema = %d\targ %s (%d)' % (id(seta), seta.decl.name, id(seta.decl))
+        return seta
+    
+    def visit_createargmem(self, arg):
+        print '~~~~ Test_Visitor: visit_createargmem: createargmem = %d\targ %s (%d)' % (id(arg), arg.name, id(arg))
+        return arg
+
+class Separator(ScopedVisitor):
+    def visit_lowcreate(self, lc):
+        print '\n\n'
+        return lc
+
+
+__all__ = ["Create_2_HydraCall", "TFun_2_HydraCFunctions", "Mem_2_HRT", "Test_Visitor", "Separator"]
 
 

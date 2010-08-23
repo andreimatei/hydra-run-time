@@ -12,6 +12,12 @@ class Create_2_Loop(ScopedVisitor):
     def visit_seta(self, seta):
         b = seta.rhs.accept(self)
         return CVarSet(loc = seta.loc, decl = seta.decl.cvar, rhs = b) 
+    
+    def visit_setmema(self, seta):
+        #print 'Create_2_Loop: visit_setmema: arg %s (%d)' % (seta.decl.name, id(seta.decl))
+        return CVarSet(loc = seta.loc, 
+                       decl = seta.decl.mem_decl.cvar_stub, 
+                       rhs = CVarUse(decl = seta.rhs_decl.cvar_stub))
 
     def visit_createarg(self, arg):
         # prepare proto and uses
@@ -23,6 +29,22 @@ class Create_2_Loop(ScopedVisitor):
             self.__callist.append(flatten(None, ', '))
             self.__callist.append(CVarUse(decl = arg.cvar))
             self.__protolist += flatten(None, ', ') + arg.ctype
+        return arg
+            
+    def visit_createargmem(self, arg):
+        #decls = arg.create.scope.decls
+        #var = CVarDecl(loc = arg.loc, name = 'C$a$%s' % arg.create.label, ctype = 'memdesc_stub_t')
+        #decls += var
+        #arg.cvar = var
+        #print 'Create_2_Loop: visit_createargmem: adding cvar to arg %s (%d)' % (arg.name, id(arg))
+        if arg.type.startswith("sh"):
+            self.__callist.append(Opaque(', &'))
+            self.__callist.append(CVarUse(decl = arg.mem_decl.cvar_stub))
+            self.__protolist += Opaque(', ') + arg.mem_decl.cvar_stub.ctype + Opaque(' *')
+        else:
+            self.__callist.append(flatten(None, ', '))
+            self.__callist.append(CVarUse(decl = arg.mem_decl.cvar_stub))
+            self.__protolist += flatten(None, ', ') + arg.mem_decl.cvar_stub.ctype
         return arg
 
     def visit_lowcreate(self, lc):
@@ -126,6 +148,22 @@ class TFun_2_CFun(DefaultVisitor):
             format = " __slP_%s "
         return flatten(getp.loc, format % getp.name)
 
+    def visit_getmemp(self, getp):
+        if getp.name in self.__shlist:
+            format = "(*__slP_%s)"
+        else:
+            format = " __slP_%s "
+        
+        stub_read_cmd = Opaque(format % getp.name)
+        
+        stub_decl = getp.lhs_decl.cvar_stub
+        desc_decl = getp.lhs_decl.cvar_desc
+        
+        # emit the initialization of the local stub
+        newbl = []
+        newbl.append(flatten(getp.loc, '') + CVarUse(decl = stub_decl) + ' = ' + stub_read_cmd);
+        return newbl
+
     def visit_setp(self, getp):
         b = getp.rhs.accept(self)
         if getp.name in self.__shlist:
@@ -133,6 +171,15 @@ class TFun_2_CFun(DefaultVisitor):
         else:
             format = " __slP_%s = "
         return [flatten(getp.loc, format % getp.name), b]
+        
+    def visit_setmemp(self, setp):
+        # copy the stub as it is, since it's going to be read on the same node
+        b = CVarUse(decl = setp.rhs_decl.cvar_stub)
+        if setp.name in self.__shlist:
+            format = "(*__slP_%s) = "
+        else:
+            format = " __slP_%s = "
+        return [flatten(setp.loc, format % setp.name), b]
 
     def visit_funparm(self, parm):
         if parm.type.startswith("sh"):
@@ -150,6 +197,16 @@ class TFun_2_CFun(DefaultVisitor):
             self.__buffer += (Opaque(', %s ' % reg) + parm.ctype + 
                               ' %s __slP_%s ' % (const, parm.name))
         return parm
+        
+    def visit_funparmmem(self, parm):
+        if parm.type.startswith("sh"):
+            self.__shlist.append(parm.name)
+            self.__buffer += (Opaque(', memdesc_stub_t* const __slP_%s ' % parm.name))
+        else:
+            self.__gllist.append(parm.name)
+            self.__buffer += (Opaque(', memdesc_stub_t __slP_%s ' % parm.name))
+        return parm
+        
 
     def visit_fundecl(self, fundecl, infundef = False):
         old_shlist = self.__shlist

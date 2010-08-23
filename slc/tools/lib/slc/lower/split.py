@@ -90,8 +90,13 @@ class SplitCreates(ScopedVisitor):
         memo = {}
         for s in self.scope_stack:
             memo[id(s)] = s
-        for d in self.cur_scope.decls:
-            memo[id(d)] = d
+            for d in self.cur_scope.decls:
+                #print d.__class__.__name__
+                #if isinstance(d, CreateArgMem):    
+                #    print '!!!!!!!!!!!!!!!!!!!'
+                memo[id(d)] = d
+                  
+        #print 'SplitCreates: visit_lowcreate: built memo dict. len = %d' % len(memo)
 
         flavors = self.oracle.flavors_for_create(cr)
 
@@ -102,8 +107,10 @@ class SplitCreates(ScopedVisitor):
         #import sys, pprint
         for f in flavors:
             newmemo = copy.copy(memo)
+            #print 'SplitCreates: visit_lowcreate: after copy newmemo len = %d' % len(newmemo)
             #pprint.pprint(lc, stream=sys.stderr)
             newlc = copy.deepcopy(lc, newmemo)
+            #print 'SplitCreates: visit_lowcreate: after deepcopy newmemo len = %d' % len(newmemo)
             newlc.target_next = next
             newlc.flavor = f
 

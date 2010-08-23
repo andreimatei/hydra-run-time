@@ -42,9 +42,16 @@ class Create_2_LowCreate(DefaultVisitor):
         newbody = Block(loc = cr.body.loc, loc_end = cr.body.loc_end)
         for a in cr.args:
             if isinstance(a, CreateArgMem):
+                argdecl = MemDef(name = 'Cai%s' % a.name) # TODO: I had to remove the '$'-s because they didn't match some regular exp...?
+                argdecl.set_op = SetMemA()  # so that the next visitor only generate a stub definition, no descriptor
+                argdecl.scope = cr.scope
+                decls += argdecl
+                a.mem_decl = argdecl
+                
                 if a.rhs is not None:
                     setma = SetMemA(loc = cr.loc, name = a.name, rhs = a.rhs)
                     setma.decl = a
+                    assert(cr.scope.mem_dic[a.rhs] is not None)  # TODO: replace with an error message
                     setma.rhs_decl = cr.scope.mem_dic[a.rhs]
                     newbody += (Opaque(';') + setma)
             else:
@@ -96,6 +103,7 @@ class AutoResolve(ScopedVisitor):
 
     def visit_lowcreate(self, lc):
         cr = self.cur_scope.creates[lc.label]
-        return lc + ';' + CGoto(loc = cr.loc_end, target = cr.target_resolved)
+        # FIXME(kena): andreim: why was the goto here? I removed it. Seems it was dubbled in split.py, plus it's missing the semicolon...?
+        return lc + ';' #+ CGoto(loc = cr.loc_end, target = cr.target_resolved)
 
 __all__ = ["Create_2_LowCreate", "AutoResolve"]
