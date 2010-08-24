@@ -263,7 +263,10 @@ def parse_fundef(item):
       return d
 
 def parse_program(source):
-
+      #f = open('tmp.tmp', 'w')
+      #f.write(source)
+      #f.close()
+      
       source = eval(source)
 
       p = Program()

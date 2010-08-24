@@ -21,7 +21,6 @@
 #include "mem-comm.h"
 #include "sl_hrt.h"
 
-
 #define CACHE_LINE_SIZE 128  // in bytes
 #define MAPPING_CHUNK (1<<20)  // the size and allignment of chunks to map on SIGSEGV
 
@@ -340,7 +339,6 @@ int first_allocate = 1;
  */
 fam_context_t* allocate_fam(
     //thread_func func,
-    //int num_shareds, int num_globals,
     long start_index,
     long end_index,
     long step,

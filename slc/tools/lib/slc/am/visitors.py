@@ -106,7 +106,7 @@ class Create_2_HydraCall(ScopedVisitor):
         return self.do_visit_seta(seta.loc, seta.decl, b)
 
     def visit_setmema(self, seta):
-        print 'Create_2_HydraCall: visit_setmema: arg %s (%d)' % (seta.decl.name, id(seta.decl))
+        #print 'Create_2_HydraCall: visit_setmema: arg %s (%d)' % (seta.decl.name, id(seta.decl))
         #print 'Create_2_HydraCall: visiting setmema. rhs = %s. id = %d' % (seta.rhs, id(seta.rhs_decl))
         return self.do_visit_seta(seta.loc, seta.decl, CVarUse(decl = seta.rhs_decl.cvar_stub))
 

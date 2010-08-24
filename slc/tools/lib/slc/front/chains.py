@@ -58,7 +58,7 @@ _chains = {
         ('flattenfun', ScopedVisitor(Dispatcher({'fmta':TFun_2_HydraCFunctions(),
                                                  'fseq':TFun_2_CFun()}))),
         ] + _common_suffix,
-    'hrt+seq' : _common_prefix + [
+    'hrt+old' : _common_prefix + [
         ('lseta', LinkSetA()),
         ('autores', AutoResolve()),
         ('flatten_mem', Mem_2_HRT()),
