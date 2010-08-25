@@ -612,7 +612,8 @@ class TFun_2_HydraCFunctions(DefaultVisitor):
                 write_istruct(parent->node_index, done, 1, parent, 0);
             }
 
-            _cur_tc->finished = 1;
+            //_cur_tc->finished = 1;
+            _free_tc(_cur_tc->ident.proc_index, _cur_tc->ident.tc_index);
         """
         if fundef.name <> '__slFfmta___root_fam':
             newitems += "_return_to_scheduler();\n"

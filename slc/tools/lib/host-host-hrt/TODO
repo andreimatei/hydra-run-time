@@ -19,8 +19,6 @@ in write_istruct and read_istruct, the generic version, handle the case where th
 
 discuss with Raphael about schemes for distibuting the threads in a fam, and what aditional concurrency some schemes might produce. When assigning multiple chunks to a TC, does a block size != 1 make any sense?
 
-fix atomic_increment_next_tc
-
 replace NODE_INDEX with a function which returns the current node
 
 support continuation creates - careful, the .parent of a TC can't be a dummy, since reading a global
@@ -29,6 +27,11 @@ calls get_parent_ident() to find out who is going to write the global...
 add a version of send_sctp_msg that send messages with the SCTP_UNORDERED flag, and use it when approprietely 
 (e.g. it is _not_ appropriate when writing shareds and when writing to the "done" flag in a FC, because the write
  to done needs to be done after the write to the shareds)
+
+
+TODO FOR PERFORMANCE:
+- fix allocate_fam_context
+- transform runnable_tcs[] into a circular buffer, and make removing from it (in run_processor()?) work in O(1)
 
 
 
