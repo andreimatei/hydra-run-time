@@ -137,6 +137,7 @@ class Create_2_HydraCall(ScopedVisitor):
     def visit_lowcreate(self, lc):
         cr = self.cur_scope.creates[lc.label]
 
+        print >>sys.stderr, "BLOCK create ", cr.fun, cr.block
         print >>sys.stderr, "PLACE create ", cr.fun, cr.place
         print >>sys.stderr, "EXTRAS create ", cr.fun, cr.extras
         n = cr.extras.get_attr("gencallee", None)
@@ -181,8 +182,12 @@ class Create_2_HydraCall(ScopedVisitor):
         end_index = CVarUse(decl = cr.cvar_limit) + " - 1"  # this is now inclusive
         step = CVarUse(decl = cr.cvar_step)
        
-        rrhs = flatten(cr.loc_end, 'map_fam(&') + gen_loop_fun_name(funvar) + ', (' + end_index \
-                       + ' - ' + start + '+ 1) / ' + step+ ', 0, ' + cr.place + ')'
+        rrhs = (flatten(cr.loc_end, 'map_fam(&') 
+                        + gen_loop_fun_name(funvar)                       # func
+                        + ', (' + end_index + ' - ' + start + '+ 1) / ' + step    # no_threads
+                        + ', ' + cr.block                                 # block size
+                        + ', 0, '                                         # parent_id (NULL)
+                        + cr.place + ')')                                 # hint
 
         mapping_call = CVarSet(decl = mapping_decision_var, rhs = rrhs)
         newbl.append(mapping_call + ';\n')
@@ -206,8 +211,7 @@ class Create_2_HydraCall(ScopedVisitor):
         # if allocation failed, jump to next target, if available
         newbl.append(Opaque('if (') + CVarUse(decl = fam_context_var) + ' == 0) {\n')
         if lc.target_next is not None:
-            #warn("alternative %s not used)" %
-            #     lc.target_next.name, lc)
+            #newbl.append(Opaque('printf("allocate failed; calling sequential version\\n");'));
             newbl.append(CGoto(target = lc.target_next) + ';\n}\n')
             pass
         else:
@@ -601,10 +605,10 @@ class TFun_2_HydraCFunctions(DefaultVisitor):
                 }
 
             }
-            printf("USER: about to finish loop function. last tc: %d\\t parent node: %d\\t\\n",
-                   _is_last_tc(), parent->node_index);
+            //printf("USER: about to finish loop function. last tc: %d\\t parent node: %d\\t\\n",
+            //       _is_last_tc(), parent->node_index);
             if (_is_last_tc() && parent->node_index != -1) {
-                printf("USER: I am the last thread in a family. Unblocking parent.\\n");
+                //printf("USER: I am the last thread in a family. Unblocking parent.\\n");
                 write_istruct(parent->node_index, done, 1, parent, 0);
             }
 

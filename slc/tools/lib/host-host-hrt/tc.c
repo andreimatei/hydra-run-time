@@ -90,6 +90,7 @@ LOG_LEVEL _logging_level = DEBUG;
 #endif
 
 void LOG(LOG_LEVEL level, char* fmt, ...) {
+  /*
   if (level <= _logging_level) {
     va_list args;
     va_start(args, fmt);
@@ -97,10 +98,11 @@ void LOG(LOG_LEVEL level, char* fmt, ...) {
     strcpy(s, log_prefix[level]);
     strcpy(s + strlen(log_prefix[level]), fmt);
     struct timeval t; gettimeofday(&t, NULL);
-    fprintf(stderr, "%3ld:%3ld ", t.tv_sec % 1000, t.tv_usec/1000);
-    vfprintf(stderr, s, args);
+    fprintf(stdout, "%3ld:%3ld ", t.tv_sec % 1000, t.tv_usec/1000);  //FIXME: write to stderr
+    vfprintf(stdout, s, args);  // FIXME: write to stderr
     va_end(args);
   }
+  */
 }
 
 
@@ -214,15 +216,20 @@ int tc_is_valid(int tc_index) {
   return tc_valid[tc_index];
 }
 
+
+
 mapping_decision map_fam(
     thread_func func __attribute__((unused)),
     long no_threads  __attribute__((unused)),
+    long block_size,  // FIXME: block is used wrongly here
     //long start_index,
     //long end_index,
     struct mapping_node_t* parent_id,
     int hint) {
   //static int first_mapping = 1;
 
+  LOG(DEBUG, "map_fam: mapping fam of %d threads with block %d and hint %d\n", 
+      no_threads, block_size, hint);
   assert(parent_id == NULL); // TODO
   mapping_decision rez;
 
@@ -238,19 +245,49 @@ mapping_decision map_fam(
     first_mapping = 0;
   } 
   else { */
+    int no_procs = 1;
+    int no_tcs_per_proc = 1;
+    int load_percentage = 100;
+
+    if (block_size != 0) {
+      no_procs = no_threads / block_size;
+    }
+    no_tcs_per_proc = no_threads / no_procs;
+    load_percentage = 100 / no_procs;
+
+    /*
+    if (no_threads != 2) {
+      no_tcs = no_threads;
+      load_percentage = 100 / no_tcs;
+      //load_percentage_last = load_percentage 
+    }
+    */
+
     rez.should_inline = 0;
-    rez.no_proc_assignments = 1;
-    rez.proc_assignments[0].node_index = 
-      hint == -1 ? NODE_INDEX : hint; //(no_secondaries > 1 ? 1 - NODE_INDEX : NODE_INDEX);
-    rez.proc_assignments[0].proc_index = 0;//(_cur_tc->ident.proc_index + 1) % NO_PROCS;
-    rez.proc_assignments[0].no_tcs = 1;
-    rez.proc_assignments[0].load_percentage = 100; // 100% of threads on this proc
-  //}
+    rez.no_proc_assignments = no_procs; //1;
+
+    int cur_proc_index = _cur_tc->ident.proc_index;
+
+    // map the first proc_assignment on the current processor, and the following ones on different procs.
+    for (int i = 0; i < no_procs; ++i) {
+      rez.proc_assignments[i].node_index = 
+        hint == -1 ? NODE_INDEX : hint; //(no_secondaries > 1 ? 1 - NODE_INDEX : NODE_INDEX);
+      rez.proc_assignments[i].proc_index = (cur_proc_index++) % NO_PROCS;
+      rez.proc_assignments[i].no_tcs = no_tcs_per_proc;//1;
+      rez.proc_assignments[i].load_percentage = load_percentage;//100; // 100% of threads will run on this proc
+    }
+
+
+  assert(rez.no_proc_assignments <= MAX_NO_PROC_ASSIGNMENTS_PER_MAPPING);
 
   return rez;
 }
 
+int no_allocate_requests_per_proc[MAX_PROCS_PER_NODE];  // FIXME: remove this
+
 void allocate_local_tcs(int proc_index, int no_tcs, int* tcs, int* no_allocated_tcs) {
+  no_allocate_requests_per_proc[proc_index]++;  // FIXME: remove this
+
   *no_allocated_tcs = 0;
   for (int i = 0; i < no_tcs; ++i) {
     int tc = atomic_increment_next_tc(proc_index);
@@ -262,8 +299,8 @@ void allocate_local_tcs(int proc_index, int no_tcs, int* tcs, int* no_allocated_
     }
   
   }
-  LOG(DEBUG, "allocate_local_tcs: allocated %d TC's out of the %d requested.\n", 
-      *no_allocated_tcs, no_tcs);
+  LOG(DEBUG, "allocate_local_tcs: allocated %d TC's out of the %d requested on proc %d.\n", 
+      *no_allocated_tcs, no_tcs, proc_index);
 }
 
 /*--------------------------------------------------
@@ -331,7 +368,6 @@ int allocate_local_tcs(int proc_index,
 }
 */
 
-int first_allocate = 1;
 
 /*
  * Allocates a family context and thread contexts. The FC is initialized with ranges.
@@ -344,10 +380,6 @@ fam_context_t* allocate_fam(
     long step,
     struct mapping_node_t* parent_id __attribute__((unused)), 
     const struct mapping_decision* mapping) {
-
-  if (!first_allocate)
-    return NULL;  // FIXME: remove this. added to test fallback code path
-  first_allocate = 0;
 
 
   assert(mapping != NULL);
@@ -402,9 +434,6 @@ fam_context_t* allocate_fam(
 
       LOG(DEBUG, "allocate_fam: requesting %d local TC's\n", as.no_tcs);
       allocate_local_tcs(as.proc_index, as.no_tcs, allocated_tcs[i].tcs, &allocated_tcs[i].allocated_tcs);
-      if (as.no_tcs == 1) {
-        LOG(DEBUG, "allocate_fam: allocated %d tcs: %d.\n", allocated_tcs[i].allocated_tcs, allocated_tcs[i].tcs[0]);
-      }
     } else {
       LOG(DEBUG, "allocate_fam: requesting %d remote TC's\n", as.no_tcs);
       allocate_remote_tcs(as.node_index, as.proc_index, as.no_tcs, 
@@ -870,16 +899,6 @@ void* mmap_delegation_interface_stack(size_t* size) {
   return delegation_if_stack;
 }
 
-/*--------------------------------------------------
-* / *
-*  * Map a stack for the pthread handling the sending interface.
-*  * /
-* void* mmap_sending_interface_stack(size_t* size) {
-*   *size = sending_if_stack_size;
-*   return sending_if_stack;
-* }
-*--------------------------------------------------*/
-
 static int get_no_CPUs() {
   int res = sysconf(_SC_NPROCESSORS_ONLN);
   if (res < 1) {
@@ -1141,11 +1160,9 @@ void populate_tc(tc_t* tc,
                  i_struct* done,
                  const tc_ident_t* current_tc // the TC of the caller; can be passed a dummy or NULL
                  ) {
-  LOG(VERBOSE, "populate_tc - thread function: %p\n", func);
   tc->context.uc_stack = tc->initial_thread_stack;  // TODO: is this necessary? would this have been modified
                                                     // by savecontext() calls?
   tc->context.uc_link = NULL;
-  LOG(DEBUG, "populate_tc: reset stack to %p\n", tc->initial_thread_stack.ss_sp);
   makecontext(&(tc->context), (void (*)())func, 0);
 
   /*
@@ -1188,14 +1205,14 @@ void write_istruct_same_proc(
   
   istructp->data = val;
   int unblock_needed = (istructp->state == SUSPENDED);
-  LOG(DEBUG, "write_istruct_same_proc: state of the istruct %p is found to be %d\n",
+  LOG(DEBUG + 1, "write_istruct_same_proc: state of the istruct %p is found to be %d\n",
       istructp, istructp->state);
   istructp->state = WRITTEN;
   if (unblock_needed) {
-    LOG(DEBUG, "write_istruct_same_proc: unblock needed\n");
+    LOG(DEBUG + 1, "write_istruct_same_proc: unblock needed\n");
     unblock_tc(potentially_blocked_tc, 1 /*same proc*/);
   } else {
-    LOG(DEBUG, "write_istruct_same_proc: unblock not needed\n");
+    LOG(DEBUG + 1, "write_istruct_same_proc: unblock not needed\n");
   }
 }
 
@@ -1254,11 +1271,11 @@ void write_istruct(//i_struct_fat_pointer istruct,
       write_istruct_same_tc((i_struct*)istructp, val);  // cast to strip volatile; same TC, no asynchrony
     } else {
       if (reading_tc->proc_index == cur_ident.proc_index) {  // same proc
-        LOG(DEBUG, "write_istruct (%p): same_proc\n", istructp);
+        LOG(DEBUG + 1, "write_istruct (%p): same_proc\n", istructp);
         write_istruct_same_proc(istructp, val, dest_tc);
       }
       else {  // different proc
-        LOG(DEBUG, "write_istruct: different_proc\n");
+        LOG(DEBUG + 1, "write_istruct: different_proc\n");
         write_istruct_different_proc(istructp, val, dest_tc);
       }
     }
@@ -1433,6 +1450,9 @@ void unblock_tc(tc_t* tc, int same_processor) {
   int proc_index = tc->ident.proc_index;
   runnable_tcs[proc_index][runnable_count[proc_index]++] = tc;
 
+  LOG(DEBUG, "unblock_tc: unblocking TC computing fib(%d)\n", tc->fib);
+
+
   // TODO: actually restart the target processor, if it was stopped
   if (!same_processor) {
     pthread_spin_unlock(lock);
@@ -1464,9 +1484,10 @@ int atomic_increment_next_tc(int proc_id) {
   pthread_spin_lock((pthread_spinlock_t*)&allocate_tc_locks[proc_id]);
   int i;
   int start_tc = proc_id * NO_TCS_PER_PROC;
+  tc_t* tc = NULL;
   for (i = start_tc; i < start_tc + NO_TCS_PER_PROC; ++i) {
     if (!tc_is_valid(i)) continue;  // skip TC's that haven't been created (due to holes in the addr space)
-    tc_t* tc = (tc_t*)TC_START_VM(i);
+    tc = (tc_t*)TC_START_VM(i);
     //if (tc->blocked == -1) {
     if (tc->finished == 1) {
       //LOG(DEBUG, "atomic_increment_next_tc: found tc %d (%p)\n", i, tc);
@@ -1474,14 +1495,18 @@ int atomic_increment_next_tc(int proc_id) {
       //LOG(DEBUG, "atomic_increment_next_tc: accessing ->finished (%p)\n", &tc->finished);
       tc->blocked = 0;
       tc->finished = 0;
-      for (int j = 0; j < MAX_ARGS_PER_FAM; ++j) {
-        tc->shareds[j].state = EMPTY;
-        tc->globals[j].state = EMPTY;
-      }
       break;
     }
   }
   pthread_spin_unlock((pthread_spinlock_t*)&allocate_tc_locks[proc_id]);
+
+  if (rez != -1) {
+    for (int j = 0; j < MAX_ARGS_PER_FAM; ++j) {
+      tc->shareds[j].state = EMPTY;
+      tc->globals[j].state = EMPTY;
+    }
+  }
+  
   return rez;
 }
 
@@ -1972,6 +1997,9 @@ static int start(int argc, char** argv) {
   }
   pthread_mutex_unlock(&main_finished_mutex);
   LOG(DEBUG,"main: root_fam finished\n");
+
+  LOG(DEBUG, "allocate requests on proc 0: %d\n", no_allocate_requests_per_proc[0]);
+  LOG(DEBUG, "allocate requests on proc 1: %d\n", no_allocate_requests_per_proc[1]);
 
   send_quit_message_to_secondaries();
 

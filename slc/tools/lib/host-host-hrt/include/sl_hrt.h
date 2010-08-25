@@ -205,6 +205,9 @@ struct tc_t {
                             // shared mem arguments passed back to the parent
 
   heap_t heap;
+
+  int fib;  // FIXME: remove this. Added just for testing the fibonacci program.
+
 };//TCS[NO_TCS];
 typedef struct tc_t tc_t;
 
@@ -239,19 +242,22 @@ struct mapping_node_t {
 
 struct proc_assignment {
   //unsigned long no_threads;
-  unsigned int load_percentage;
+  unsigned int load_percentage;  // between 1 and 100, the percentage of threads that will run on this
+                                 // proc, out of all the threads in the family.
   unsigned int no_tcs;
   int node_index;
   int proc_index;
 };
 typedef struct proc_assignment proc_assignment;
 
+#define MAX_NO_PROC_ASSIGNMENTS_PER_MAPPING 100
+
 /* Represent a mapping decision from the mapping engine */
 struct mapping_decision {
   int should_inline;  // if this is 1, the other fields are irelevant; the
                       // family is supposed to be inlined in the parent
   unsigned int no_proc_assignments;
-  struct proc_assignment proc_assignments[100];  // TODO: replace this with smth else
+  struct proc_assignment proc_assignments[MAX_NO_PROC_ASSIGNMENTS_PER_MAPPING];
 };
 typedef struct mapping_decision mapping_decision;
 
@@ -267,6 +273,7 @@ fam_context_t* allocate_fam(
 mapping_decision map_fam(
     thread_func func,
     long no_threads,
+    long block_size,
     //long start_index,
     //long end_index,
     struct mapping_node_t* parent_id,
