@@ -136,6 +136,16 @@ class DefaultVisitor(BaseVisitor):
       def visit_seta(self, seta):
             seta.rhs.accept(self)
             return seta
+            
+      def visit_attr(self, a):
+            for k, v in a.__dict__.items():
+                  if isinstance(v, Block):
+                        v.accept(self)
+            return a
+
+      def visit_extras(self, e):
+            self.dispatch(e, seen_as = Block)
+            return e
 
       def visit_create(self, create):
             create.place.accept(self)
@@ -143,6 +153,8 @@ class DefaultVisitor(BaseVisitor):
             create.step.accept(self)
             create.limit.accept(self)
             create.block.accept(self)
+            create.extras.accept(self)            
+            create.mapping.accept(self)
             if create.funtype == create.FUN_OPAQUE:
                   create.fun.accept(self)
             a = []
@@ -428,11 +440,22 @@ class PrintVisitor(DefaultVisitor):
         return et
 
     def visit_create(self, c):
-        self.__out.write(' sl_create(')
+        if len(c.mapping):  
+              self.__out.write(' sl_create_ext(')
+        else:
+              self.__out.write(' sl_create(')
 
-        for b in (c.place, c.start, c.step, c.limit, c.block):
+        for b in (c.place, c.start, c.step, c.limit):
             self.__out.write(',')
             b.accept(self)
+
+        self.__out.write(',')
+        if len(c.mapping):
+            self.__out.write('/**/')
+            c.mapping.accept(self)
+            self.__out.write('/**/')
+        else:
+            c.block.accept(self)
 
         self.__out.write(', ,')
 

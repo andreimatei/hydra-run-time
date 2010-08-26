@@ -168,6 +168,9 @@ m4_define([[sl_index]], [[m4_dnl
 [[""", {'loc':r"""]]__file__:__line__[[""",'type':'indexdecl','name':"""$1"""}, r"""]]m4_dnl
 ]])
 
+m4_define([[sl_mf_spread]], [[[[""", {'type':'attr','name':'mapping','mf':'spread','n':[r""" $1 """]}, r""" ]]]])
+m4_define([[sl_mf_distribute]], [[[[""", {'type':'attr','name':'mapping', 'mf':'distribute', 'n':[r""" $1 """], 'm':[r""" $2 """]}, r""" ]]]])
+
 m4_define([[sl_create_ext]], [[m4_dnl
 m4_pushdef([[_sl_increate]],1)m4_dnl
 m4_step([[_sl_crcnt]])m4_dnl
@@ -175,15 +178,17 @@ m4_pushdef([[_sl_lbl]],F[[]]_sl_crcnt)m4_dnl
 [[""",]]m4_dnl
 [[{'type':'create',]]m4_dnl
 [['loc':r"""]]__file__:__line__[[""",]]m4_dnl
-[['block':[r"""0"""],'mapping':[ $1 ],]]m4_dnl
-[['extras':[r""" $6 """],]]m4_dnl
-[['fun':[r""" $7 """],]]m4_dnl
+[['fid':[r""" $1 """],]]m4_dnl
+[['extras':[r""" $7 """],]]m4_dnl
+[['fun':[r""" $8 """],]]m4_dnl
 [['lbl':']]_sl_lbl[[',]]m4_dnl
 [['place':[r""" ]]m4_ifblank([[$2]],-1,[[$2]])[[ """],]]m4_dnl
 [['start':[r""" ]]m4_ifblank([[$3]],0,[[$3]])[[ """],]]m4_dnl
 [['limit':[r""" ]]m4_ifblank([[$4]],1,[[$4]])[[ """],]]m4_dnl
 [['step':[r""" ]]m4_ifblank([[$5]],1,[[$5]])[[ """],]]m4_dnl
-[['args':[]]m4_shiftn(7,$@)[[],]]m4_dnl
+[['mapping':[r""" $6 """],]]m4_dnl
+[['block':["0"],]]m4_dnl
+[['args':[]]m4_shiftn(8,$@)[[],]]m4_dnl
 [['body': [r"""]]
 ]])
 

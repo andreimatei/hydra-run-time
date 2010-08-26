@@ -67,7 +67,9 @@ def parse_attr(item):
 
       for k in item:
             if type(item[k]) == str:                  
-               item[k] = item[k].strip()
+                  item[k] = item[k].strip()
+            elif type(item[k]) == list:
+                  item[k] = parse_block(item[k])
 
       return Attr(name = n, 
                   payload = item)

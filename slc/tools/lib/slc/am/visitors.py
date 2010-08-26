@@ -142,7 +142,7 @@ class Create_2_HydraCall(ScopedVisitor):
         print >>sys.stderr, "EXTRAS create ", cr.fun, cr.extras
         n = cr.extras.get_attr("gencallee", None)
         if n is not None:
-            print >>sys.stderr, "found gencallee"
+            print >>sys.stderr, "found gencallee on create"
         print >>sys.stderr, "MAPPING create ", cr.fun, cr.mapping
         n = cr.mapping.get_attr("localize", None)
         if n is not None:
