@@ -90,6 +90,7 @@ LOG_LEVEL _logging_level = DEBUG;
 #endif
 
 void LOG(LOG_LEVEL level, char* fmt, ...) {
+  /*
   if (level <= _logging_level) {
     va_list args;
     va_start(args, fmt);
@@ -101,6 +102,7 @@ void LOG(LOG_LEVEL level, char* fmt, ...) {
     vfprintf(stdout, s, args);  // FIXME: write to stderr
     va_end(args);
   }
+  */
 }
 
 
@@ -150,10 +152,6 @@ typedef union {
   char c[CACHE_LINE_SIZE];
 } padded_spinlock_t;
 
-tc_t* runnable_tcs[MAX_PROCS_PER_NODE][NO_TCS_PER_PROC];
-int runnable_count[MAX_PROCS_PER_NODE];
-padded_spinlock_t runnable_queue_locks[MAX_PROCS_PER_NODE];
-padded_spinlock_t allocate_tc_locks[MAX_PROCS_PER_NODE];
 pthread_t threads[MAX_PROCS_PER_NODE];
 pthread_attr_t threads_attr[MAX_PROCS_PER_NODE];
 __thread tc_t* _cur_tc = NULL;  // pointer to the TC currently occupying the accessing processor
@@ -168,14 +166,29 @@ pthread_spinlock_t rt_init_done_lock;
 fam_context_t fam_contexts[MAX_PROCS_PER_NODE][NO_FAM_CONTEXTS_PER_PROC];
 /* locks for allocating fam contexts; one per processor */
 padded_spinlock_t fam_contexts_locks[MAX_PROCS_PER_NODE];
+// circular queue for available tc's
+int available_fam_contexts[MAX_PROCS_PER_NODE][NO_FAM_CONTEXTS_PER_PROC];
+int count_available_fam_contexts[MAX_PROCS_PER_NODE];
+int start_available_fam_contexts[MAX_PROCS_PER_NODE];
+int end_available_fam_contexts[MAX_PROCS_PER_NODE];
 
 
 // circular buffer for TC's which are free for reuse
+padded_spinlock_t allocate_tc_locks[MAX_PROCS_PER_NODE];
 int available_tcs[MAX_PROCS_PER_NODE][NO_TCS_PER_PROC];
 int count_available_tcs[MAX_PROCS_PER_NODE];
 int start_available_tcs[MAX_PROCS_PER_NODE];
 int end_available_tcs[MAX_PROCS_PER_NODE];
 // ----
+
+
+// circular queue for runnable tc's
+padded_spinlock_t runnable_queue_locks[MAX_PROCS_PER_NODE];
+//tc_t* runnable_tcs[MAX_PROCS_PER_NODE][NO_TCS_PER_PROC];
+int runnable_tcs[MAX_PROCS_PER_NODE][NO_TCS_PER_PROC];
+int runnable_count[MAX_PROCS_PER_NODE];
+int start_runnable_tcs[MAX_PROCS_PER_NODE];
+int end_runnable_tcs[MAX_PROCS_PER_NODE];
 
 
 int tc_valid[NO_TCS_PER_PROC * MAX_PROCS_PER_NODE];  // 1 if a TC has been created, 0 if not (due to a
@@ -199,6 +212,7 @@ void populate_tc(tc_t* tc,
                  memdesc_t* final_descs,
                  i_struct* done,
                  const tc_ident_t* current_tc);
+static void free_fc(int proc_id, int fc_id);
 /*
 void populate_tc(tc_t* tc,
                  thread_func func,
@@ -211,6 +225,9 @@ void populate_tc(tc_t* tc,
                  */
 //int atomic_increment_next_tc(int proc_id);  // FIXME: remove this
 static int grab_available_tc(int proc_id);
+static int grab_available_fam_context(int proc_id);
+static int grab_runnable_tc(int proc_id);
+void mark_tc_as_runnable(int proc_id, int tc_id, int lock_needed);
 void write_istruct_no_checks(i_struct* istructp, long val);
 
 
@@ -332,25 +349,31 @@ fam_context_t* allocate_fam(
   //(technically, it doesn't matter where the fam context is chosen from)
   unsigned int i;
   fam_context_t* fc;
-  if (_cur_tc != NULL) {  // this will be NULL when allocating __root_main
-    pthread_spin_lock((pthread_spinlock_t*)&(fam_contexts_locks[_cur_tc->ident.proc_index]));
+  //if (_cur_tc != NULL) {  // this will be NULL when allocating __root_main
+    /*
     for (i = 0; i < NO_FAM_CONTEXTS_PER_PROC; ++i) {
       if (fam_contexts[_cur_tc->ident.proc_index][i].empty) break;
     }
+    */
+    int proc_index = (_cur_tc == NULL) ? 0 : _cur_tc->ident.proc_index;  // this will be NULL when allocating __root_main
+    int fc_index = grab_available_fam_context(proc_index);
+    LOG(DEBUG, "allocate_fam: got fc index %d\n", fc_index);
     // return failure if no FC could be allocated
-    if (i == NO_FAM_CONTEXTS_PER_PROC) {
+    if (fc_index == -1) {
       return NULL;
     }
-    // initialize the allocated FC
-    fc = &fam_contexts[_cur_tc->ident.proc_index][i];
-    fc->empty = 0;
-    fc->done.state = EMPTY;
-    pthread_spin_unlock((pthread_spinlock_t*)&fam_contexts_locks[_cur_tc->ident.proc_index]);
+    fc = &fam_contexts[proc_index][fc_index];
+    assert(fc->empty); // sanity check
+/*
   } else { 
     fc = &fam_contexts[0][0];
     fc->empty = 0;
     fc->done.state = EMPTY;
   }
+  */
+  // initialize the allocated FC
+  fc->empty = 0;
+  fc->done.state = EMPTY;
   for (int j = 0; j < MAX_ARGS_PER_FAM; ++j) {
     fc->shareds[j].state = EMPTY;
   }
@@ -402,7 +425,7 @@ fam_context_t* allocate_fam(
   // if no TC's could be allocated anywhere, return failure
   if (last_allocated_proc_index == -1) {
     // free the allocated family context
-    fc->empty = 1;  // mark the FC as reusable
+    free_fc(fc->index / NO_FAM_CONTEXTS_PER_PROC, fc->index % NO_FAM_CONTEXTS_PER_PROC);
     return NULL;
   }
 
@@ -732,7 +755,10 @@ long sync_fam(fam_context_t* fc, /*long* shareds_dest,*/ int no_shareds, ...) {
     //shareds_dest[i] = fc->shareds[i].data;
   }
   va_end(ap);
-  fc->empty = 1;  // mark the FC as reusable
+  //fc->empty = 1;  // mark the FC as reusable
+  assert(_cur_tc->ident.proc_index == (fc->index / NO_FAM_CONTEXTS_PER_PROC));  // sanity check; a FC should be used only
+                                                // on it's processor
+  free_fc(fc->index / NO_FAM_CONTEXTS_PER_PROC, fc->index % NO_FAM_CONTEXTS_PER_PROC);
   return 0;  // TODO: what exactly is this return code supposed to be?
 }
 
@@ -777,12 +803,16 @@ void* run_processor(void* processor_index) {
     }
     // TODO: implement a proper queue for these and see how to do without locking for
     // extracting
-    tc_t* tc = runnable_tcs[pid][0];
+    int tc_index = grab_runnable_tc(pid);
+    assert(tc_index != -1);
+    tc_t* tc = (tc_t*)TC_START_VM(tc_index); //runnable_tcs[pid][runnable_count[pid] - 1];
+    /*
     int i;
     for (i = 0; i < runnable_count[pid] - 1; ++i) {
       runnable_tcs[pid][i] = runnable_tcs[pid][i+1];
     }
-    --runnable_count[pid];
+    */
+    //--runnable_count[pid];
     pthread_spin_unlock((pthread_spinlock_t*)&runnable_queue_locks[pid]);
 
     // run tc
@@ -936,6 +966,7 @@ static void rt_init() {
       //LOG(DEBUG, "1 initializing fam_contexts[%d][%d].\n", i, j);
       fam_contexts[i][j].done.state = EMPTY;
       fam_contexts[i][j].index = fc_index++;
+      free_fc(i, j);  // insert FC in free list
       if (pthread_spin_init(&fam_contexts[i][j].done.lock, PTHREAD_PROCESS_PRIVATE) != 0) {
         perror("pthread_spin_init:"); exit(1);
       }
@@ -1071,8 +1102,6 @@ void push_to_TC_stack_ul(stack_t* stack, unsigned long data) {
 
 /* 
  * Prepares a TC to run a threads range. The TC is then scheduled to run.
- * // The TC is not scheduled to be run yet; that can be done manually 
- * // through unblock_tc() or, generally, through create_fam
  */
 void populate_tc(tc_t* tc,
                  thread_func func,
@@ -1365,25 +1394,26 @@ void unblock_tc(tc_t* tc, int same_processor) {
   struct timeval t;
   gettimeofday(&t, NULL);
   pthread_spinlock_t* lock;
-  LOG(DEBUG, "unblocking TC ("PRINT_TC_IDENT_FORMAT"). It was blocked for %ld ms.\n", 
+  LOG(DEBUG, "unblock_tc: unblocking TC ("PRINT_TC_IDENT_FORMAT"). It was blocked for %ld ms.\n", 
       PRINT_TC_IDENT(tc->ident), timediff(t, tc->blocking_time));
+  /*
   if (!same_processor) {
     lock = (pthread_spinlock_t*)&runnable_queue_locks[tc->ident.proc_index];
     pthread_spin_lock(lock);
   }
+  */
   //tc->blocked = 0;
 
   // insert in queue
   int proc_index = tc->ident.proc_index;
-  runnable_tcs[proc_index][runnable_count[proc_index]++] = tc;
+  //runnable_tcs[proc_index][runnable_count[proc_index]++] = tc->ident.tc_index;
+  mark_tc_as_runnable(proc_index, tc->ident.tc_index, !same_processor);
 
-  LOG(DEBUG, "unblock_tc: unblocking TC computing fib(%d)\n", tc->fib);
-
-
-  // TODO: actually restart the target processor, if it was stopped
+  /*
   if (!same_processor) {
     pthread_spin_unlock(lock);
   }
+  */
 }
 
 void yield(tc_t* yielding_tc) {
@@ -1434,10 +1464,68 @@ static int grab_available_tc(int proc_id) {
 }
 
 /*
+ * Dequeue a fam_context from the free list and return it's index. Return -1 if the queue is empty.
+ */
+static int grab_available_fam_context(int proc_id) {
+  int rez = -1;
+  pthread_spin_lock((pthread_spinlock_t*)&fam_contexts_locks[proc_id]);
+ 
+  if (count_available_fam_contexts[proc_id] > 0) {  // if the queue is not empty
+    int* start = &start_available_fam_contexts[proc_id];
+    rez = available_fam_contexts[proc_id][*start];
+    *start = (*start + 1) % NO_FAM_CONTEXTS_PER_PROC;  
+    count_available_fam_contexts[proc_id]--;
+    assert(count_available_fam_contexts[proc_id] >= 0);
+  }
+  pthread_spin_unlock((pthread_spinlock_t*)&fam_contexts_locks[proc_id]);
+    
+  return rez;
+}
+
+/*
+ * Dequeue a runnable TC from the runnable list and return it's index. Return -1 if the queue is empty.
+ * Attention: function is not thread safe. It must be called with lock runnable_queue_locks[proc_id] held.
+ */
+static int grab_runnable_tc(int proc_id) {
+  int rez = -1;
+  //pthread_spin_lock((pthread_spinlock_t*)&runnable_queue_locks[proc_id]);
+ 
+  if (runnable_count[proc_id] > 0) {  // if the queue is not empty
+    int* start = &start_runnable_tcs[proc_id];
+    rez = runnable_tcs[proc_id][*start];
+    *start = (*start + 1) % NO_TCS_PER_PROC;  
+    runnable_count[proc_id]--;
+    assert(runnable_count[proc_id] >= 0);
+  }
+  //pthread_spin_unlock((pthread_spinlock_t*)&runnable_queue_locks[proc_id]);
+    
+  return rez;
+}
+
+/*
+ * Insert a TC in the free list. Called by code inserted by the compiler at the end of loop functions.
+ */
+void mark_tc_as_runnable(int proc_id, int tc_id, int lock_needed) {
+  if (lock_needed) {
+    pthread_spin_lock((pthread_spinlock_t*)&runnable_queue_locks[proc_id]);
+  }
+
+  int* end = &end_runnable_tcs[proc_id];
+  runnable_tcs[proc_id][*end] = tc_id;
+  *end = (*end + 1) % NO_TCS_PER_PROC;  
+  runnable_count[proc_id]++;
+  assert(runnable_count[proc_id] <= NO_TCS_PER_PROC);
+
+  if (lock_needed) {
+    pthread_spin_unlock((pthread_spinlock_t*)&runnable_queue_locks[proc_id]);
+  }
+}
+
+/*
  * Insert a TC in the free list. Called by code inserted by the compiler at the end of loop functions.
  */
 void _free_tc(int proc_id, int tc_id) {
-  tc_t* tc = (tc_t*)TC_START_VM(tc_id);
+  //tc_t* tc = (tc_t*)TC_START_VM(tc_id);
   //tc->finished = 1;
   
   pthread_spin_lock((pthread_spinlock_t*)&allocate_tc_locks[proc_id]);
@@ -1449,6 +1537,22 @@ void _free_tc(int proc_id, int tc_id) {
   assert(count_available_tcs[proc_id] <= NO_TCS_PER_PROC);
 
   pthread_spin_unlock((pthread_spinlock_t*)&allocate_tc_locks[proc_id]);
+}
+
+/*
+ * Insert a FC in the free list. 
+ */
+static void free_fc(int proc_id, int fc_id) {
+  fam_contexts[proc_id][fc_id].empty = 1;  // mark the FC as reusable
+  pthread_spin_lock((pthread_spinlock_t*)&fam_contexts_locks[proc_id]);
+
+  int* end = &end_available_fam_contexts[proc_id];
+  available_fam_contexts[proc_id][*end] = fc_id;
+  *end = (*end + 1) % NO_FAM_CONTEXTS_PER_PROC;  
+  count_available_fam_contexts[proc_id]++;
+  assert(count_available_fam_contexts[proc_id] <= NO_FAM_CONTEXTS_PER_PROC);
+
+  pthread_spin_unlock((pthread_spinlock_t*)&fam_contexts_locks[proc_id]);
 }
 
 /*--------------------------------------------------

@@ -30,9 +30,8 @@ add a version of send_sctp_msg that send messages with the SCTP_UNORDERED flag, 
 
 
 TODO FOR PERFORMANCE:
-- fix allocate_fam_context
-- transform runnable_tcs[] into a circular buffer, and make removing from it (in run_processor()?) work in O(1)
-
+- remove -pg flag from build of library and program
+- make a single call to grab_available_tc() for getting many tc's at the same time when necessary
 
 
 TO DISCUSS:
