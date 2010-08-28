@@ -20,8 +20,11 @@ class Create_2_LowCreate(DefaultVisitor):
         decls += cr.cvar_fid
 
         for item in ('place', 'start', 'limit', 'step', 'block'):
-            var = CVarDecl(loc = cr.loc, name = 'C$%s$%s' % (item, cr.label), ctype = 'long')
-
+            var = None
+            if item != 'place':
+                var = CVarDecl(loc = cr.loc, name = 'C$%s$%s' % (item, cr.label), ctype = 'long')
+            else:
+                var = CVarDecl(loc = cr.loc, name = 'C$%s$%s' % (item, cr.label), ctype = 'sl_place_t')
             decls += var
 
             setattr(cr, 'cvar_%s' % item, var)

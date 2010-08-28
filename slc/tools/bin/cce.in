@@ -369,7 +369,7 @@ case $slc_arch-$slc_os in
 	slc_debug_flags=()
 	;;
     host-host-hrt)
-        slc_ppflags+=(-D_GNU_SOURCE -D_XOPEN_SOURCE -Dmain=__program_main)
+        slc_ppflags+=(-D__hrt -D_GNU_SOURCE -D_XOPEN_SOURCE -Dmain=__program_main)
         slc_ldflags+=($PTHREAD_LIBS -static)
         slc_cflags+=(-fno-omit-frame-pointer)  # swap-context requires valid frame pointers
         ;;

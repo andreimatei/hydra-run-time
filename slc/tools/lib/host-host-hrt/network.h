@@ -87,6 +87,9 @@ typedef struct req_create {
   i_struct* final_shareds; // pointer to the shareds in the FC (NULL if !final_ranges)
   memdesc_t* final_descs;  // pointer to the descriptor table in the FC (NULL if !final_ranges)
   i_struct* done;          // pointer to done in the FC, valid on the parent node (NULL if !final_ranges)
+  default_place_policy_enum default_place_policy;  // policy to be used when deciding then PLACE_DEAFULT
+                                                   // of the new threads
+  sl_place_t default_place_parent;    // PLACE_DEFAULT of the parent
 }req_create;
 
 typedef struct req_write_istruct {
@@ -195,7 +198,12 @@ void populate_remote_tcs(
     int final_ranges,  // 1 if these tcs are the last ones of the family
     i_struct* final_shareds, // pointer to the shareds in the FC (NULL if !final_ranges)
     memdesc_t* final_descs,  // pointer to the descriptor table in the FC (NULL if !final_ranges)
-    i_struct* done          // pointer to done in the FC, valid on the parent node (NULL if !final_ranges)
+    i_struct* done,          // pointer to done in the FC, valid on the parent node (NULL if !final_ranges)
+    default_place_policy_enum default_place_policy,// policy to be used when deciding the 
+                                                   // PLACE_DEFAULT to be inheritied by
+                                                   // the child
+    sl_place_t default_place_parent     // PLACE_DEFAULT of the parent. Used if 
+                                        // default_place_policy == INHERIT_DEFAULT_PLACE
     );
 void allocate_remote_tcs(int node_index, int proc_index, int no_tcs, int* tcs, int* no_allocated_tcs);
 void write_remote_istruct(int node_index, i_struct* istructp, long val, const tc_t* reader_tc);

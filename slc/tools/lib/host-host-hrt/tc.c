@@ -211,6 +211,7 @@ void populate_tc(tc_t* tc,
                  i_struct* final_shareds, 
                  memdesc_t* final_descs,
                  i_struct* done,
+                 sl_place_t place_default,    // the PLACE_DEFAULT to be used by the threads running in this TC
                  const tc_ident_t* current_tc);
 static void free_fc(int proc_id, int fc_id);
 /*
@@ -223,7 +224,6 @@ void populate_tc(tc_t* tc,
                  tc_ident_t parent, tc_ident_t prev, tc_ident_t next,
                  int is_last_tc, i_struct* final_shareds, i_struct* done);
                  */
-//int atomic_increment_next_tc(int proc_id);  // FIXME: remove this
 static int grab_available_tc(int proc_id);
 static int grab_available_fam_context(int proc_id);
 static int grab_runnable_tc(int proc_id);
@@ -250,9 +250,12 @@ mapping_decision map_fam(
     long block_size,  // FIXME: block is used wrongly here
     //long start_index,
     //long end_index,
-    struct mapping_node_t* parent_id,
-    int hint) {
+    struct mapping_node_t* parent_id//,
+    //int hint) {
+    ){
   //static int first_mapping = 1;
+
+  int hint = -1;  // FIXME: remove this
 
   LOG(DEBUG, "map_fam: mapping fam of %d threads with block %d and hint %d\n", 
       no_threads, block_size, hint);
@@ -595,13 +598,40 @@ void populate_local_tcs(
     int final_ranges,  // 1 if these tcs are the last ones of the family
     i_struct* final_shareds, // pointer to the shareds in the FC (NULL if !final_ranges)
     memdesc_t* final_descs,  // pointer to the descriptor table in the FC (NULL if !final_ranges)
-    i_struct* done          // pointer to done in the FC (NULL if !final_ranges)
+    i_struct* done,          // pointer to done in the FC (NULL if !final_ranges)
+    default_place_policy_enum default_place_policy,// policy to be used when deciding the 
+                                                   // PLACE_DEFAULT to be inheritied by
+                                                   // the child
+    sl_place_t default_place_parent     // PLACE_DEFAULT of the parent. Used if 
+                                        // default_place_policy == INHERIT_DEFAULT_PLACE
     ) {
 
   for (int i = 0; i < no_tcs; ++i) {
     LOG(DEBUG, "populate_local_tcs: populating tc %d proc %d\t final ranges:%d\t final tc: %d\n",
         ranges[i].dest.tc->ident.tc_index, ranges[i].dest.tc->ident.proc_index,
         final_ranges, (final_ranges && i == no_tcs - 1));
+    sl_place_t def_place;
+    def_place.place_local = def_place.place_default = 0;
+    def_place.node_index = def_place.proc_index = def_place.tc_index = -1;
+    switch (default_place_policy) {
+      case INHERIT_DEFAULT_PLACE:
+        def_place = default_place_parent;
+        break;
+      case LOCAL_NODE:
+        def_place.node_index = NODE_INDEX;
+        break;
+      case LOCAL_PROC:
+        def_place.node_index = NODE_INDEX;
+        def_place.proc_index = ranges[i].dest.tc->ident.proc_index;
+        break;
+      case LOCAL_TC:
+        def_place.node_index = NODE_INDEX;
+        def_place.proc_index = ranges[i].dest.tc->ident.proc_index;
+        def_place.tc_index = ranges[i].dest.tc->ident.tc_index;
+        break;
+    }
+    restrict_place(&def_place, default_place_parent);  // make sure that the children's PLACE_DEFAULT is capped
+                                                      // by the parent's PLACE_DEFAULT
     populate_tc(ranges[i].dest.tc,
                 func, //no_shareds, no_globals,
                 ranges[i].index_start,
@@ -613,6 +643,7 @@ void populate_local_tcs(
                 (final_ranges && i == (no_tcs - 1)) ? final_shareds : NULL,
                 (final_ranges && i == (no_tcs - 1)) ? final_descs : NULL,
                 done,
+                def_place,
                 _cur_tc != NULL ? &_cur_tc->ident : NULL
                 );
   }
@@ -624,7 +655,8 @@ void populate_local_tcs(
  * Returns an identifier of the first tc to service the family.
  */
 tc_ident_t create_fam(fam_context_t* fc, 
-                      thread_func func
+                      thread_func func,
+                      default_place_policy_enum default_place_policy
                       //int no_threads
                       ) {
   //int tcs[MAX_NO_TCS_PER_ALLOCATION];
@@ -687,7 +719,9 @@ tc_ident_t create_fam(fam_context_t* fc,
             i == (fc->no_ranges),  // final ranges
             fc->shareds,
             fc->shared_descs,
-            &fc->done
+            &fc->done,
+            default_place_policy,
+            _cur_tc->place_default
             );
       } else {  // creating root_fam
         //assert(func == &_fam___root_fam);
@@ -698,7 +732,8 @@ tc_ident_t create_fam(fam_context_t* fc,
         // TC than the reader, because we want the reader to use read_istruct_different_proc
         dummy_parent.node_index = NODE_INDEX; // no parent
         dummy_parent.proc_index = -1; dummy_parent.tc_index = -1; dummy_parent.tc = NULL; 
-        
+        sl_place_t whole_cluster = {0,0,-1,-1,-1};
+
         populate_local_tcs(//tcs, 
             &fc->ranges[start_index], 
             no_ranges_for_current_node, 
@@ -709,7 +744,9 @@ tc_ident_t create_fam(fam_context_t* fc,
             i == fc->no_ranges,  // final ranges
             fc->shareds,
             fc->shared_descs,
-            &fc->done
+            &fc->done,
+            INHERIT_DEFAULT_PLACE,
+            whole_cluster 
             );
       }
     } else {  // we have a remote allocation
@@ -727,7 +764,9 @@ tc_ident_t create_fam(fam_context_t* fc,
                           i == (fc->no_ranges),  // final ranges
                           fc->shareds,
                           fc->shared_descs,
-                          &fc->done
+                          &fc->done,
+                          default_place_policy,
+                          _cur_tc->place_default
                           );  
       LOG(DEBUG, "create_fam: sent remote create request\n");
     }
@@ -1083,22 +1122,16 @@ void create_tc(int proc_index, int tc_index) {
     }
   }
 
+  // init PLACE_LOCAL
+  tc->place_local.node_index = NODE_INDEX;
+  tc->place_local.proc_index = proc_index;
+  tc->place_local.tc_index = tc_index;
+  tc->place_local.place_local = tc->place_local.place_default = 0;
+
   //tc->blocked = -1; // empty
   //tc->finished = 1;  // available for reuse
   _free_tc(proc_index, tc_index);
 }
-
-
-/*
-void push_to_TC_stack_ul(stack_t* stack, unsigned long data) {
-  unsigned long* p = ((void*)stack->ss_sp + stack->ss_size) - sizeof(unsigned long);
-  *p = data;
-  //stack->ss_sp -= sizeof(unsigned long);
-  stack->ss_size -= sizeof(unsigned long);
-
-  LOG(DEBUG, "pushed arg at %p\n", p);
-}
-*/
 
 /* 
  * Prepares a TC to run a threads range. The TC is then scheduled to run.
@@ -1114,18 +1147,13 @@ void populate_tc(tc_t* tc,
                  i_struct* final_shareds, 
                  memdesc_t* final_descs,
                  i_struct* done,
+                 sl_place_t place_default,    // the PLACE_DEFAULT to be used by the threads running in this TC
                  const tc_ident_t* current_tc // the TC of the caller; can be passed a dummy or NULL
                  ) {
   tc->context.uc_stack = tc->initial_thread_stack;  // TODO: is this necessary? would this have been modified
                                                     // by savecontext() calls?
   tc->context.uc_link = NULL;
   makecontext(&(tc->context), (void (*)())func, 0);
-
-  /*
-  // put start_index and end_index on the family's stack
-  push_to_TC_stack_ul(&tc->context.uc_stack, end_index);
-  push_to_TC_stack_ul(&tc->context.uc_stack, start_index);
-  */
 
   tc->index_start = start_index;
   tc->index_stop = end_index;
@@ -1143,6 +1171,8 @@ void populate_tc(tc_t* tc,
   //for (int i = 0; i < num_shareds; ++i) tc->shareds[i].state = EMPTY;
   //for (int i = 0; i < num_globals; ++i) tc->globals[i].state = EMPTY;
   //tc->finished = 0;
+  
+  tc->place_default = place_default;
 
   unblock_tc(tc, current_tc != NULL ? test_same_proc(&tc->ident, current_tc) : 0);
 }
@@ -1393,7 +1423,7 @@ void suspend_on_istruct(volatile i_struct* istructp, int same_proc) {
 void unblock_tc(tc_t* tc, int same_processor) {
   struct timeval t;
   gettimeofday(&t, NULL);
-  pthread_spinlock_t* lock;
+  //pthread_spinlock_t* lock;
   LOG(DEBUG, "unblock_tc: unblocking TC ("PRINT_TC_IDENT_FORMAT"). It was blocked for %ld ms.\n", 
       PRINT_TC_IDENT(tc->ident), timediff(t, tc->blocking_time));
   /*
@@ -2060,7 +2090,7 @@ static int start(int argc, char** argv) {
   LOG(DEBUG, "creating root_fam\n"); 
   //create_fam(fc, &_fam___root_fam);
   //create_fam(fc, &__root_fam);
-  create_fam(fc, &__slFfmta___root_fam);
+  create_fam(fc, &__slFfmta___root_fam, INHERIT_DEFAULT_PLACE);
 
   // transmit argc
   write_istruct_no_checks(&(fc->ranges[0].dest.tc->globals[0]), argc);

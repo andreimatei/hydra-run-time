@@ -66,8 +66,18 @@ void populate_local_tcs(
     int final_ranges,  // 1 if these tcs are the last ones of the family
     i_struct* final_shareds, // pointer to the shareds in the FC (NULL if !final_ranges)
     memdesc_t* final_descs,  // pointer to the descriptor table in the FC (NULL if !final_ranges)
-    i_struct* done          // pointer to done in the FC (NULL if !final_ranges)
+    i_struct* done,          // pointer to done in the FC (NULL if !final_ranges)
+    default_place_policy_enum default_place_policy,// policy to be used when deciding the 
+                                                   // PLACE_DEFAULT to be inheritied by
+                                                   // the child
+    sl_place_t default_place_parent     // PLACE_DEFAULT of the parent. Used if 
+                                        // default_place_policy == INHERIT_DEFAULT_PLACE
     );
+
+/*
+ * Caps p1 by p2.
+ */
+void restrict_place(sl_place_t* p1, sl_place_t p2);
 
 #endif
 

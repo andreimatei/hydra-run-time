@@ -13,8 +13,13 @@
 //
 
 #include <svp/delegate.h>
+//#include <delegate.h>
 
+#ifndef __hrt
 sl_place_t __main_place_id = PLACE_DEFAULT;
+#else
+sl_place_t __main_place_id = {0,1,-1,-1,-1};  // FIXME: can we get rid of this special case and initialize __main_place_id with PLACE_DEFAULT, given that PLACE_DEFAULT is a const struct?
+#endif
 
 const char *__tag__ = "\0slr_runner:host:";
 const char *__datatag__ = "\0slr_datatag:seqc-seqc_o-host-host-seqc:";

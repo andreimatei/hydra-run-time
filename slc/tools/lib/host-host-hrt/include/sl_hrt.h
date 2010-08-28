@@ -9,6 +9,7 @@
 #include <signal.h>
 #include <assert.h>
 #include <sys/time.h>
+#include <svp/delegate.h>
 
 extern int NODE_INDEX;
 
@@ -17,6 +18,16 @@ void exit(int);
 struct tc_t;
 
 #define MAX_RANGES_PER_MEM 16
+
+/*
+typedef struct {
+  int place_local;
+  int place_default;
+  int node_index;
+  int proc_index;
+  int tc_index;
+} sl_place_t;
+*/
 
 typedef struct mem_range {
   void *p, *orig_p;
@@ -102,6 +113,9 @@ typedef struct tc_ident_t tc_ident_t;
 
 enum istruct_state {EMPTY = 0, WRITTEN = 1, SUSPENDED = 2};
 typedef enum istruct_state istruct_state;
+
+enum default_place_policy_enum {INHERIT_DEFAULT_PLACE, LOCAL_NODE, LOCAL_PROC, LOCAL_TC};
+typedef enum default_place_policy_enum default_place_policy_enum;
 
 /*
  * Represents an I-structure; the decision has been to not mark any fields as volatile;
@@ -206,6 +220,9 @@ struct tc_t {
 
   heap_t heap;
 
+  sl_place_t place_default;  // PLACE_DEFAULT, as inherited or set at family creation
+  sl_place_t place_local;    // PLACE_LOCAL always represents this TC; Statically initialized when TC is created.
+
   int fib;  // FIXME: remove this. Added just for testing the fibonacci program.
 
 };//TCS[NO_TCS];
@@ -278,12 +295,14 @@ mapping_decision map_fam(
     long block_size,
     //long start_index,
     //long end_index,
-    struct mapping_node_t* parent_id,
-    int hint);
+    struct mapping_node_t* parent_id//,
+    //sl_place_t hint);
+    );
 
 //tc_ident_t create_fam(fam_context_t* fc);
 tc_ident_t create_fam(fam_context_t* fc, 
-                      thread_func func
+                      thread_func func,
+                      default_place_policy_enum default_place_policy
                       //int no_threads
                       );
 

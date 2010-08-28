@@ -1105,7 +1105,12 @@ void populate_remote_tcs(
     int final_ranges,  // 1 if these tcs are the last ones of the family
     i_struct* final_shareds, // pointer to the shareds in the FC (NULL if !final_ranges)
     memdesc_t* final_descs,  // pointer to the descriptor table in the FC (NULL if !final_ranges)
-    i_struct* done          // pointer to done in the FC, valid on the parent node (NULL if !final_ranges)
+    i_struct* done,          // pointer to done in the FC, valid on the parent node (NULL if !final_ranges)
+    default_place_policy_enum default_place_policy,// policy to be used when deciding the 
+                                                   // PLACE_DEFAULT to be inheritied by
+                                                   // the child
+    sl_place_t default_place_parent     // PLACE_DEFAULT of the parent. Used if 
+                                        // default_place_policy == INHERIT_DEFAULT_PLACE
     ) {
   req_create req;
   req.type = REQ_CREATE;
@@ -1122,6 +1127,8 @@ void populate_remote_tcs(
   req.final_shareds = final_shareds;
   req.final_descs = final_descs;
   req.done = done;
+  req.default_place_policy = default_place_policy;
+  req.default_place_parent = default_place_parent;
   send_sctp_msg(node_index, &req, sizeof(req));
 }
 
@@ -1204,6 +1211,8 @@ static void handle_req_write_istruct_mem(const req_write_istruct_mem* req) {
 
 static void handle_req_create(const req_create* req) {
   LOG(DEBUG, "network: handle_req_create: got create request\n");
+  // sanity check
+  assert(req->default_place_parent.node_index == -1 || req->default_place_parent.node_index == NODE_INDEX);
   populate_local_tcs(//req->tcs,
                      req->ranges,
                      req->no_ranges,
@@ -1212,7 +1221,10 @@ static void handle_req_create(const req_create* req) {
                      req->final_ranges,
                      req->final_shareds,
                      req->final_descs,
-                     req->done);
+                     req->done,
+                     req->default_place_policy,
+                     req->default_place_parent
+                     );
   LOG(DEBUG, "network: handle_req_create: finished populating local TC's\n");
 }
 

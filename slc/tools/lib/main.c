@@ -25,7 +25,8 @@ sl_decl(t_main, void);
 
 int main(int argc, char **argv) {
     int ret;
-    printf("in libslmain; creating t_main on place %d (PLACE_GROUP = %d);\n", __main_place_id, PLACE_GROUP);
+    //printf("in libslmain; creating t_main on place %d (PLACE_GROUP = %d);\n", __main_place_id, PLACE_GROUP);
+    //printf("in libslmain; creating t_main on place %d;\n", __main_place_id);
     sl_create(, __main_place_id, ,,,,, t_main);
     sl_sync(ret);
     return ret;

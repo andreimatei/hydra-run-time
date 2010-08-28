@@ -186,8 +186,9 @@ class Create_2_HydraCall(ScopedVisitor):
                         + gen_loop_fun_name(funvar)                       # func
                         + ', (' + end_index + ' - ' + start + '+ 1) / ' + step    # no_threads
                         + ', ' + cr.block                                 # block size
-                        + ', 0, '                                         # parent_id (NULL)
-                        + cr.place + ')')                                 # hint
+                        + ', 0 '                                         # parent_id (NULL)
+                        + ')')  # FIXME: add the place
+                        #+ ', ' + cr.place + ')')                                 # hint
 
         mapping_call = CVarSet(decl = mapping_decision_var, rhs = rrhs)
         newbl.append(mapping_call + ';\n')
@@ -225,7 +226,10 @@ class Create_2_HydraCall(ScopedVisitor):
 
         create_call = CVarSet(decl = first_tc_var,
                         rhs = flatten(cr.loc_end, 'create_fam(')
-                            + CVarUse(decl = fam_context_var) + ',&' + gen_loop_fun_name(funvar) + ')');
+                            + CVarUse(decl = fam_context_var) 
+                            + ', &' + gen_loop_fun_name(funvar) 
+                            + ', INHERIT_DEFAULT_PLACE'   #FIXME: change this
+                            + ')');
         newbl.append(create_call + ';\n')
 
         self.__first_tc = CVarUse(decl = first_tc_var)

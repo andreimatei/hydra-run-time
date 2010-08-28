@@ -36,18 +36,37 @@ static const sl_place_t PLACE_DEFAULT = uTC::PLACE_GROUP;
 
 #else
 
+#ifdef __hrt
+
+//#warning compiling for hrt target
+
+typedef struct {
+  int place_local;
+  int place_default;
+  int node_index;
+  int proc_index;
+  int tc_index;
+} sl_place_t;
+
+static const sl_place_t PLACE_LOCAL = {1, 0, -1, -1, -1};
+static const sl_place_t PLACE_DEFAULT = {0, 1, -1, -1, -1};
+
+#else
+
 #warning delegation not defined for this target.
 typedef int sl_place_t;
 #define PLACE_LOCAL 0
 #define PLACE_DEFAULT 0
 #define PLACE_GROUP 0
 
-#endif
+#endif  // #ifdef __hrt
 
-#endif
+#endif  // #ifdef __cplusplus
+
+#endif  // #ifdef __mt_freestanding
 
 #define SVP_EXIT_NORMAL 0
 #define SVP_EXIT_BREAK  1
 #define SVP_EXIT_KILL   2
 
-#endif
+#endif  // include guard
