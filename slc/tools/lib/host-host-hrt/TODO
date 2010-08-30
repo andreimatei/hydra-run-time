@@ -1,3 +1,6 @@
+- handle sl_gencallee
+- handle should_inline
+
 rename "prev" to "_prev" and the other params of the various flavors of thread functions created by the compiler (foo_begin, foo_middle...)
 
 receive memchunks directly where they have to be placed in memory, avoid buffering

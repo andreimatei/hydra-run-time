@@ -83,7 +83,7 @@ void restrict_place(sl_place_t* p1, sl_place_t p2);
  * Resolve PLACE_DEFAULT and PLACE_LOCAL for current context.
  * If the place passed is neither of these, return it verbatim.
  */
-sl_place_t place_2_canonical_place(sl_place_t place);
+//sl_place_t place_2_canonical_place(sl_place_t place);
 
 #endif
 

@@ -140,9 +140,13 @@ class Create_2_HydraCall(ScopedVisitor):
         print >>sys.stderr, "BLOCK create ", cr.fun, cr.block
         print >>sys.stderr, "PLACE create ", cr.fun, cr.place
         print >>sys.stderr, "EXTRAS create ", cr.fun, cr.extras
-        n = cr.extras.get_attr("gencallee", None)
-        if n is not None:
+        gencallee = cr.extras.get_attr("gencallee", None)
+        if gencallee is not None:
+            gencallee = Opaque('1')
             print >>sys.stderr, "found gencallee on create"
+        else:
+            print >>sys.stderr, "didn't find gencallee on create"
+            gencallee = Opaque('0')
         print >>sys.stderr, "MAPPING create ", cr.fun, cr.mapping
         n = cr.mapping.get_attr("localize", None)
         if n is not None:
@@ -206,11 +210,25 @@ class Create_2_HydraCall(ScopedVisitor):
         #else:
             #newbl.append(CVarSet(decl = mapping_hint_var, rhs = '{-1,-1,-1}') + ';');
         #    newbl.append(CVarUse(decl = mapping_hint_var) + ' = {-1,-1,-1};')
-       
+      
+        # if statically delegating to PLACE_LOCAL, and a jump to the sequential create
+        #TODO(kena): is there a better way to test for PLACE_LOCAL on the following line?
+        if cr.place.__len__() == 1 and cr.place.__getitem__(0).text.strip() == "PLACE_LOCAL":
+            print 'found delegation to PLACE_LOCAL; skipping mapping and allocation'
+            newbl.append(CGoto(target = lc.target_next) + '; // compiler detected delegation to PLACE_LOCAL, so jump to creation of sequential version\n')
+        else:
+            print "didn't find delegation to PLACE_LOCAL %s \"%s\"" % (cr.place.__len__(), cr.place.__getitem__(0).text)
+
+        # add a dynamic jump to the sequential create
+        newbl.append(Opaque('if ( _places_equal(') + CVarUse(decl = cr.cvar_place) + ', PLACE_LOCAL)) {'
+                  + CGoto(target = lc.target_next) + ';}\n') 
+        
+
         rrhs = (flatten(cr.loc_end, 'map_fam(&') 
                         + gen_loop_fun_name(funvar)                       # func
                         + ', (' + end_index + ' - ' + start + '+ 1) / ' + step    # no_threads
                         + ', ' + cr.place                                 #place
+                        + ', ' + gencallee                                #gencallee
                         #+ ', ' + CVarUse(decl = mapping_hint_var)        # hint
                         + ', ' + block                                    # block
                         + ', 0 '                                          # parent_id (NULL)
@@ -218,6 +236,12 @@ class Create_2_HydraCall(ScopedVisitor):
 
         mapping_call = CVarSet(decl = mapping_decision_var, rhs = rrhs)
         newbl.append(mapping_call + ';\n')
+
+        #test is the mapping engine said we should inline the family
+        newbl.append(
+                    Opaque('if (') + CVarUse(decl = mapping_decision_var) + '.should_inline) {'
+                    + CGoto(target = lc.target_next) + ';}\n'
+                    )
 
         #expand call to allocate_fam()
         fam_context_var = CVarDecl(loc = cr.loc_end, name = 'alloc$%s' % lbl,

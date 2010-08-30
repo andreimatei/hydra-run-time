@@ -246,6 +246,7 @@ mapping_decision map_fam(
     thread_func func __attribute__((unused)),
     long no_threads  __attribute__((unused)),
     sl_place_t place,  // place where the family has been delegated to
+    int gencallee,  // 1 if the function can be executed on other nodes than the parent, 0 otherwise
     //mapping_hint_t hint,
     long block,
     struct mapping_node_t* parent_id) {
@@ -259,9 +260,9 @@ mapping_decision map_fam(
   assert(place.tc_index == -1);  // we don't support delegating to particular TC's. The current TC can be 
                                  // referred to by PLACE_LOCAL.
 
-  sl_place_t final_place = place_2_canonical_place(place);
+  sl_place_t final_place = _place_2_canonical_place(place);
 
-  if (block == -1) block = no_threads;
+  if (block == -1 || block == 0) block = no_threads;
 
   int no_nodes = 1, no_procs = 1, no_tcs = 1;
   if (final_place.tc_index != -1) {
@@ -273,6 +274,13 @@ mapping_decision map_fam(
     no_procs = MIN(NO_PROCS, no_threads / block);
   } else {
     no_nodes = MIN(no_secondaries, no_threads / block);
+  }
+
+  if (!gencallee) {
+    if (final_place.node_index != -1) {
+      assert(final_place.node_index == _cur_tc->ident.node_index);
+    }
+    no_nodes = 1;
   }
 
   /*

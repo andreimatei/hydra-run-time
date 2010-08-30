@@ -85,7 +85,9 @@ def parse_extras(items):
                   else: unexpected(item)
             else:
                   assert isinstance(item, str)
-                  # ignore strings
+                  if (item.strip() == "sl_gencallee"):
+                    b += Attr(name = "gencallee")
+                  # ignore other strings
       if len(b) > 0:
             return b
       return None

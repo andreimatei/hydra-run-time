@@ -1,16 +1,6 @@
 #include "sl_hrt.h"
 #include "svp/delegate.h"
 
-/*
- * Resolve PLACE_DEFAULT and PLACE_LOCAL for current context.
- * If the place passed is neither of these, return it verbatim.
- */
-sl_place_t place_2_canonical_place(sl_place_t place) {
-  if (!place.place_local && !place.place_default) return place;
-  if (place.place_default) return _cur_tc->place_default;
-  assert(place.place_local); 
-  return _cur_tc->place_local;
-}
 
 /*
  * Caps p1 by p2.

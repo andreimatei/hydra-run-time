@@ -296,6 +296,7 @@ mapping_decision map_fam(
     thread_func func __attribute__((unused)),
     long no_threads  __attribute__((unused)),
     sl_place_t place,
+    int gencallee,  // 1 if the function can be executed on other nodes than the parent, 0 otherwise
     //mapping_hint_t hint,
     long block,
     struct mapping_node_t* parent_id);
@@ -498,5 +499,25 @@ static inline long timediff_now(struct timeval t) {
 }
 
 void send_ping(int node_index, int identifier, int request_unblock, i_struct* istructp);
+
+/*
+ * Resolve PLACE_DEFAULT and PLACE_LOCAL for current context.
+ * If the place passed is neither of these, return it verbatim.
+ */
+static inline sl_place_t _place_2_canonical_place(sl_place_t place) {
+  if (!place.place_local && !place.place_default) return place;
+  if (place.place_default) return _cur_tc->place_default;
+  assert(place.place_local); 
+  return _cur_tc->place_local;
+}
+
+static inline int _places_equal(sl_place_t pl1, sl_place_t pl2) {
+  sl_place_t pl1c, pl2c;
+  pl1c = _place_2_canonical_place(pl1);
+  pl2c = _place_2_canonical_place(pl2);
+  return (pl1c.node_index == pl2c.node_index 
+      && pl1c.proc_index == pl2c.proc_index 
+      && pl1c.tc_index == pl2c.tc_index);
+}
 
 #endif
