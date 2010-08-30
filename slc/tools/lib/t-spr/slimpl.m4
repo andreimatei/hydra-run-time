@@ -182,7 +182,7 @@ m4_pushdef([[_sl_lbl]],F[[]]_sl_crcnt)m4_dnl
 [['extras':[r""" $7 """],]]m4_dnl
 [['fun':[r""" $8 """],]]m4_dnl
 [['lbl':']]_sl_lbl[[',]]m4_dnl
-[['place':[r""" ]]m4_ifblank([[$2]],-1,[[$2]])[[ """],]]m4_dnl
+[['place':[r""" ]]m4_ifblank([[$2]],PLACE_DEFAULT,[[$2]])[[ """],]]m4_dnl
 [['start':[r""" ]]m4_ifblank([[$3]],0,[[$3]])[[ """],]]m4_dnl
 [['limit':[r""" ]]m4_ifblank([[$4]],1,[[$4]])[[ """],]]m4_dnl
 [['step':[r""" ]]m4_ifblank([[$5]],1,[[$5]])[[ """],]]m4_dnl
@@ -204,7 +204,7 @@ m4_pushdef([[_sl_lbl]],F[[]]_sl_crcnt)m4_dnl
 [['extras':[r""" $7 """],]]m4_dnl
 [['fun':[r""" $8 """],]]m4_dnl
 [['lbl':']]_sl_lbl[[',]]m4_dnl
-[['place':[r""" ]]m4_ifblank([[$2]],-1,[[$2]])[[ """],]]m4_dnl
+[['place':[r""" ]]m4_ifblank([[$2]],PLACE_DEFAULT,[[$2]])[[ """],]]m4_dnl
 [['start':[r""" ]]m4_ifblank([[$3]],0,[[$3]])[[ """],]]m4_dnl
 [['limit':[r""" ]]m4_ifblank([[$4]],1,[[$4]])[[ """],]]m4_dnl
 [['step':[r""" ]]m4_ifblank([[$5]],1,[[$5]])[[ """],]]m4_dnl

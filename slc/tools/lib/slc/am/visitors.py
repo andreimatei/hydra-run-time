@@ -181,14 +181,40 @@ class Create_2_HydraCall(ScopedVisitor):
         start = CVarUse(decl = cr.cvar_start)
         end_index = CVarUse(decl = cr.cvar_limit) + " - 1"  # this is now inclusive
         step = CVarUse(decl = cr.cvar_step)
+
+        #mapping_hint_var = CVarDecl(loc = None, name = 'mapping_hint_%s' % cr.label, ctype = 'mapping_hint_t',
+        #                            init = 'empty_mapping_hint')
+        #self.cur_scope.decls += mapping_hint_var
+
+        mapspec = cr.mapping.get_attr("mapping", None)
+        block = None
+        default_place_policy = Opaque('3')  # inherit from the parent
+        if mapspec is not None:
+            #newbl.append(self.parse_mapping_fun(mapspec, mapping_hint_var))
+            mf = mapspec.mf  # the mapping function
+            if mf == "spread":
+                block = mapspec.n
+                #print 'found spread with block: ' + block
+            elif mf == "distribute":
+                block = mapspec.n
+                default_place_policy = mapspec.m
+                #print 'found spread with block: ' + block + ' and policy: ' + default_place_policy
+            else:
+                die("unsupported mapping")
+        else:
+            block = cr.block
+        #else:
+            #newbl.append(CVarSet(decl = mapping_hint_var, rhs = '{-1,-1,-1}') + ';');
+        #    newbl.append(CVarUse(decl = mapping_hint_var) + ' = {-1,-1,-1};')
        
         rrhs = (flatten(cr.loc_end, 'map_fam(&') 
                         + gen_loop_fun_name(funvar)                       # func
                         + ', (' + end_index + ' - ' + start + '+ 1) / ' + step    # no_threads
-                        + ', ' + cr.block                                 # block size
-                        + ', 0 '                                         # parent_id (NULL)
-                        + ')')  # FIXME: add the place
-                        #+ ', ' + cr.place + ')')                                 # hint
+                        + ', ' + cr.place                                 #place
+                        #+ ', ' + CVarUse(decl = mapping_hint_var)        # hint
+                        + ', ' + block                                    # block
+                        + ', 0 '                                          # parent_id (NULL)
+                        + ')')
 
         mapping_call = CVarSet(decl = mapping_decision_var, rhs = rrhs)
         newbl.append(mapping_call + ';\n')
@@ -217,7 +243,7 @@ class Create_2_HydraCall(ScopedVisitor):
             pass
         else:
             # abort the program
-            newbl.append(Opaque('printf(stderr, ""); exit(1);\n}\n'))
+            newbl.append(Opaque('printf(stderr, "allocate failed. Aborting."); exit(1);\n}\n'))
 
         #expand call to create_fam()
         first_tc_var = CVarDecl(loc = cr.loc_end, name = 'first_tc$%s' % lbl,
@@ -228,7 +254,7 @@ class Create_2_HydraCall(ScopedVisitor):
                         rhs = flatten(cr.loc_end, 'create_fam(')
                             + CVarUse(decl = fam_context_var) 
                             + ', &' + gen_loop_fun_name(funvar) 
-                            + ', INHERIT_DEFAULT_PLACE'   #FIXME: change this
+                            + ', ' + default_place_policy
                             + ')');
         newbl.append(create_call + ';\n')
 

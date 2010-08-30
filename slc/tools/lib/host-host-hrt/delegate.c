@@ -1,5 +1,5 @@
 #include "sl_hrt.h"
-#include "delegate.h"
+#include "svp/delegate.h"
 
 /*
  * Resolve PLACE_DEFAULT and PLACE_LOCAL for current context.

@@ -13,7 +13,6 @@
 //
 
 #include <svp/delegate.h>
-//#include <delegate.h>
 
 #ifndef __hrt
 sl_place_t __main_place_id = PLACE_DEFAULT;

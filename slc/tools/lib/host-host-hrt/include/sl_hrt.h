@@ -19,15 +19,15 @@ struct tc_t;
 
 #define MAX_RANGES_PER_MEM 16
 
-/*
-typedef struct {
-  int place_local;
-  int place_default;
-  int node_index;
-  int proc_index;
-  int tc_index;
-} sl_place_t;
-*/
+
+//--------------------------------------------------
+// typedef struct {
+//   int block_node, block_proc, block_tc;
+//   //int block_level1, block_level2, block_level3;
+// }mapping_hint_t;
+// 
+// static mapping_hint_t empty_mapping_hint __attribute__((unused)) = {-1,-1,-1};  // used by the compiler to init some vars 
+//-------------------------------------------------- 
 
 typedef struct mem_range {
   void *p, *orig_p;
@@ -114,7 +114,10 @@ typedef struct tc_ident_t tc_ident_t;
 enum istruct_state {EMPTY = 0, WRITTEN = 1, SUSPENDED = 2};
 typedef enum istruct_state istruct_state;
 
-enum default_place_policy_enum {INHERIT_DEFAULT_PLACE, LOCAL_NODE, LOCAL_PROC, LOCAL_TC};
+enum default_place_policy_enum {INHERIT_DEFAULT_PLACE = 3, 
+                                LOCAL_NODE = 2, 
+                                LOCAL_PROC = 1, 
+                                LOCAL_TC = 0};
 typedef enum default_place_policy_enum default_place_policy_enum;
 
 /*
@@ -290,14 +293,12 @@ fam_context_t* allocate_fam(
     const struct mapping_decision* mapping);
 
 mapping_decision map_fam(
-    thread_func func,
-    long no_threads,
-    long block_size,
-    //long start_index,
-    //long end_index,
-    struct mapping_node_t* parent_id//,
-    //sl_place_t hint);
-    );
+    thread_func func __attribute__((unused)),
+    long no_threads  __attribute__((unused)),
+    sl_place_t place,
+    //mapping_hint_t hint,
+    long block,
+    struct mapping_node_t* parent_id);
 
 //tc_ident_t create_fam(fam_context_t* fc);
 tc_ident_t create_fam(fam_context_t* fc, 

@@ -16,7 +16,9 @@ if ENABLE_SLC_HRT
 nobase_pkglib_DATA += \
 	hrt_naked-host-host-hrt/slrt.o \
 	hrt_naked-host-host-hrt/network.o \
-	hrt_naked-host-host-hrt/mem-comm.o
+	hrt_naked-host-host-hrt/mem-comm.o \
+	hrt_naked-host-host-hrt/tc.o \
+	hrt_naked-host-host-hrt/delegate.o
 
 nobase_pkglib_LIBRARIES += \
 	hrt_naked-host-host-hrt/libslc.a \

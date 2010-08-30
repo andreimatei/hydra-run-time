@@ -5,8 +5,6 @@ receive memchunks directly where they have to be placed in memory, avoid bufferi
 scatter blocks until all confirmations come; if i have multiple scatter's in a create,
         maybe i want to block on the reunion of the 2 sets of confirmations at once...
 
-init main_place_id to -1 (or do smth to force the create in libslmain to be done the local node)
-
 define an initializer with __attribute__((constructor)) that calls mmap(BIG); free(); 
 (or do malloc at the beginning of main()) - to make sure we start
 with a non-empty heap, so that a number of mallocs done by libc will work.
@@ -16,8 +14,6 @@ take care to close all sockets; in particular the "daemon" one on the primary an
 warning: Using 'getaddrinfo' in statically linked applications requires at runtime the shared libraries from the glibc version used for linking
 
 in write_istruct and read_istruct, the generic version, handle the case where the reader/writer is inexistent (node_index == -1); this will happen for continuation creates, because the parent is inexistent?
-
-discuss with Raphael about schemes for distibuting the threads in a fam, and what aditional concurrency some schemes might produce. When assigning multiple chunks to a TC, does a block size != 1 make any sense?
 
 replace NODE_INDEX with a function which returns the current node
 
@@ -41,6 +37,7 @@ before being sent to the second chunk (thread 1 is mapped on node 1, thread 2 on
 so each thread gets 2 cells but only updates one, first thread does propagate before second thread
 does activate. Is this ok? Should we block propagates somehow creation until all data has been distributed
 (how would we know when all activates are done?)
+- discuss with Raphael about schemes for distibuting the threads in a fam, and what aditional concurrency some schemes might produce. When assigning multiple chunks to a TC, does a block size != 1 make any sense?
 
 
 KNOWN ISSUES
@@ -50,6 +47,7 @@ KNOWN ISSUES
     - if a header for a memory transfer is not read fully at once from the socket, the code won't work
 - tc.c
     - we need to always to map memory chunks in 1MB increments (cause that what the sigsegv handler does)
+    - map_fam doesn't take into account the fact that different nodes might have different NO_PROCS
 
 compiler:
   - sl_getma() doesn't work on globals (look in am/visitor.py at do_visit_seta)

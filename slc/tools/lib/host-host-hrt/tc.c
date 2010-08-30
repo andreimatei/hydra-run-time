@@ -90,7 +90,6 @@ LOG_LEVEL _logging_level = DEBUG;
 #endif
 
 void LOG(LOG_LEVEL level, char* fmt, ...) {
-  /*
   if (level <= _logging_level) {
     va_list args;
     va_start(args, fmt);
@@ -102,7 +101,6 @@ void LOG(LOG_LEVEL level, char* fmt, ...) {
     vfprintf(stdout, s, args);  // FIXME: write to stderr
     va_end(args);
   }
-  */
 }
 
 
@@ -247,68 +245,96 @@ int tc_is_valid(int tc_index) {
 mapping_decision map_fam(
     thread_func func __attribute__((unused)),
     long no_threads  __attribute__((unused)),
-    long block_size,  // FIXME: block is used wrongly here
-    //long start_index,
-    //long end_index,
-    struct mapping_node_t* parent_id//,
-    //int hint) {
-    ){
-  //static int first_mapping = 1;
+    sl_place_t place,  // place where the family has been delegated to
+    //mapping_hint_t hint,
+    long block,
+    struct mapping_node_t* parent_id) {
 
-  int hint = -1;  // FIXME: remove this
-
-  LOG(DEBUG, "map_fam: mapping fam of %d threads with block %d and hint %d\n", 
-      no_threads, block_size, hint);
+  LOG(DEBUG, "map_fam: mapping fam of %d threads\n", 
+      no_threads);
   assert(parent_id == NULL); // TODO
+
   mapping_decision rez;
 
+  assert(place.tc_index == -1);  // we don't support delegating to particular TC's. The current TC can be 
+                                 // referred to by PLACE_LOCAL.
+
+  sl_place_t final_place = place_2_canonical_place(place);
+
+  if (block == -1) block = no_threads;
+
+  int no_nodes = 1, no_procs = 1, no_tcs = 1;
+  if (final_place.tc_index != -1) {
+    assert(final_place.node_index != -1 && final_place.proc_index != -1);
+    assert(final_place.tc_index == _cur_tc->ident.tc_index);
+  } else if (final_place.proc_index != -1) {
+    no_tcs = MIN(NO_TCS_PER_PROC, no_threads / block);
+  } else if (final_place.node_index != -1) {
+    no_procs = MIN(NO_PROCS, no_threads / block);
+  } else {
+    no_nodes = MIN(no_secondaries, no_threads / block);
+  }
+
   /*
-  if (first_mapping) {
-    rez.should_inline = 0;
-    rez.no_proc_assignments = 1;
-    rez.proc_assignments[0].node_index = NODE_INDEX;
-    rez.proc_assignments[0].proc_index = (_cur_tc->ident.proc_index + 1) % NO_PROCS;
-    rez.proc_assignments[0].no_tcs = 1;
-    rez.proc_assignments[0].load_percentage = 100; // 100% of threads on this proc
+  if (final_place.node_index != -1 && hint.block_node != -1) {
+    hint.block_proc *= hint.block_node;
+    hint.block_node = -1;
+    if (hint.block_proc < 0) hint.block_proc *= -1;
+  }
+  if (final_place.proc_index != -1 && hint.block_proc != -1) {
+    hint.block_tc *= hint.block_proc;
+    hint.block_proc = -1;
+    if (hint.block_tc < 0) hint.block_tc *= -1;
+  }
+  if (final_place.tc_index != -1 && hint.block_tc != -1) {
+    hint.block_tc = -1;
+  }
+  */
 
-    first_mapping = 0;
-  } 
-  else { */
-    int no_procs = 1;
-    int no_tcs_per_proc = 1;
-    int load_percentage = 100;
-
-    if (block_size != 0) {
-      no_procs = no_threads / block_size;
+  /*
+  if (hint.block_node != -1) {
+    no_nodes = no_threads / hint.block_node;
+    if (no_nodes > no_secondaries) {
+      no_nodes = no_secondaries;
     }
-    no_tcs_per_proc = no_threads / no_procs;
-    load_percentage = 100 / no_procs;
-
-    /*
-    if (no_threads != 2) {
-      no_tcs = no_threads;
-      load_percentage = 100 / no_tcs;
-      //load_percentage_last = load_percentage 
+  } else if (hint.block_proc != -1) {
+      no_procs = no_threads / hint.block_proc;
+      if (no_procs > NO_PROCS) {  // TODO: take into account that different nodes might have different NO_PROCS
+        no_procs = NO_PROCS;
+      }
+  } else if (hint.block_tc != -1) {
+    no_tcs = no_threads / hint.block_tc;
+    if (no_tcs > NO_TCS_PER_PROC) {
+      no_tcs = NO_TCS_PER_PROC;
     }
-    */
+  }
+  */
 
-    rez.should_inline = 0;
-    rez.no_proc_assignments = no_procs; //1;
+  assert(no_nodes < no_secondaries);
+  assert(no_procs < NO_PROCS);
+  assert(no_tcs < NO_TCS_PER_PROC);
 
-    int cur_proc_index = _cur_tc->ident.proc_index;
+  int start_node = final_place.node_index != -1 ? final_place.node_index : _cur_tc->ident.node_index;
+  int start_proc = final_place.proc_index != -1 ? final_place.proc_index : _cur_tc->ident.proc_index;
+  //int start_tc   = final_place.tc_index   != -1 ? final_place.tc_index   : _cur_tc->ident.tc_index;
 
-    // map the first proc_assignment on the current processor, and the following ones on different procs.
-    for (int i = 0; i < no_procs; ++i) {
-      rez.proc_assignments[i].node_index = 
-        hint == -1 ? NODE_INDEX : hint; //(no_secondaries > 1 ? 1 - NODE_INDEX : NODE_INDEX);
-      rez.proc_assignments[i].proc_index = (cur_proc_index++) % NO_PROCS;
-      rez.proc_assignments[i].no_tcs = no_tcs_per_proc;//1;
-      rez.proc_assignments[i].load_percentage = load_percentage;//100; // 100% of threads will run on this proc
-    }
-
-
+  int load_percentage = 100 / (no_nodes * no_procs * no_tcs);
+  rez.should_inline = (final_place.tc_index != -1
+                       && final_place.node_index == NODE_INDEX 
+                       && final_place.proc_index == _cur_tc->ident.proc_index
+                       && final_place.tc_index == _cur_tc->ident.tc_index);
+  if (rez.should_inline) assert(no_nodes == 1 && no_procs == 1 && no_tcs == 1);
+  rez.no_proc_assignments = no_nodes * no_procs;
   assert(rez.no_proc_assignments <= MAX_NO_PROC_ASSIGNMENTS_PER_MAPPING);
-
+  for (int i = 0; i < no_nodes; ++i) {
+    for (int j = 0; j < no_procs; ++j) {
+      rez.proc_assignments[i].node_index = (start_node + i) % no_secondaries;
+      rez.proc_assignments[i].proc_index = (start_proc + j) % NO_PROCS;
+      rez.proc_assignments[i].no_tcs = no_tcs;
+      rez.proc_assignments[i].load_percentage = load_percentage;
+    }
+  }
+  
   return rez;
 }
 
@@ -2087,6 +2113,7 @@ static int start(int argc, char** argv) {
   fam_context_t* fc = allocate_fam(//&_fam___root_fam, 
                                     0, 0, 1, NULL, &mapping);
   //fam_context_t* fam = allocate_root_fam(&_fam___root_fam, argc, argv);
+  assert(fc);  // allocate shouldn't fail; we're just starting up
   LOG(DEBUG, "creating root_fam\n"); 
   //create_fam(fc, &_fam___root_fam);
   //create_fam(fc, &__root_fam);
