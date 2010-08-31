@@ -270,7 +270,7 @@ mapping_decision map_fam(
     assert(final_place.tc_index == _cur_tc->ident.tc_index);
   } else if (final_place.proc_index != -1) {
     no_tcs = MIN(NO_TCS_PER_PROC, no_threads / block);
-  } else if (final_place.node_index != -1) {
+  } else if (final_place.node_index != -1 || no_secondaries == 1) {
     no_procs = MIN(NO_PROCS, no_threads / block);
   } else {
     no_nodes = MIN(no_secondaries, no_threads / block);
@@ -318,15 +318,15 @@ mapping_decision map_fam(
   }
   */
 
-  assert(no_nodes < no_secondaries);
-  assert(no_procs < NO_PROCS);
-  assert(no_tcs < NO_TCS_PER_PROC);
+  assert(no_nodes <= no_secondaries);
+  assert(no_procs <= NO_PROCS);
+  assert(no_tcs <= NO_TCS_PER_PROC);
 
   int start_node = final_place.node_index != -1 ? final_place.node_index : _cur_tc->ident.node_index;
   int start_proc = final_place.proc_index != -1 ? final_place.proc_index : _cur_tc->ident.proc_index;
   //int start_tc   = final_place.tc_index   != -1 ? final_place.tc_index   : _cur_tc->ident.tc_index;
 
-  int load_percentage = 100 / (no_nodes * no_procs * no_tcs);
+  int load_percentage = 100 / (no_nodes * no_procs);
   rez.should_inline = (final_place.tc_index != -1
                        && final_place.node_index == NODE_INDEX 
                        && final_place.proc_index == _cur_tc->ident.proc_index
@@ -336,13 +336,25 @@ mapping_decision map_fam(
   assert(rez.no_proc_assignments <= MAX_NO_PROC_ASSIGNMENTS_PER_MAPPING);
   for (int i = 0; i < no_nodes; ++i) {
     for (int j = 0; j < no_procs; ++j) {
-      rez.proc_assignments[i].node_index = (start_node + i) % no_secondaries;
-      rez.proc_assignments[i].proc_index = (start_proc + j) % NO_PROCS;
-      rez.proc_assignments[i].no_tcs = no_tcs;
-      rez.proc_assignments[i].load_percentage = load_percentage;
+      rez.proc_assignments[i * no_procs + j].node_index = (start_node + i) % no_secondaries;
+      rez.proc_assignments[i * no_procs + j].proc_index = (start_proc + j) % NO_PROCS;
+      rez.proc_assignments[i * no_procs + j].no_tcs = no_tcs;
+      rez.proc_assignments[i * no_procs + j].load_percentage = load_percentage;
     }
   }
   
+  LOG(DEBUG, "map_fam: returning mapping with %d proc assignments on %d nodes, "
+             " (%d procs on each node); inline: %d\n", 
+             rez.no_proc_assignments, no_nodes, no_procs, rez.should_inline);
+  for (unsigned int i = 0; i < rez.no_proc_assignments; ++i) {
+    LOG(DEBUG, "map_fam: assignment %d: node: %d proc: %d no_tcs: %d load: %d\n",
+                i, 
+                rez.proc_assignments[i].node_index, 
+                rez.proc_assignments[i].proc_index, 
+                rez.proc_assignments[i].no_tcs,
+                rez.proc_assignments[i].load_percentage);
+  }
+
   return rez;
 }
 
@@ -359,6 +371,7 @@ void allocate_local_tcs(int proc_index, int no_tcs, int* tcs, int* no_allocated_
       tcs[*no_allocated_tcs] = tc;
       *no_allocated_tcs = *no_allocated_tcs + 1;
     } else {
+      LOG(DEBUG, "allocate_local_tcs: grab_available_tc(%d) returned -1\n", proc_index);
       break;
     }
   
