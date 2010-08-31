@@ -40,7 +40,7 @@ SLC_HRT_N = $(SLC_RUN) -b hrt_n -nostdlib
 # last 2 args for debugging
 hrt_naked-host-host-hrt/%.o: $(srcdir)/host-host-hrt/%.c
 	$(AM_V_at)$(MKDIR_P) hrt_naked-host-host-hrt
-	$(slc_verbose)$(SLC_HRT_N) -c -o $@ $< $(AM_CFLAGS) $(CFLAGS) -O0 -g3 -pg
+	$(slc_verbose)$(SLC_HRT_N) -c -o $@ $< $(AM_CFLAGS) $(CFLAGS) -O0 -g3
 
 hrt_naked-host-host-hrt/%.o: $(srcdir)/%.c
 	$(AM_V_at)$(MKDIR_P) hrt_naked-host-host-hrt
