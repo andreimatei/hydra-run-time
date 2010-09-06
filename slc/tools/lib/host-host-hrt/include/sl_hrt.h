@@ -8,26 +8,20 @@
 #include <pthread.h>
 #include <signal.h>
 #include <assert.h>
+#include <stdbool.h>
 #include <sys/time.h>
 #include <svp/delegate.h>
 
-extern int NODE_INDEX;
+extern int NODE_INDEX;  // index of the current node
 
 void exit(int);
 
 struct tc_t;
 
 #define MAX_RANGES_PER_MEM 16
-
-
-//--------------------------------------------------
-// typedef struct {
-//   int block_node, block_proc, block_tc;
-//   //int block_level1, block_level2, block_level3;
-// }mapping_hint_t;
-// 
-// static mapping_hint_t empty_mapping_hint __attribute__((unused)) = {-1,-1,-1};  // used by the compiler to init some vars 
-//-------------------------------------------------- 
+#define MAX_NO_PROC_ASSIGNMENTS_PER_MAPPING 100  // maximum number of procs that can be involved in running a fam
+//#define MAX_NO_TCS_PER_ALLOCATION 100  // maximum number of TCs that can be requested from a proc for
+                                       // a family allocation
 
 typedef struct mem_range {
   void *p, *orig_p;
@@ -61,41 +55,6 @@ typedef struct {
                      // be alligned so that the last 5 bits are 0 => alligned on a 32 byte boundary 
 } memdesc_stub_t;
 
-static inline unsigned int get_stub_node(memdesc_stub_t stub) {
-  //return stub >> 53;
-  return stub.node;
-}
-
-static inline memdesc_t* get_stub_pointer(memdesc_stub_t stub) {
-  return (memdesc_t*)((long)(stub.pointer) << 5);
-}
-
-static inline void set_stub_pointer(memdesc_stub_t* stub, const memdesc_t* desc) {
-  // assert that the desc is alligned properly
-  assert(((unsigned long)desc & 15) == 0);
-  stub->pointer = ((unsigned long)desc >> 5);
-}
-
-/*
- * Create a stub for a local descriptor
- * data_provider - [IN] - the index of the node that has the data (probably NODE_INDEX will be passed always)
- * have_data     - [IN] - this will be copied verbatim to the stub, so it has to be valid on the node that will
- *                        use the stub. Thus, if you indent to pass the stub, you probably want to say 0.
- */
-static inline memdesc_stub_t _create_memdesc_stub(
-    const memdesc_t* desc, 
-    int data_provider,
-    int have_data,
-    int S) {
-  memdesc_stub_t stub;
-  stub.node = NODE_INDEX;
-  stub.have_data = have_data;
-  stub.data_provider = data_provider;
-  stub.S = S;
-  set_stub_pointer(&stub, desc);
-  assert(get_stub_pointer(stub) == desc);  // just for debugging
-  return stub;
-}
 
 struct tc_ident_t {
   int node_index;
@@ -135,13 +94,6 @@ struct i_struct {
 };
 typedef struct i_struct i_struct;
 
-/*
-typedef struct i_struct_fat_pointer {
-  int node_index;  // node where the istruct resides (the istruct pointer is valid on that node)
-  i_struct* istruct;
-}i_struct_fat_pointer;
-*/
-
 struct heap_t {
   void* lowaddr;
   int size;
@@ -153,13 +105,52 @@ typedef struct {
   tc_ident_t dest;
 }thread_range_t;
 
+struct proc_assignment {
+  //unsigned long no_threads;
+  unsigned int load_percentage;  // between 1 and 100, the percentage of threads that will run on this
+                                 // proc, out of all the threads in the family.
+  unsigned int no_tcs;
+  int node_index;
+  int proc_index;
+};
+typedef struct proc_assignment proc_assignment;
+
+/* Represent a mapping decision from the mapping engine */
+struct mapping_decision {
+  int should_inline;  // if this is 1, the other fields are irelevant; the
+                      // family is supposed to be inlined in the parent
+  unsigned int no_proc_assignments;
+  struct proc_assignment proc_assignments[MAX_NO_PROC_ASSIGNMENTS_PER_MAPPING];
+  unsigned int no_ranges_per_tc;  // number of ranges per TC; all TC's involved in running the family will
+                                  // have the same number of ranges, and the number of threads per range
+                                  // might differ in accordance with the total number of threads assigned to
+                                  // each TC.
+};
+typedef struct mapping_decision mapping_decision;
+
+typedef struct {
+  tc_ident_t first_tc, last_tc;
+  unsigned int no_tcs;
+  unsigned long no_threads_per_generation;  // in all these TC's
+  unsigned long no_threads_per_generation_last;  // in all these TC's
+}proc_reservation;
+
+typedef struct {
+  unsigned long no_generations;
+  proc_reservation reservations[MAX_NO_PROC_ASSIGNMENTS_PER_MAPPING];
+  size_t no_reservations;
+  long start_index, start_index_last_generation;
+}fam_distribution;
 
 typedef struct {
   int empty;  // 1 if the fam_context is available for reuse (nobody is going to sync on it)
   i_struct done;  // written on family termination
-  //tc_ident_t* blocked_tc;
-  thread_range_t ranges[100];  //TODO: replace this with something else 
-  int no_ranges;
+  //thread_range_t ranges[100];  //TODO: replace this with something else 
+  //int no_ranges;
+  
+  fam_distribution distribution;  // filled in by allocate_fam (based on a mapping_decision) 
+                                  // and used by create_fam
+
   i_struct shareds[MAX_ARGS_PER_FAM];  // shareds written by the last thread in the fam. Conceptually, 
                             //they don't need to be istructs, since they will only be read after the sync,
                             //but we made them istructs anyway to use the infrastructure for writing them
@@ -177,11 +168,18 @@ typedef struct {
 
 struct tc_t {
   tc_ident_t ident;  // identity of this TC
-  long index_start, index_stop;  // indexes are inclusive
-  //int finished;  // 1 if the TC is available for reuse; usually set to 1 by code generated by the compiler
-                 // at the end of loop functions
-  //int blocked;  // -1 means empty, 0 means running, 1 means blocked (so far on an istruct, but we might want
-                // to extend this ?). TODO: is this really used? check and remove
+  //long index_start, index_stop;  // indexes are inclusive
+ 
+  unsigned long no_generations_left;
+  //long index_start, index_stop;
+  unsigned long no_threads_per_generation;  // length of regular ranges to be run on this TC
+  unsigned long no_threads_per_generation_last;  // length of last range to be run on this TC
+  unsigned long gap_between_generations;
+  long start_index;  // the index of the first thread in the first range assigned to this TC
+  long start_index_last_generation;  // the index of the first thread in the _last_ range assigned to this TC
+
+  long index_start, index_stop;  // values for current generation; inclusive
+
   struct timeval blocking_time;  // if TC is blocked, this is the moment when it was blocked
 
   ucontext_t context;  // contains stack in .uc_stack
@@ -190,17 +188,21 @@ struct tc_t {
                 // on stack auto-growth and update it.
 
   // i-structures for globals and shareds received by the threads running in this TC
-  i_struct shareds[MAX_ARGS_PER_FAM];
+  i_struct shareds[2][MAX_ARGS_PER_FAM];  // 2 sets of incoming shareds (aka dependents in Microgrid speak).
+                                          // one set is for the first thread in the current range 
+                                          // (current generation), the other is for the first thread in the 
+                                          // next generation
+  memdesc_t shared_descs[2][MAX_ARGS_PER_FAM];  // space for the descriptors associated with the shared mem args
+  int current_generation;  // current_generation_real % 2
+  int current_generation_real; // the index of the range of threads currently executing, among ranges
+                               // mapped to this thread context
+  i_struct prev_range_done;  // istructure meant to keep a synchrony between generations executed by adjacent
+                             // TC's. It is read from and written to by the last thread in a range, by 
+                             // code inserted by the compiler. This means that, if we call the generation 
+                             // currently executed by TC i-1 a, and the generation executed by TC i b,
+                             // then b <= a <= b+1
   i_struct globals[MAX_ARGS_PER_FAM];
-  // // space if shareds[i]/globals[i] is a memdesc_stub_t, then shared/global_first_ranges[i]
-  // // will hold the first range described by the respective descriptor, and will be accessible after reading
-  // // the istruct (the shared or the global)
-  // mem_range_t shared_first_ranges[MAX_ARGS_PER_FAM];
-  // int shared_no_ranges[MAX_ARGS_PER_FAM];
-  // mem_range_t global_first_ranges[MAX_ARGS_PER_FAM];
-  // int global_no_ranges[MAX_ARGS_PER_FAM];
 
-  memdesc_t shared_descs[MAX_ARGS_PER_FAM];  // space for the descriptors associated with the shared mem args
 
   //fam_context_t* fam_context;  // family context of the thread of the family 
                                // currently occupying the TC
@@ -209,9 +211,14 @@ struct tc_t {
                             // (i.e. fam_main and continuation creates)
   tc_ident_t prev, next;  // identifiers of the TCs running the previous and next chunks of
                           // threads; for the first TC and the last TC, prev and next, respectively,
-                          // will be the parent
-  int is_last_tc;   // 1 if this is the TC where the last chunk of threads in a fam was allocated,
+                          // will be the parent.
+                          // These fields are set in the allocation stage.
+
+  //int is_last_tc;   // 1 if this is the TC where the last chunk of threads in a fam was allocated,
                     // 0 otherwise
+  bool is_first_tc_on_proc;// will be filled in at the time of allocation
+  bool is_last_tc_on_proc; // will be filled in at the time of allocation
+  bool is_last_tc_in_fam;  // will be filled in at the time of create (on TC population)
 
   i_struct* done;  // pointer to the done istruct from the FC (this might be on a different node)
   i_struct* final_shareds;  // pointer to the shareds in the FC (this might be on a different node).
@@ -225,10 +232,7 @@ struct tc_t {
 
   sl_place_t place_default;  // PLACE_DEFAULT, as inherited or set at family creation
   sl_place_t place_local;    // PLACE_LOCAL always represents this TC; Statically initialized when TC is created.
-
-  int fib;  // FIXME: remove this. Added just for testing the fibonacci program.
-
-};//TCS[NO_TCS];
+};
 typedef struct tc_t tc_t;
 
 /* data structure assigned to a processor */
@@ -260,27 +264,45 @@ struct mapping_node_t {
   //TODO
 };
 
-struct proc_assignment {
-  //unsigned long no_threads;
-  unsigned int load_percentage;  // between 1 and 100, the percentage of threads that will run on this
-                                 // proc, out of all the threads in the family.
-  unsigned int no_tcs;
-  int node_index;
-  int proc_index;
-};
-typedef struct proc_assignment proc_assignment;
 
-#define MAX_NO_PROC_ASSIGNMENTS_PER_MAPPING 100
 
-/* Represent a mapping decision from the mapping engine */
-struct mapping_decision {
-  int should_inline;  // if this is 1, the other fields are irelevant; the
-                      // family is supposed to be inlined in the parent
-  unsigned int no_proc_assignments;
-  struct proc_assignment proc_assignments[MAX_NO_PROC_ASSIGNMENTS_PER_MAPPING];
-};
-typedef struct mapping_decision mapping_decision;
 
+
+static inline unsigned int get_stub_node(memdesc_stub_t stub) {
+  //return stub >> 53;
+  return stub.node;
+}
+
+static inline memdesc_t* get_stub_pointer(memdesc_stub_t stub) {
+  return (memdesc_t*)((long)(stub.pointer) << 5);
+}
+
+static inline void set_stub_pointer(memdesc_stub_t* stub, const memdesc_t* desc) {
+  // assert that the desc is alligned properly
+  assert(((unsigned long)desc & 15) == 0);
+  stub->pointer = ((unsigned long)desc >> 5);
+}
+
+/*
+ * Create a stub for a local descriptor
+ * data_provider - [IN] - the index of the node that has the data (probably NODE_INDEX will be passed always)
+ * have_data     - [IN] - this will be copied verbatim to the stub, so it has to be valid on the node that will
+ *                        use the stub. Thus, if you indent to pass the stub, you probably want to say 0.
+ */
+static inline memdesc_stub_t _create_memdesc_stub(
+    const memdesc_t* desc, 
+    int data_provider,
+    int have_data,
+    int S) {
+  memdesc_stub_t stub;
+  stub.node = NODE_INDEX;
+  stub.have_data = have_data;
+  stub.data_provider = data_provider;
+  stub.S = S;
+  set_stub_pointer(&stub, desc);
+  assert(get_stub_pointer(stub) == desc);  // just for debugging
+  return stub;
+}
 void _free_tc(int proc_id, int tc_id);
 
 fam_context_t* allocate_fam(
@@ -413,9 +435,15 @@ static inline i_struct* _get_done_pointer() {
   return _cur_tc->done;
 }
 
-static inline int _is_last_tc() {
-  return _cur_tc->is_last_tc;
+static inline bool _is_last_tc_in_fam() {
+  return _cur_tc->is_last_tc_in_fam;
 }
+
+//--------------------------------------------------
+// static inline int _is_last_tc() {
+//   return _cur_tc->is_last_tc;
+// }
+//-------------------------------------------------- 
 
 
 static inline void _return_to_scheduler() {
@@ -471,7 +499,7 @@ static inline long read_istruct_same_tc(i_struct* istruct) {
 long read_istruct_different_tc(volatile i_struct* istruct, int same_proc);
 long read_istruct(volatile i_struct* istructp, const tc_ident_t* writing_tc);
 
-void write_global(fam_context_t* ctx, int index, long val, int is_mem);
+void write_global(fam_context_t* ctx, int index, long val, bool is_mem);
 
 /*
  * Convert between stubs and longs so stubs can be passed in istructs
@@ -518,6 +546,36 @@ static inline int _places_equal(sl_place_t pl1, sl_place_t pl2) {
   return (pl1c.node_index == pl2c.node_index 
       && pl1c.proc_index == pl2c.proc_index 
       && pl1c.tc_index == pl2c.tc_index);
+}
+
+/*
+ *
+ */ 
+static inline void _advance_generation(unsigned int no_shareds) {
+  if (no_shareds > 0) {
+    assert(_cur_tc->prev_range_done.state == WRITTEN);  // this function should be called after that istruct
+                                                  // was found to have been written
+  }
+
+  // clear .prev_range_done
+  _cur_tc->prev_range_done.state = EMPTY;
+
+  // clear the (still) current set of shareds
+  for (unsigned int i = 0; i < no_shareds; ++i) {
+    _cur_tc->shareds[_cur_tc->current_generation][i].state = EMPTY;
+  }
+
+  // switch the set of shareds
+  _cur_tc->current_generation_real++;
+  _cur_tc->current_generation ^= 1;
+
+  if (_cur_tc->no_generations_left > 0) {
+    _cur_tc->index_start += _cur_tc->gap_between_generations;
+    _cur_tc->index_stop  += _cur_tc->gap_between_generations; 
+  } else {  // last_range
+    _cur_tc->index_start = _cur_tc->start_index_last_generation;
+    _cur_tc->index_stop   = _cur_tc->start_index_last_generation + _cur_tc->no_threads_per_generation_last - 1;
+  }
 }
 
 #endif

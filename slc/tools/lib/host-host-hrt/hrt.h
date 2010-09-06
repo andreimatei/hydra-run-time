@@ -55,15 +55,48 @@ void LOG(LOG_LEVEL level, char* fmt, ...);
 void* mmap_delegation_interface_stack(size_t* size);
 void parse_own_memory_map(char* map);
 //int atomic_increment_next_tc(int proc_id);
-void allocate_local_tcs(int proc_index, int no_tcs, int* tcs, int* no_allocated_tcs);
+//void allocate_local_tcs(int proc_index, int no_tcs, int* tcs, int* no_allocated_tcs);
+void allocate_local_tcs(int proc_index, tc_ident_t parent, unsigned int no_tcs, 
+    //int* tcs, 
+    unsigned int* no_allocated_tcs,
+    tc_ident_t* first_tc,
+    tc_ident_t* last_tc);
+//--------------------------------------------------
+// void populate_local_tcs(
+//     //const int* tcs,
+//     const thread_range_t* ranges, 
+//     int no_tcs, 
+//     thread_func func,
+//     //int no_shareds, int no_globals, 
+//     tc_ident_t parent, tc_ident_t prev, tc_ident_t next,
+//     int final_ranges,  // 1 if these tcs are the last ones of the family
+//     i_struct* final_shareds, // pointer to the shareds in the FC (NULL if !final_ranges)
+//     memdesc_t* final_descs,  // pointer to the descriptor table in the FC (NULL if !final_ranges)
+//     i_struct* done,          // pointer to done in the FC (NULL if !final_ranges)
+//     default_place_policy_enum default_place_policy,// policy to be used when deciding the 
+//                                                    // PLACE_DEFAULT to be inheritied by
+//                                                    // the child
+//     sl_place_t default_place_parent     // PLACE_DEFAULT of the parent. Used if 
+//                                         // default_place_policy == INHERIT_DEFAULT_PLACE
+//     );
+//-------------------------------------------------- 
 void populate_local_tcs(
-    //const int* tcs,
-    const thread_range_t* ranges, 
-    int no_tcs, 
+    //const thread_range_t* ranges, 
     thread_func func,
-    //int no_shareds, int no_globals, 
+    unsigned int no_tcs,
+    bool is_last_proc_on_fam,
+    unsigned long no_generations,
+    unsigned long no_threads_per_generation,  // total number of threads to be run on these TCs as part 
+                                              // of one generation
+    unsigned long no_threads_per_generation_last,  // ditto above for the last generation, which is special
+                                                   // because it can have more threads than the rest
+    //long total_no_threads,  // total number of threads to be run on these TCs
+    long gap_between_generations,
+    long start_index,         // index of the first thread from the first range run by the first TC on this proc
+    long start_index_last_generation,
+
+    tc_ident_t first_tc,  //the first TC assigned to this family
     tc_ident_t parent, tc_ident_t prev, tc_ident_t next,
-    int final_ranges,  // 1 if these tcs are the last ones of the family
     i_struct* final_shareds, // pointer to the shareds in the FC (NULL if !final_ranges)
     memdesc_t* final_descs,  // pointer to the descriptor table in the FC (NULL if !final_ranges)
     i_struct* done,          // pointer to done in the FC (NULL if !final_ranges)

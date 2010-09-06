@@ -14,6 +14,10 @@ def gen_loop_fun_name(orig_name):  # takes a thread function name and generates 
     #return Opaque("__slFmta") + orig_name
     return orig_name
 
+def gen_meta_loop_fun_name(orig_name):  # takes a thread function name and generates a name that will be used as
+                                   # the name of the function that implements the loop over the ranges
+    return orig_name + '_metaloop'
+
 class Create_2_HydraCall(ScopedVisitor):
 
     def __init__(self, *args, **kwargs):
@@ -547,6 +551,30 @@ class TFun_2_HydraCFunctions(DefaultVisitor):
         return ret
         '''
 
+    def gen_meta_loop_fun(self, fundef):
+        fun_name = gen_meta_loop_fun_name(fundef)
+
+        newitems = Block()
+        newitems += flatten(fundef.loc, '') 
+        newitems += """
+        void %s(void) { 
+            while (_cur_tc->no_ranges_left-- > 0) {
+                %s();  // call function to loop over the threads in the current range
+                
+                // update range and switch sets of shareds
+                _advance_generation(%d);
+                
+                // for dependent families, write the prev_range_done on the next TC
+                if (%d > 0) {
+                    write_istruct(next->node_index, _cur_tc->next_prev_range_done, 1, &next, 0); 
+                }
+            }
+        }
+        """ % (fun_name, gen_loop_fun_name(fundef), self.__sh_parm_index)   #FIXME: pass no_shareds to this function or something
+        return newitems
+
+
+
     def visit_fundef(self, fundef):
         # make copies of the body for begin, middle and end
         import sys
@@ -594,6 +622,9 @@ class TFun_2_HydraCFunctions(DefaultVisitor):
         newitems += generic_body.accept(self)
         newitems += flatten(fundef.loc_end, "return 0; \n}")
        
+        # generate meta loop function
+        #newitems += self.gen_meta_loop_fun(fundef.name)
+
         # generate loop function
 
         newitems += flatten(fundef.loc, "void ") + \
@@ -607,12 +638,12 @@ class TFun_2_HydraCFunctions(DefaultVisitor):
             const tc_ident_t* parent = _get_parent_ident();
             const tc_ident_t* prev __attribute__((unused)) = _get_prev_ident();
             const tc_ident_t* next = _get_next_ident();
-            i_struct* shareds __attribute__((unused)) = _is_last_tc() ? 
+            i_struct* shareds __attribute__((unused)) = _is_last_tc_in_fam() ? 
                                                             _get_final_shareds_pointer() :
-                                                            next->tc->shareds;
-            memdesc_t* shared_descs __attribute__((unused)) = _is_last_tc() ? 
+                                                            next->tc->shareds[_cur_tc->current_generation];
+            memdesc_t* shared_descs __attribute__((unused)) = _is_last_tc_in_fam() ? 
                                         _get_final_descs_pointer() :
-                                        next->tc->shared_descs;
+                                        next->tc->shared_descs[_cur_tc->current_generation];
                                                                     
             i_struct* done = _get_done_pointer();       
 
@@ -634,8 +665,8 @@ class TFun_2_HydraCFunctions(DefaultVisitor):
             } else {
                 for (__index = __start_index; __index <= __end_index; ++__index) {
                     const tc_ident_t* p, *n;
-                    i_struct* s = _cur_tc->shareds;
-                    memdesc_t* shared_descs = _cur_tc->shared_descs;
+                    i_struct* s = _cur_tc->shareds[_cur_tc->current_generation];
+                    memdesc_t* shared_descs = _cur_tc->shared_descs[_cur_tc->current_generation];
                     if (__index == __start_index) {
                         p = _get_prev_ident();
                     } else {
@@ -643,14 +674,14 @@ class TFun_2_HydraCFunctions(DefaultVisitor):
                     }
                     if (__index == __end_index) {
                         n = _get_next_ident();
-                        if (_is_last_tc()) {
+                        if (_is_last_tc_in_fam()) {
                             // write to the family context
                             s = _get_final_shareds_pointer();
                             shared_descs = _get_final_descs_pointer();
                         } else {
                             // write to the next tc
-                            s = next->tc->shareds;
-                            shared_descs = next->tc->shared_descs;
+                            s = next->tc->shareds[_cur_tc->current_generation];
+                            shared_descs = next->tc->shared_descs[_cur_tc->current_generation];
                         }
                     } else {
                         n = &_cur_tc->ident;
@@ -659,9 +690,7 @@ class TFun_2_HydraCFunctions(DefaultVisitor):
                 }
 
             }
-            //printf("USER: about to finish loop function. last tc: %d\\t parent node: %d\\t\\n",
-            //       _is_last_tc(), parent->node_index);
-            if (_is_last_tc() && parent->node_index != -1) {
+            if (_is_last_tc_in_fam() && parent->node_index != -1) {
                 //printf("USER: I am the last thread in a family. Unblocking parent.\\n");
                 write_istruct(parent->node_index, done, 1, parent, 0);
             }
@@ -700,7 +729,7 @@ class Mem_2_HRT(DefaultVisitor):
         scope.decls += stub_decl
         d.cvar_stub = stub_decl
         d.cvar_desc = None
-        d.visited_by = 'mem_2_hrt'  # FIXME: remove this
+        #d.visited_by = 'mem_2_hrt'  # FIXME: remove this
         # is descriptor needed? it is _not_ needed for sl_getmp 
         # possible values for set_op include MemDesc, GetMemP, SetMemA, MemActivate (lhs), MemExtend (lhs)
         # TODO: figure out if there are other operations when the descriptor is not needed

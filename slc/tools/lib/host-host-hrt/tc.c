@@ -46,8 +46,6 @@
 #define PROCESSOR_PTHREAD_STACK_SIZE ((unsigned long long)1<<15)
 
 #define NO_FAM_CONTEXTS_PER_PROC 1024
-#define MAX_NO_TCS_PER_ALLOCATION 100  // maximum number of TCs that can be requested from a proc for
-                                       // a family allocation
 
 int NODE_INDEX = -1;
 //#define NODE_INDEX 16L
@@ -198,30 +196,53 @@ void __slFfmta___root_fam(void);  // thread function for the root family, genera
 void unblock_tc(tc_t* tc, int same_processor);
 void block_tc_and_unlock(tc_t* tc, pthread_spinlock_t* lock);
 void suspend_on_istruct(volatile i_struct* istructp, int same_proc);
+/*--------------------------------------------------
+* void populate_tc(tc_t* tc,
+*                  thread_func func,
+*                  //int num_shareds, int num_globals,
+*                  long start_index,
+*                  long end_index,
+*                  //fam_context_t* fam_context,
+*                  tc_ident_t parent, tc_ident_t prev, tc_ident_t next,
+*                  int is_last_tc,
+*                  i_struct* final_shareds, 
+*                  memdesc_t* final_descs,
+*                  i_struct* done,
+*                  sl_place_t place_default,    // the PLACE_DEFAULT to be used by the threads running in this TC
+*                  const tc_ident_t* current_tc);
+*--------------------------------------------------*/
 void populate_tc(tc_t* tc,
                  thread_func func,
                  //int num_shareds, int num_globals,
+                 
+                 unsigned long no_generations, 
+                 unsigned long no_threads_per_gen,  // for this TC
+                 unsigned long no_threads_per_gen_last_tc,  // for last TC on proc
+                 unsigned long no_threads_last_gen,  // for this TC
+                 unsigned long no_threads_last_gen_last_tc,  // for last TC on proc
+
+                 long gap_between_generations,
                  long start_index,
-                 long end_index,
+                 long start_index_last_generation,
+                 
+                 //long start_index,
+                 //long end_index,
+                 
                  //fam_context_t* fam_context,
                  tc_ident_t parent, tc_ident_t prev, tc_ident_t next,
-                 int is_last_tc,
+                 bool is_last_proc_on_fam,  // will be used by the last tc on the proc
                  i_struct* final_shareds, 
                  memdesc_t* final_descs,
                  i_struct* done,
-                 sl_place_t place_default,    // the PLACE_DEFAULT to be used by the threads running in this TC
-                 const tc_ident_t* current_tc);
+                 //sl_place_t place_default,    // the PLACE_DEFAULT to be used by the threads running in this TC
+                 const tc_ident_t* current_tc, // the TC of the caller; can be passed a dummy or NULL
+                 default_place_policy_enum default_place_policy,// policy to be used when deciding the 
+                                                                // PLACE_DEFAULT to be inheritied by
+                                                                // the child
+                 sl_place_t default_place_parent     // PLACE_DEFAULT of the parent. Used if 
+                                                     // default_place_policy == INHERIT_DEFAULT_PLACE
+                 );
 static void free_fc(int proc_id, int fc_id);
-/*
-void populate_tc(tc_t* tc,
-                 thread_func func,
-                 int num_shareds, int num_globals,
-                 long start_index,
-                 long end_index,
-                 //fam_context_t* fam_context,
-                 tc_ident_t parent, tc_ident_t prev, tc_ident_t next,
-                 int is_last_tc, i_struct* final_shareds, i_struct* done);
-                 */
 static int grab_available_tc(int proc_id);
 static int grab_available_fam_context(int proc_id);
 static int grab_runnable_tc(int proc_id);
@@ -360,29 +381,55 @@ mapping_decision map_fam(
 
 int no_allocate_requests_per_proc[MAX_PROCS_PER_NODE];  // FIXME: remove this
 
-void allocate_local_tcs(int proc_index, int no_tcs, int* tcs, int* no_allocated_tcs) {
+void allocate_local_tcs(int proc_index, tc_ident_t parent, unsigned int no_tcs, 
+    //int* tcs, 
+    unsigned int* no_allocated_tcs,
+    tc_ident_t* first_tc,
+    tc_ident_t* last_tc) {
   no_allocate_requests_per_proc[proc_index]++;  // FIXME: remove this
+  int tcs[no_tcs];
 
   *no_allocated_tcs = 0;
-  for (int i = 0; i < no_tcs; ++i) {
+  for (unsigned int i = 0; i < no_tcs; ++i) {
     //int tc = atomic_increment_next_tc(proc_index);
     int tc = grab_available_tc(proc_index);
     if (tc != -1) {
-      tcs[*no_allocated_tcs] = tc;
+      //tcs[*no_allocated_tcs] = tc;
       *no_allocated_tcs = *no_allocated_tcs + 1;
     } else {
       LOG(DEBUG, "allocate_local_tcs: grab_available_tc(%d) returned -1\n", proc_index);
       break;
     }
-  
   }
+  
+  for (unsigned int i = 0; i < *no_allocated_tcs; ++i) {
+    tc_t* tc = (tc_t*)TC_START_VM(tcs[i]);
+    if (i < *no_allocated_tcs - 1) {
+      tc->next = ((tc_t*)TC_START_VM(tcs[i + 1]))->ident;
+      tc->is_last_tc_on_proc = false;
+    } else {
+      tc->next = parent;
+      tc->is_last_tc_on_proc = true;
+      *last_tc = tc->ident;
+    }
+
+    if (i > 0) {
+      tc->prev = ((tc_t*)TC_START_VM(tcs[i - 1]))->ident;
+      tc->is_first_tc_on_proc = false;
+    } else {
+      tc->prev = parent;
+      tc->is_first_tc_on_proc = true;
+      *first_tc = tc->ident;
+    }
+  }
+
   LOG(DEBUG, "allocate_local_tcs: allocated %d TC's out of the %d requested on proc %d.\n", 
       *no_allocated_tcs, no_tcs, proc_index);
 }
 
 
 /*
- * Allocates a family context and thread contexts. The FC is initialized with ranges.
+ * Allocates a family context and thread contexts.
  * Returns NULL if resources couldn't be allocated (either no FC, or no TC's).
  */
 fam_context_t* allocate_fam(
@@ -399,40 +446,124 @@ fam_context_t* allocate_fam(
   //(technically, it doesn't matter where the fam context is chosen from)
   unsigned int i;
   fam_context_t* fc;
-  //if (_cur_tc != NULL) {  // this will be NULL when allocating __root_main
-    /*
-    for (i = 0; i < NO_FAM_CONTEXTS_PER_PROC; ++i) {
-      if (fam_contexts[_cur_tc->ident.proc_index][i].empty) break;
-    }
-    */
-    int proc_index = (_cur_tc == NULL) ? 0 : _cur_tc->ident.proc_index;  // this will be NULL when allocating __root_main
-    int fc_index = grab_available_fam_context(proc_index);
-    LOG(DEBUG, "allocate_fam: got fc index %d\n", fc_index);
-    // return failure if no FC could be allocated
-    if (fc_index == -1) {
-      return NULL;
-    }
-    fc = &fam_contexts[proc_index][fc_index];
-    assert(fc->empty); // sanity check
-/*
-  } else { 
-    fc = &fam_contexts[0][0];
-    fc->empty = 0;
-    fc->done.state = EMPTY;
+  int proc_index = (_cur_tc == NULL) ? 0 : _cur_tc->ident.proc_index;  // this will be NULL when allocating __root_main
+
+  // allocate a FC
+  int fc_index = grab_available_fam_context(proc_index);
+  LOG(DEBUG, "allocate_fam: got fc index %d\n", fc_index);
+  // return failure if no FC could be allocated
+  if (fc_index == -1) {
+    return NULL;
   }
-  */
+  fc = &fam_contexts[proc_index][fc_index];
+  assert(fc->empty); // sanity check
+
   // initialize the allocated FC
   fc->empty = 0;
   fc->done.state = EMPTY;
   for (int j = 0; j < MAX_ARGS_PER_FAM; ++j) {
     fc->shareds[j].state = EMPTY;
   }
+  
+  typedef struct allocated_tcs_t {
+    unsigned int no_allocated_tcs;
+    unsigned long no_threads;
+    tc_ident_t first_tc, last_tc;
+  }allocated_tcs_t;
+  allocated_tcs_t allocated_tcs[mapping->no_proc_assignments];
 
-  //find TCs
+  unsigned int allocated_procs = 0;
+  int last_allocated_proc_index = -1;
+  unsigned int load_to_redistribute = 0;
+
+  for (i = 0; i < mapping->no_proc_assignments; ++i) {
+    proc_assignment as = mapping->proc_assignments[i];
+    if (as.node_index == NODE_INDEX) {
+      LOG(DEBUG, "allocate_fam: requesting %d local TC's\n", as.no_tcs);
+      allocate_local_tcs(as.proc_index, 
+                         _cur_tc->ident, 
+                         as.no_tcs, 
+                         &allocated_tcs[i].no_allocated_tcs, 
+                         &allocated_tcs[i].first_tc,
+                         &allocated_tcs[i].last_tc);
+    } else {
+      LOG(DEBUG, "allocate_fam: requesting %d remote TC's\n", as.no_tcs);
+      assert(0); // FIXME TODO
+      LOG(DEBUG, "allocate_fam: back from remote allocation\n");
+    }
+    if (allocated_tcs[i].no_allocated_tcs == 0) {
+      // redistribute the load assigned to this proc
+      load_to_redistribute += as.load_percentage;
+      LOG(DEBUG, "failed to allocate TC's on node %d processor %d\n", NODE_INDEX, as.proc_index);
+    } else {
+      last_allocated_proc_index = i;
+      ++allocated_procs;
+      LOG(DEBUG, "allocated %d TC's on node %d processor %d\n", 
+          allocated_tcs[i].no_allocated_tcs, NODE_INDEX, as.proc_index);
+    }
+  }
+    
+  // if no TC's could be allocated anywhere, return failure
+  if (last_allocated_proc_index == -1) {
+    // free the allocated family context
+    free_fc(fc->index / NO_FAM_CONTEXTS_PER_PROC, fc->index % NO_FAM_CONTEXTS_PER_PROC);
+    return NULL;
+  }
+
+  LOG(DEBUG, "finished allocating resources. Load to redistribute: %d\%\n", load_to_redistribute);
+
+  // redistribute the load of the procs where we couldn't get any TC's and
+  // compute the number of threads that go to each proc
+  unsigned long total_threads = (end_index - start_index + 1) / step;
+  int additional_load = load_to_redistribute / allocated_procs;
+  int additional_load_last = load_to_redistribute % allocated_procs;
+  unsigned long allocated_threads;
+  for (int i = 0; i <= last_allocated_proc_index; ++i) {
+    if (allocated_tcs[i].no_allocated_tcs == 0) continue;
+    proc_assignment as = mapping->proc_assignments[i];
+    // compute the load (in percentages) going to this proc
+    int load = as.load_percentage + additional_load;
+    if (i == last_allocated_proc_index) load += additional_load_last;
+
+    // compute the number of threads going to this proc
+    if (i < last_allocated_proc_index) {
+      allocated_tcs[i].no_threads = load * total_threads / 100;
+      allocated_threads += allocated_tcs[i].no_threads;
+    } else {
+      allocated_tcs[i].no_threads = total_threads - allocated_threads;
+    }
+  }
+
+  // fill in the distribution in the FC
+  fc->distribution.no_reservations = 0;
+  fc->distribution.no_generations = mapping->no_ranges_per_tc;
+  unsigned long total_no_threads_per_gen = 0;
+  for (int i = 0; i <= last_allocated_proc_index; ++i) {
+    if (allocated_tcs[i].no_allocated_tcs == 0) continue;
+    fc->distribution.no_reservations++;
+    proc_reservation* res = &fc->distribution.reservations[fc->distribution.no_reservations-1];    
+    res->no_tcs   = allocated_tcs[i].no_allocated_tcs;
+    res->first_tc = allocated_tcs[i].first_tc;
+    res->last_tc  = allocated_tcs[i].last_tc;
+    res->no_threads_per_generation = allocated_tcs[i].no_threads / mapping->no_ranges_per_tc;
+    assert(res->no_threads_per_generation > 0);
+    total_no_threads_per_gen += res->no_threads_per_generation;
+    res->no_threads_per_generation_last = res->no_threads_per_generation 
+                                  + (allocated_tcs[i].no_threads % mapping->no_ranges_per_tc);
+    assert(res->no_threads_per_generation_last > 0);
+  }
+  fc->distribution.start_index = start_index;
+  fc->distribution.start_index_last_generation = 
+    start_index + ((mapping->no_ranges_per_tc - 1) * total_no_threads_per_gen);
+
+  return fc;
+
+
+
+/*
+  //find TC's
   long total_threads = (end_index - start_index + 1) / step;
   long allocated_threads = 0;
-  //long backlog = 0;
-  //long thread_index = -1; //start_index - 1;  // last allocated thread
 
   typedef struct allocated_tcs_t {
     int allocated_tcs;
@@ -449,7 +580,6 @@ fam_context_t* allocate_fam(
     proc_assignment as = mapping->proc_assignments[i];
     assert(as.no_tcs <= MAX_NO_TCS_PER_ALLOCATION);
     if (as.node_index == NODE_INDEX) {
-
       LOG(DEBUG, "allocate_fam: requesting %d local TC's\n", as.no_tcs);
       allocate_local_tcs(as.proc_index, as.no_tcs, allocated_tcs[i].tcs, &allocated_tcs[i].allocated_tcs);
     } else {
@@ -461,6 +591,7 @@ fam_context_t* allocate_fam(
     }
 
     if (allocated_tcs[i].allocated_tcs == 0) {
+      // redistribute the load assigned to this proc
       load_to_redistribute += as.load_percentage;
       LOG(DEBUG, "failed to allocate TC's on node %d processor %d\n", 
           NODE_INDEX, as.proc_index);
@@ -489,9 +620,11 @@ fam_context_t* allocate_fam(
   for (int i = 0; i <= last_allocated_proc_index; ++i) {
     if (allocated_tcs[i].allocated_tcs == 0) continue;
     proc_assignment as = mapping->proc_assignments[i];
+    // compute the load (in percentages) going to this proc
     int load = as.load_percentage + additional_load;
     if (i == last_allocated_proc_index) load += additional_load_last;
-    //int threads_for_proc;
+
+    // compute the number of threads going to this proc
     if (i != last_allocated_proc_index) {
       allocated_tcs[i].no_threads = load * total_threads / 100;
       allocated_threads += allocated_tcs[i].no_threads;
@@ -505,9 +638,13 @@ fam_context_t* allocate_fam(
   int thread_index = start_index;  // next thread to allocate
   for (int i = 0; i <= last_allocated_proc_index; ++i) {
     if (allocated_tcs[i].allocated_tcs == 0) continue;
-    int threads_for_proc = allocated_tcs[i].no_threads;
-    int threads_for_tc = threads_for_proc / allocated_tcs[i].allocated_tcs;
-    int threads_for_tc_last = threads_for_proc % allocated_tcs[i].allocated_tcs;
+
+    unsigned long threads_for_proc = allocated_tcs[i].no_threads;
+    unsigned long threads_for_tc = threads_for_proc / allocated_tcs[i].allocated_tcs;
+    unsigned long threads_for_tc_last = threads_for_proc % allocated_tcs[i].allocated_tcs;
+    unsigned long ranges_for_tc = mapping->no_ranges_per_tc;
+    assert(ranges_for_tc <= threads_for_tc);
+    
     for (int j = 0; j < allocated_tcs[i].allocated_tcs; ++j) { 
       fc->ranges[no_ranges].index_start = thread_index;
       fc->ranges[no_ranges].index_end = thread_index + step * (threads_for_tc - 1);
@@ -526,102 +663,8 @@ fam_context_t* allocate_fam(
   }
   fc->no_ranges = no_ranges;
 
-/*
-  // first assign the threads as if the start index was 0 and step was 1, later we'll fix them
-  for (i = 0; i < mapping->no_proc_assignments; ++i) {
-    int j;
-    proc_assignment as = mapping->proc_assignments[i];
-    assert(as.node_index == NODE_INDEX);  //TODO
-
-    int threads_for_proc;
-    if (i != mapping->no_proc_assignments - 1)
-      threads_for_proc = as.load_percentage * total_threads / 100;
-    else
-      threads_for_proc = total_threads - allocated_threads;
-
-    if (threads_for_proc == 0) continue;
-  
-    int tcs[as.no_tcs];
-    int allocated_tcs;
-    allocate_local_tcs(as.proc_index, as.no_tcs, tcs, &allocated_tcs);
-    if (allocated_tcs > 0) {
-    } else {
-      if (no_ranges > 0) {
-      } else {
-      }
-    }
-
-
-    //allocate_local_tcs(as.proc_index, as.no_tcs, threads_for_proc);
-
-
-
-    int threads_for_tc = threads_for_proc / as.no_tcs;
-    int threads_for_tc_last = threads_for_tc + threads_for_proc % as.no_tcs;
-
-    for (j = 0; j < as.no_tcs; ++j) {
-      int num_threads = (j < as.no_tcs - 1 ? threads_for_tc : threads_for_tc_last);
-      int tc = atomic_increment_next_tc(as.proc_index);
-      if (tc != -1) {
-        if (backlog == 0) {
-          fc->ranges[no_ranges].index_start = thread_index + 1;
-          thread_index = fc->ranges[no_ranges].index_start + num_threads - 1;
-          fc->ranges[no_ranges].index_end = thread_index;
-        } else {  // this implies that this is the first range we're actually allocating
-          fc->ranges[no_ranges].index_start = start_index;
-          thread_index = start_index + backlog + num_threads - 1;
-          fc->ranges[no_ranges].index_end = thread_index;
-          backlog = 0;  // reset the backlog, as all the threads have been assigned to this range
-        }
-        fc->ranges[no_ranges].dest.node_index = as.node_index;
-        fc->ranges[no_ranges].dest.proc_index = as.proc_index;
-        fc->ranges[no_ranges].dest.tc_index = tc;
-        fc->ranges[no_ranges].dest.tc = (tc_t*)TC_START_VM_EX(as.node_index, tc);
-
-        ++no_ranges;
-      } else {  // couldn't allocate a TC
-        thread_index += num_threads;
-        if (no_ranges > 0) {  // there has been at least a tc allocated so far
-          // put the threads in the previous range
-          fc->ranges[no_ranges - 1].index_end += num_threads;
-        } else {  // put the threads in the backlog
-          backlog += num_threads;
-        }
-      }
-    }
-  }
-
-  // fix ranges; they are currently like start_index was 0 and step was 1; we need to translate and scale
-  for (i = 0; i < no_ranges; ++i) {
-    long old_start_index = fc->ranges[i].index_start;
-    long old_end_index = fc->ranges[i].index_end;
-    fc->ranges[i].index_start = start_index + (old_start_index) * step;
-    fc->ranges[i].index_end = start_index + (old_end_index + 1) * step - 1;
-  }
-
-  if (no_ranges == 0) {
-    assert(0); //TODO: return FAIL
-  }
-  fc->no_ranges = no_ranges;
-
-  */
-
-  /*
-  for (i = 0; i < no_ranges; ++i) {
-    populate_tc(fc->ranges[i].dest.tc,
-                func, num_shareds, num_globals,
-                fc->ranges[i].index_start,
-                fc->ranges[i].index_end,
-                fc,
-                _cur_tc->ident, // parent
-                i == 0 ? _cur_tc->ident : fc->ranges[i-1].dest, // prev
-                i == no_ranges - 1 ? _cur_tc->ident : fc->ranges[i+1].dest, // next
-                (i == no_ranges - 1)  // is_last_tc
-                );
-  }
-  */
-
   return fc;
+*/
 }
 
 static inline int test_same_node(const tc_ident_t* l, const tc_ident_t* r) {
@@ -636,10 +679,32 @@ static inline int test_same_tc(const tc_ident_t* l,const tc_ident_t* r) {
 
 
 void populate_local_tcs(
-    //const int* tcs,
-    const thread_range_t* ranges, 
-    int no_tcs, 
+    //const thread_range_t* ranges, 
     thread_func func,
+    unsigned int no_tcs,
+    bool is_last_proc_on_fam,
+    unsigned long no_generations,
+    unsigned long no_threads_per_generation,  // total number of threads to be run on these TCs as part 
+                                              // of one generation
+    unsigned long no_threads_per_generation_last,  // ditto above for the last generation, which is special
+                                                   // because it can have more threads than the rest
+    //long total_no_threads,  // total number of threads to be run on these TCs
+    long gap_between_generations,
+    long start_index,         // index of the first thread from the first range run by the first TC on this proc
+    long start_index_last_generation,
+
+    tc_ident_t first_tc,  //the first TC assigned to this family
+    tc_ident_t parent, tc_ident_t prev, tc_ident_t next,
+    i_struct* final_shareds, // pointer to the shareds in the FC (NULL if !final_ranges)
+    memdesc_t* final_descs,  // pointer to the descriptor table in the FC (NULL if !final_ranges)
+    i_struct* done,          // pointer to done in the FC (NULL if !final_ranges)
+    default_place_policy_enum default_place_policy,// policy to be used when deciding the 
+                                                   // PLACE_DEFAULT to be inheritied by
+                                                   // the child
+    sl_place_t default_place_parent     // PLACE_DEFAULT of the parent. Used if 
+                                        // default_place_policy == INHERIT_DEFAULT_PLACE
+     
+/*
     //int no_shareds, int no_globals, 
     tc_ident_t parent, tc_ident_t prev, tc_ident_t next,
     int final_ranges,  // 1 if these tcs are the last ones of the family
@@ -651,8 +716,35 @@ void populate_local_tcs(
                                                    // the child
     sl_place_t default_place_parent     // PLACE_DEFAULT of the parent. Used if 
                                         // default_place_policy == INHERIT_DEFAULT_PLACE
+*/
     ) {
+  
+  unsigned long tc_threads_per_gen = no_threads_per_generation / no_tcs;
+  unsigned long tc_threads_per_gen_last_tc = tc_threads_per_gen + (no_threads_per_generation % no_tcs);
+  unsigned long tc_threads_last_gen = no_threads_per_generation_last / no_tcs;
+  unsigned long tc_threads_last_gen_last_tc = tc_threads_last_gen + (no_threads_per_generation_last % no_tcs);
 
+  populate_tc(first_tc.tc, 
+              func,
+              no_generations,
+              tc_threads_per_gen,
+              tc_threads_per_gen_last_tc,
+              tc_threads_last_gen,
+              tc_threads_last_gen_last_tc,
+              gap_between_generations,
+              start_index,
+              start_index_last_generation,
+              parent, prev, next,
+              is_last_proc_on_fam,
+              final_shareds,
+              final_descs,
+              done,
+              _cur_tc != NULL ? &_cur_tc->ident : NULL,
+              default_place_policy,
+              default_place_parent
+              );
+
+  /*
   for (int i = 0; i < no_tcs; ++i) {
     LOG(DEBUG, "populate_local_tcs: populating tc %d proc %d\t final ranges:%d\t final tc: %d\n",
         ranges[i].dest.tc->ident.tc_index, ranges[i].dest.tc->ident.proc_index,
@@ -694,86 +786,52 @@ void populate_local_tcs(
                 _cur_tc != NULL ? &_cur_tc->ident : NULL
                 );
   }
+*/
 }
-
 
 /* 
  * Populates and unblocks all the tc-s that have been assigned chunks of the family.
  * Returns an identifier of the first tc to service the family.
- */
+*/
 tc_ident_t create_fam(fam_context_t* fc, 
                       thread_func func,
                       default_place_policy_enum default_place_policy
-                      //int no_threads
                       ) {
-  //int tcs[MAX_NO_TCS_PER_ALLOCATION];
-  int no_ranges_for_current_node = 0;
+  const fam_distribution* dist = &fc->distribution;
+  long total_threads_per_generation = 0;  // across all procs/tcs...
+  for (unsigned int i = 0; i < dist->no_reservations; ++i) {
+    total_threads_per_generation += dist->reservations[i].no_threads_per_generation;
+  }
 
-  // populate all TC's
-  assert(fc->no_ranges > 0);
-  int cur_node_index = -1;
-
-  int start_index = 0;
-  // go through the ranges, in chunks allocated to each node
-  for (int i = 0; i < fc->no_ranges;) {
-    if (fc->ranges[i].dest.node_index == cur_node_index)
-      continue;
-
-    // start treating the ranges for a new node
-    cur_node_index = fc->ranges[i].dest.node_index;
-    start_index = i;
-    no_ranges_for_current_node = 0;
-
-    assert(fc->no_ranges <=  MAX_NO_TCS_PER_ALLOCATION);
-    // build an array of all the indexes of the tc's allocated to the current node
-    for (; i < fc->no_ranges && fc->ranges[i].dest.node_index == cur_node_index; ++i) {
-      //tcs[no_tcs++] = fc->ranges[i].dest.tc_index;
-      ++no_ranges_for_current_node;
-    }
-
-    // attention: i is now 1 more than the last range that's part of the current node
-    tc_ident_t parent, prev, next;
-    if (_cur_tc != NULL) {
-      parent = _cur_tc->ident;
-    } else {
-      // this means we're allocating root_fam. The parent shouldn't matter.
-      //assert(func == _fam___root_fam);
-      //assert(func == __root_fam);
-      assert(func == __slFfmta___root_fam);
-      parent.node_index = -1; parent.tc = NULL; parent.proc_index = -1; parent.tc_index = -1;
-    }
-    if (start_index == 0) {
-      prev = parent;
-    } else {
-      prev = fc->ranges[start_index - 1].dest;
-    }
-    if (i == fc->no_ranges) {
-      next = parent;
-    } else {
-      next = fc->ranges[i].dest;
-    }
-
-    if (cur_node_index == NODE_INDEX) {
+  for (unsigned int i = 0; i < dist->no_reservations; ++i) {
+    const proc_reservation* res = &dist->reservations[i];
+   
+    if (res->first_tc.node_index == NODE_INDEX) {
       if (_cur_tc != NULL) {  // this will be NULL when creating root_fam
-        populate_local_tcs(//tcs, 
-            &fc->ranges[start_index], 
-            no_ranges_for_current_node,//no_tcs, 
-            func, 
-            parent, prev, next,
-            //_cur_tc->ident,  // parent
-            //i > 0 ? fc->ranges[i-1].dest : _cur_tc->ident,  // prev
-            //i < fc->no_ranges-1 ? fc->ranges[i+1].dest : _cur_tc->ident,  // next
-            i == (fc->no_ranges),  // final ranges
-            fc->shareds,
-            fc->shared_descs,
-            &fc->done,
-            default_place_policy,
-            _cur_tc->place_default
-            );
+        populate_local_tcs(func,
+                         res->no_tcs,
+                         (i == dist->no_reservations - 1),  // is_last_proc_on_fam
+                         dist->no_generations,
+                         res->no_threads_per_generation,
+                         res->no_threads_per_generation_last,
+                         total_threads_per_generation,  // gap_between_generations
+                         dist->start_index,
+                         dist->start_index_last_generation,
+                         res->first_tc,    // first_tc
+                         _cur_tc->ident,   // parent
+                         i > 0 ? dist->reservations[i-1].last_tc : _cur_tc->ident,  // prev
+                         i < dist->no_reservations - 1 ? dist->reservations[i+1].first_tc : _cur_tc->ident, //next
+                         fc->shareds,  // final_shareds
+                         fc->shared_descs,  //final_descs
+                         &fc->done,         // done istruct
+                         default_place_policy,
+                         _cur_tc->place_default   // default_place_parent
+                         );
       } else {  // creating root_fam
-        //assert(func == &_fam___root_fam);
-        //assert(func == &__root_fam);
         assert(func == &__slFfmta___root_fam);
+        assert(dist->no_reservations == 1);
+        assert(res->no_tcs == 1);
+        
         tc_ident_t dummy_parent;
         // set up a dummy parent; it needs to point to the same node, but different proc and different
         // TC than the reader, because we want the reader to use read_istruct_different_proc
@@ -781,54 +839,161 @@ tc_ident_t create_fam(fam_context_t* fc,
         dummy_parent.proc_index = -1; dummy_parent.tc_index = -1; dummy_parent.tc = NULL; 
         sl_place_t whole_cluster = {0,0,-1,-1,-1};
 
-        populate_local_tcs(//tcs, 
-            &fc->ranges[start_index], 
-            no_ranges_for_current_node, 
-            func, 
-            dummy_parent,  // parent
-            dummy_parent,  // prev
-            dummy_parent,  // next
-            i == fc->no_ranges,  // final ranges
+        populate_local_tcs(
+            func, res->no_tcs ,true, 1, 1, 1, 1, 0, 0, res->first_tc, dummy_parent, dummy_parent, dummy_parent,
             fc->shareds,
             fc->shared_descs,
             &fc->done,
             INHERIT_DEFAULT_PLACE,
-            whole_cluster 
-            );
+            whole_cluster);
       }
-    } else {  // we have a remote allocation
-      assert(_cur_tc != NULL);  // this should only be null for root_fam, and that shouldn't be allocated remotely
-      LOG(DEBUG, "create_fam: sending remote create request with %d ranges\n", no_ranges_for_current_node);
-      populate_remote_tcs(cur_node_index,  // destination node
-                          //tcs,
-                          &fc->ranges[start_index],
-                          no_ranges_for_current_node,
-                          func,
-                          parent, prev, next,
-                          //_cur_tc->ident,  // parent
-                          //i > 0 ? fc->ranges[i-1].dest : _cur_tc->ident,  // prev
-                          //i < fc->no_ranges-1 ? fc->ranges[i+1].dest : _cur_tc->ident,  // next
-                          i == (fc->no_ranges),  // final ranges
-                          fc->shareds,
-                          fc->shared_descs,
-                          &fc->done,
-                          default_place_policy,
-                          _cur_tc->place_default
-                          );  
-      LOG(DEBUG, "create_fam: sent remote create request\n");
+    } else {
+      assert(0); // TODO: FIXME:
     }
   }
-
-  return fc->ranges[0].dest;
+  return dist->reservations[0].first_tc;
 }
 
 
-long sync_fam(fam_context_t* fc, /*long* shareds_dest,*/ int no_shareds, ...) {
-  //assert(test_same_node(&_cur_tc->ident, &fc->ranges[fc->no_ranges-1].dest));  //TODO
+/*--------------------------------------------------
+* / * 
+*  * Populates and unblocks all the tc-s that have been assigned chunks of the family.
+*  * Returns an identifier of the first tc to service the family.
+*  * /
+* tc_ident_t create_fam(fam_context_t* fc, 
+*                       thread_func func,
+*                       default_place_policy_enum default_place_policy
+*                       //int no_threads
+*                       ) {
+*   //int tcs[MAX_NO_TCS_PER_ALLOCATION];
+*   int no_ranges_for_current_node = 0;
+* 
+*   // populate all TC's
+*   assert(fc->no_ranges > 0);
+*   int cur_node_index = -1;
+* 
+*   int start_index = 0;
+*   // go through the ranges, in chunks allocated to each node
+*   for (int i = 0; i < fc->no_ranges;) {
+*     if (fc->ranges[i].dest.node_index == cur_node_index)
+*       continue;
+* 
+*     // start treating the ranges for a new node
+*     cur_node_index = fc->ranges[i].dest.node_index;
+*     start_index = i;
+*     no_ranges_for_current_node = 0;
+* 
+*     assert(fc->no_ranges <=  MAX_NO_TCS_PER_ALLOCATION);
+*     // build an array of all the indexes of the tc's allocated to the current node
+*     for (; i < fc->no_ranges && fc->ranges[i].dest.node_index == cur_node_index; ++i) {
+*       //tcs[no_tcs++] = fc->ranges[i].dest.tc_index;
+*       ++no_ranges_for_current_node;
+*     }
+* 
+*     // attention: i is now 1 more than the last range that's part of the current node
+*     tc_ident_t parent, prev, next;
+*     if (_cur_tc != NULL) {
+*       parent = _cur_tc->ident;
+*     } else {
+*       // this means we're allocating root_fam. The parent shouldn't matter.
+*       //assert(func == _fam___root_fam);
+*       //assert(func == __root_fam);
+*       assert(func == __slFfmta___root_fam);
+*       parent.node_index = -1; parent.tc = NULL; parent.proc_index = -1; parent.tc_index = -1;
+*     }
+*     if (start_index == 0) {
+*       prev = parent;
+*     } else {
+*       prev = fc->ranges[start_index - 1].dest;
+*     }
+*     if (i == fc->no_ranges) {
+*       next = parent;
+*     } else {
+*       next = fc->ranges[i].dest;
+*     }
+* 
+*     if (cur_node_index == NODE_INDEX) {
+*       if (_cur_tc != NULL) {  // this will be NULL when creating root_fam
+*         populate_local_tcs(//tcs, 
+*             &fc->ranges[start_index], 
+*             no_ranges_for_current_node,//no_tcs, 
+*             func, 
+*             parent, prev, next,
+*             //_cur_tc->ident,  // parent
+*             //i > 0 ? fc->ranges[i-1].dest : _cur_tc->ident,  // prev
+*             //i < fc->no_ranges-1 ? fc->ranges[i+1].dest : _cur_tc->ident,  // next
+*             i == (fc->no_ranges),  // final ranges
+*             fc->shareds,
+*             fc->shared_descs,
+*             &fc->done,
+*             default_place_policy,
+*             _cur_tc->place_default
+*             );
+*       } else {  // creating root_fam
+*         //assert(func == &_fam___root_fam);
+*         //assert(func == &__root_fam);
+*         assert(func == &__slFfmta___root_fam);
+*         tc_ident_t dummy_parent;
+*         // set up a dummy parent; it needs to point to the same node, but different proc and different
+*         // TC than the reader, because we want the reader to use read_istruct_different_proc
+*         dummy_parent.node_index = NODE_INDEX; // no parent
+*         dummy_parent.proc_index = -1; dummy_parent.tc_index = -1; dummy_parent.tc = NULL; 
+*         sl_place_t whole_cluster = {0,0,-1,-1,-1};
+* 
+*         populate_local_tcs(//tcs, 
+*             &fc->ranges[start_index], 
+*             no_ranges_for_current_node, 
+*             func, 
+*             dummy_parent,  // parent
+*             dummy_parent,  // prev
+*             dummy_parent,  // next
+*             i == fc->no_ranges,  // final ranges
+*             fc->shareds,
+*             fc->shared_descs,
+*             &fc->done,
+*             INHERIT_DEFAULT_PLACE,
+*             whole_cluster 
+*             );
+*       }
+*     } else {  // we have a remote allocation
+*       assert(_cur_tc != NULL);  // this should only be null for root_fam, and that shouldn't be allocated remotely
+*       LOG(DEBUG, "create_fam: sending remote create request with %d ranges\n", no_ranges_for_current_node);
+*       populate_remote_tcs(cur_node_index,  // destination node
+*                           //tcs,
+*                           &fc->ranges[start_index],
+*                           no_ranges_for_current_node,
+*                           func,
+*                           parent, prev, next,
+*                           //_cur_tc->ident,  // parent
+*                           //i > 0 ? fc->ranges[i-1].dest : _cur_tc->ident,  // prev
+*                           //i < fc->no_ranges-1 ? fc->ranges[i+1].dest : _cur_tc->ident,  // next
+*                           i == (fc->no_ranges),  // final ranges
+*                           fc->shareds,
+*                           fc->shared_descs,
+*                           &fc->done,
+*                           default_place_policy,
+*                           _cur_tc->place_default
+*                           );  
+*       LOG(DEBUG, "create_fam: sent remote create request\n");
+*     }
+*   }
+* 
+*   return fc->ranges[0].dest;
+* }
+*--------------------------------------------------*/
 
-  int same_proc = test_same_proc(&_cur_tc->ident, &fc->ranges[fc->no_ranges-1].dest);
-  assert(!test_same_tc(&_cur_tc->ident, &fc->ranges[fc->no_ranges-1].dest));  // parent and
-  // child should never be in the same tc
+
+long sync_fam(fam_context_t* fc, /*long* shareds_dest,*/ int no_shareds, ...) {
+  //int same_proc = test_same_proc(&_cur_tc->ident, &fc->ranges[fc->no_ranges-1].dest);
+  bool same_proc = 
+    test_same_proc(
+        &_cur_tc->ident, 
+        &fc->distribution.reservations[fc->distribution.no_reservations-1].last_tc);
+  assert(
+      !test_same_tc(
+        &_cur_tc->ident, 
+        &fc->distribution.reservations[fc->distribution.no_reservations-1].last_tc));  // parent and
+                                                                        // child should never be in the same tc
   LOG(DEBUG, "sync_fam: tc %d proc %d syncing on istruct %p\n", 
       _cur_tc->ident.tc_index, _cur_tc->ident.proc_index, &fc->done);
   suspend_on_istruct(&fc->done, same_proc);
@@ -1161,8 +1326,10 @@ void create_tc(int proc_index, int tc_index) {
   //init shared_locks and global_locks
   int i;
   for (i = 0; i < MAX_ARGS_PER_FAM; ++i) {
-    if (pthread_spin_init(&tc->shareds[i].lock, PTHREAD_PROCESS_PRIVATE) != 0) {
-      perror("pthread_spin_init:"); exit(1);
+    for (int j = 0; j < 2; ++j) {
+      if (pthread_spin_init(&tc->shareds[j][i].lock, PTHREAD_PROCESS_PRIVATE) != 0) {
+        perror("pthread_spin_init:"); exit(1);
+      }
     }
     if (pthread_spin_init(&tc->globals[i].lock, PTHREAD_PROCESS_PRIVATE) != 0) {
       perror("pthread_spin_init:"); exit(1);
@@ -1180,46 +1347,154 @@ void create_tc(int proc_index, int tc_index) {
   _free_tc(proc_index, tc_index);
 }
 
+sl_place_t resolve_place_default_for_TC(
+    default_place_policy_enum default_place_policy,// policy to be used when deciding the 
+                                                   // PLACE_DEFAULT to be inheritied by
+                                                   // the child
+    sl_place_t default_place_parent,     // PLACE_DEFAULT of the parent. Used if 
+                                        // default_place_policy == INHERIT_DEFAULT_PLACE
+    tc_ident_t tc            // the TC for which we're resolving the place
+    ) {
+
+  sl_place_t def_place;
+  def_place.place_local = def_place.place_default = 0;
+  def_place.node_index = def_place.proc_index = def_place.tc_index = -1;
+  switch (default_place_policy) {
+    case INHERIT_DEFAULT_PLACE:
+      def_place = default_place_parent;
+      break;
+    case LOCAL_NODE:
+      def_place.node_index = NODE_INDEX;
+      break;
+    case LOCAL_PROC:
+      def_place.node_index = NODE_INDEX;
+      def_place.proc_index = tc.proc_index;
+      break;
+    case LOCAL_TC:
+      def_place.node_index = NODE_INDEX;
+      def_place.proc_index = tc.proc_index;
+      def_place.tc_index   = tc.tc_index;
+      break;
+  }
+  restrict_place(&def_place, default_place_parent);  // make sure that the children's PLACE_DEFAULT is capped
+                                                     // by the parent's PLACE_DEFAULT
+  return def_place;  
+}
+
 /* 
  * Prepares a TC to run a threads range. The TC is then scheduled to run.
  */
 void populate_tc(tc_t* tc,
                  thread_func func,
                  //int num_shareds, int num_globals,
+                 
+                 unsigned long no_generations, 
+                 unsigned long no_threads_per_gen,  // for this TC
+                 unsigned long no_threads_per_gen_last_tc,  // for last TC on proc
+                 unsigned long no_threads_last_gen,  // for this TC
+                 unsigned long no_threads_last_gen_last_tc,  // for last TC on proc
+
+                 long gap_between_generations,
                  long start_index,
-                 long end_index,
+                 long start_index_last_generation,
+                 
+                 //long start_index,
+                 //long end_index,
+                 
                  //fam_context_t* fam_context,
                  tc_ident_t parent, tc_ident_t prev, tc_ident_t next,
-                 int is_last_tc,
+                 bool is_last_proc_on_fam,  // will be used by the last tc on the proc
                  i_struct* final_shareds, 
                  memdesc_t* final_descs,
                  i_struct* done,
-                 sl_place_t place_default,    // the PLACE_DEFAULT to be used by the threads running in this TC
-                 const tc_ident_t* current_tc // the TC of the caller; can be passed a dummy or NULL
+                 //sl_place_t place_default,    // the PLACE_DEFAULT to be used by the threads running in this TC
+                 const tc_ident_t* current_tc, // the TC of the caller; can be passed a dummy or NULL
+                 default_place_policy_enum default_place_policy,// policy to be used when deciding the 
+                                                                // PLACE_DEFAULT to be inheritied by
+                                                                // the child
+                 sl_place_t default_place_parent     // PLACE_DEFAULT of the parent. Used if 
+                                                     // default_place_policy == INHERIT_DEFAULT_PLACE
                  ) {
+
   tc->context.uc_stack = tc->initial_thread_stack;  // TODO: is this necessary? would this have been modified
                                                     // by savecontext() calls?
   tc->context.uc_link = NULL;
   makecontext(&(tc->context), (void (*)())func, 0);
 
-  tc->index_start = start_index;
-  tc->index_stop = end_index;
-  //tc->fam_context = fam_context;
+  //tc->index_start = start_index;
+  //tc->index_stop = end_index;
   tc->parent_ident = parent;
-  tc->prev = prev; tc->next = next;
-  tc->is_last_tc = is_last_tc;
-  if (!is_last_tc) {
-    assert(final_shareds == NULL);
-    assert(final_descs == NULL);
+  if (tc->is_first_tc_on_proc) {
+    tc->prev = prev;
   }
-  tc->final_shareds = final_shareds;
-  tc->final_descs = final_descs;
-  tc->done = done;
+  if (tc->is_last_tc_on_proc) {
+    tc->next = next;
+  }
+  // .prev and .next for TC's which are not the first or the last on their proc were initialized at allocation
+
+  //tc->prev = prev; tc->next = next;
+  //tc->is_last_tc = is_last_tc;
+  if (tc->is_last_tc_on_proc && is_last_proc_on_fam) {
+    tc->is_last_tc_in_fam = true;
+    tc->final_shareds = final_shareds;
+    tc->final_descs = final_descs;
+    tc->done = done;
+  }
+  //if (!is_last_tc) {
+  //  assert(final_shareds == NULL);
+  //  assert(final_descs == NULL);
+  //}
+  //tc->final_shareds = final_shareds;
+  //tc->final_descs = final_descs;
+  //tc->done = done;
   //for (int i = 0; i < num_shareds; ++i) tc->shareds[i].state = EMPTY;
   //for (int i = 0; i < num_globals; ++i) tc->globals[i].state = EMPTY;
   //tc->finished = 0;
   
-  tc->place_default = place_default;
+  //tc->place_default = place_default;
+
+  tc->no_generations_left = no_generations;
+  tc->no_threads_per_generation = tc->is_last_tc_on_proc ?
+                                  no_threads_per_gen_last_tc : no_threads_per_gen;
+  tc->no_threads_per_generation_last = tc->is_last_tc_on_proc ?
+                                  no_threads_last_gen_last_tc :
+                                  no_threads_last_gen;
+
+  tc->gap_between_generations = gap_between_generations;
+  tc->start_index = start_index;
+  tc->start_index_last_generation = start_index_last_generation;
+
+  tc->current_generation = 0;
+  tc->current_generation_real = 0;
+
+  tc->place_default = resolve_place_default_for_TC(default_place_policy, default_place_parent, tc->ident);
+
+  tc->index_start = no_generations > 1 ? start_index : start_index_last_generation;
+  tc->index_stop  = no_generations > 1 ? start_index + tc->no_threads_per_generation - 1
+                                       : start_index_last_generation + tc->no_threads_per_generation_last - 1;
+
+  // recursively populate next tc on this proc
+  if (!tc->is_last_tc_on_proc) {
+    populate_tc(tc->next.tc,
+                func,
+                no_generations,
+                no_threads_per_gen,  // for this TC
+                no_threads_per_gen_last_tc,  // for last TC on proc
+                no_threads_last_gen,  // for this TC
+                no_threads_last_gen_last_tc,  // for last TC on proc
+                gap_between_generations,
+                start_index + no_threads_per_gen,
+                start_index_last_generation + no_threads_last_gen,
+                parent, prev, next,
+                is_last_proc_on_fam,
+                final_shareds,
+                final_descs,
+                done,
+                current_tc,
+                default_place_policy,
+                default_place_parent
+                );
+  }
 
   unblock_tc(tc, current_tc != NULL ? test_same_proc(&tc->ident, current_tc) : 0);
 }
@@ -1532,9 +1807,11 @@ static int grab_available_tc(int proc_id) {
     tc_t* tc = (tc_t*)TC_START_VM(rez);
     //tc->finished = 0;
     for (int j = 0; j < MAX_ARGS_PER_FAM; ++j) {
-      tc->shareds[j].state = EMPTY;
+      tc->shareds[0][j].state = EMPTY;
+      tc->shareds[1][j].state = EMPTY;
       tc->globals[j].state = EMPTY;
     }
+    tc->prev_range_done.state = EMPTY;
   }
   
   return rez;
@@ -2141,9 +2418,11 @@ static int start(int argc, char** argv) {
   create_fam(fc, &__slFfmta___root_fam, INHERIT_DEFAULT_PLACE);
 
   // transmit argc
-  write_istruct_no_checks(&(fc->ranges[0].dest.tc->globals[0]), argc);
+  //write_istruct_no_checks(&(fc->ranges[0].dest.tc->globals[0]), argc);
+  write_istruct_no_checks(&(fc->distribution.reservations[0].first_tc.tc->globals[0]), argc);
   // transmit argv
-  write_istruct_no_checks(&(fc->ranges[0].dest.tc->globals[1]), (long)argv);
+  //write_istruct_no_checks(&(fc->ranges[0].dest.tc->globals[1]), (long)argv);
+  write_istruct_no_checks(&(fc->distribution.reservations[0].first_tc.tc->globals[1]), (long)argv);
 
   // wait for root_main to finish
   pthread_mutex_lock(&main_finished_mutex);
@@ -2219,17 +2498,42 @@ int main(int argc, char** argv) {
   }
 }
 
-void write_global(fam_context_t* ctx, int index, long val, int is_mem) {
-  int i;
-  // write the global to every TC that will run part of the family
-  for (i = 0; i < ctx->no_ranges; ++i) {
-    tc_ident_t id = ctx->ranges[i].dest;
-    //assert(id.node_index == _cur_tc->ident.node_index);  // TODO
-    tc_t* dest = (tc_t*)TC_START_VM_EX(id.node_index, id.tc_index);
-    assert(dest == id.tc);  // TODO: if this assert proves to hold, remove the line above
-    //i_struct_fat_pointer p;
-    write_istruct(id.node_index, &(id.tc->globals[index]), val, &id, is_mem);
+/*
+ *  Recursively writes a value to a global slot in all TC's from a proc assigned to a family
+ */
+static void write_global_to_chain_of_tcs(tc_t* tc, unsigned int index, long val, bool is_mem) {
+  // write the istructure
+  write_istruct(tc->ident.node_index, &tc->globals[index], val, &tc->ident, is_mem);
+
+  // recurse
+  if (!tc->is_last_tc_on_proc) {
+    write_global_to_chain_of_tcs(tc->next.tc, index, val, is_mem);
   }
+}
+
+void write_global(fam_context_t* fc, int index, long val, bool is_mem) {
+  unsigned int i;
+  // write the global to every TC that will run part of the family
+
+  for (i = 0; i < fc->distribution.no_reservations; ++i) {
+    if (fc->distribution.reservations[i].first_tc.node_index == NODE_INDEX) {
+      write_global_to_chain_of_tcs(fc->distribution.reservations[i].first_tc.tc, index, val, is_mem);
+    } else {
+      assert(0);
+      //FIXME: TODO:
+    }
+  }
+
+/*--------------------------------------------------
+* 
+*   for (i = 0; i < ctx->no_ranges; ++i) {
+*     tc_ident_t id = ctx->ranges[i].dest;
+*     //assert(id.node_index == _cur_tc->ident.node_index);  // TODO
+*     tc_t* dest = (tc_t*)TC_START_VM_EX(id.node_index, id.tc_index);
+*     assert(dest == id.tc);  // TODO: if this assert proves to hold, remove the line above
+*     write_istruct(id.node_index, &(id.tc->globals[index]), val, &id, is_mem);
+*   }
+*--------------------------------------------------*/
 }
 
 /*

@@ -198,6 +198,7 @@ static void handle_sctp_request(int sock) {
 }
 
 static void handle_req_allocate(const req_allocate* req) {
+  /*
   resp_allocate resp;
   resp.identifier = req->response_identifier;
   resp.type = RESP_ALLOCATE;
@@ -211,6 +212,8 @@ static void handle_req_allocate(const req_allocate* req) {
       resp.no_tcs);
 
   send_sctp_msg(req->node_index, &resp, sizeof(resp));
+  */
+  // FIXME TODO
 }
 
 static void handle_resp_allocate(const resp_allocate* req) {
@@ -1210,6 +1213,7 @@ static void handle_req_write_istruct_mem(const req_write_istruct_mem* req) {
 }
 
 static void handle_req_create(const req_create* req) {
+  /*
   LOG(DEBUG, "network: handle_req_create: got create request\n");
   // sanity check
   assert(req->default_place_parent.node_index == -1 || req->default_place_parent.node_index == NODE_INDEX);
@@ -1226,6 +1230,8 @@ static void handle_req_create(const req_create* req) {
                      req->default_place_parent
                      );
   LOG(DEBUG, "network: handle_req_create: finished populating local TC's\n");
+  */
+  // FIXME: TODO
 }
 
 /*
