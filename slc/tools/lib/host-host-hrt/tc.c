@@ -219,6 +219,7 @@ static void populate_tc(
                  tc_ident_t parent,
                  tc_ident_t prev,  // the TC that is going to run the ranges just before the first TC in this chain
                  tc_ident_t next,  // the TC that is going to run the ranges just after the first TC in this chain
+                 bool is_first_proc_on_fam, // will be used by the first tc on the proc
                  bool is_last_proc_on_fam,  // will be used by the last tc on the proc
                  
                  i_struct* final_shareds, 
@@ -678,6 +679,7 @@ static inline int test_same_tc(const tc_ident_t* l,const tc_ident_t* r) {
 void populate_local_tcs(
     thread_func func,
     unsigned int no_tcs,                      // number of TC's in the chain
+    bool is_first_proc_on_fam,
     bool is_last_proc_on_fam,
     unsigned long no_generations,
     unsigned long no_threads_per_generation,  // total number of threads to be run on these TCs as part 
@@ -723,6 +725,7 @@ void populate_local_tcs(
               denormalized_fam_start_index,
               step,
               parent, prev, next,
+              is_first_proc_on_fam,
               is_last_proc_on_fam,
               final_shareds,
               final_descs,
@@ -757,6 +760,7 @@ tc_ident_t create_fam(fam_context_t* fc,
       if (_cur_tc != NULL) {  // this will be NULL when creating root_fam
         populate_local_tcs(func,
                          res->no_tcs,
+                         (i == 0),  // is_first_proc_on_fam
                          (i == dist->no_reservations - 1),  // is_last_proc_on_fam
                          dist->no_generations,
                          res->no_threads_per_generation,
@@ -792,6 +796,7 @@ tc_ident_t create_fam(fam_context_t* fc,
         populate_local_tcs(
             func, 
             res->no_tcs,
+            true,  // is_first_proc_on_fam
             true,  // is_last_proc_on_fam
             1,     // no_generations
             1,     // no_threads_per_generation
@@ -1368,7 +1373,8 @@ static void populate_tc(
                  tc_ident_t parent,
                  tc_ident_t prev,  // the TC that is going to run the ranges just before the first TC in this chain
                  tc_ident_t next,  // the TC that is going to run the ranges just after the first TC in this chain
-                 bool is_last_proc_on_fam,  // will be used by the last tc on the proc
+                 bool is_first_proc_on_fam,  // will be used by the first tc on the proc
+                 bool is_last_proc_on_fam,   // will be used by the last tc on the proc
                  
                  i_struct* final_shareds, 
                  memdesc_t* final_descs,
@@ -1407,6 +1413,12 @@ static void populate_tc(
     tc->done = NULL;
   }
 
+  if (tc->is_first_tc_on_proc && is_first_proc_on_fam) {
+    tc->is_first_tc_in_fam = true;
+  } else {
+    tc->is_first_tc_in_fam = false;
+  }
+
   tc->no_generations_left = no_generations;
   tc->no_threads_per_generation = tc->is_last_tc_on_proc ?
                                   no_threads_per_gen_last_tc : no_threads_per_gen;
@@ -1432,6 +1444,7 @@ static void populate_tc(
 
   // recursively populate next tc on this proc
   if (!tc->is_last_tc_on_proc) {
+    assert(tc->next.tc->is_first_tc_on_proc == false);
     populate_tc(tc->next.tc,
                 func,
                 no_generations,
@@ -1445,6 +1458,7 @@ static void populate_tc(
                 denormalized_fam_start_index,
                 step,
                 parent, prev, next,
+                is_first_proc_on_fam,
                 is_last_proc_on_fam,
                 final_shareds,
                 final_descs,

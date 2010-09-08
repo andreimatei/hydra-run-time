@@ -219,7 +219,8 @@ struct tc_t {
 
   //int is_last_tc;   // 1 if this is the TC where the last chunk of threads in a fam was allocated,
                     // 0 otherwise
-  bool is_first_tc_on_proc;// will be filled in at the time of allocation
+  bool is_first_tc_on_proc;  // will be filled in at the time of allocation
+  bool is_first_tc_in_fam;   // will be filled in at the time of create (on TC population)
   bool is_last_tc_on_proc; // will be filled in at the time of allocation
   bool is_last_tc_in_fam;  // will be filled in at the time of create (on TC population)
 

@@ -67,6 +67,7 @@ void allocate_local_tcs(int proc_index, tc_ident_t parent, unsigned int no_tcs,
 void populate_local_tcs(
     thread_func func,
     unsigned int no_tcs,                      // number of TC's in the chain
+    bool is_first_proc_on_fam,
     bool is_last_proc_on_fam,
     unsigned long no_generations,
     unsigned long no_threads_per_generation,  // total number of threads to be run on these TCs as part 

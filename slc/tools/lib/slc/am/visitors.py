@@ -562,8 +562,10 @@ class TFun_2_HydraCFunctions(DefaultVisitor):
         newitems = Block()
         newitems += flatten(fundef.loc, '/* Meta-loop function for family %s */' % fundef.name) 
         newitems += """
-        void %s() { 
+        void """ + fun_name + """() { 
             long normalized_start = _cur_tc->start_index;
+            const int independent_family = """ + ('1' if no_shareds == 0 else '0') + """;
+            int first_generation = 1;
             while (_cur_tc->no_generations_left-- > 0) {
                 unsigned long threads_in_gen = (_cur_tc->no_generations_left > 0) ? 
                     _cur_tc->no_threads_per_generation : _cur_tc->no_threads_per_generation_last;
@@ -578,11 +580,20 @@ class TFun_2_HydraCFunctions(DefaultVisitor):
                     normalized_start = _cur_tc->start_index_last_generation;
                 }
 
+                if (!independent_family) {
+                    // synchronize termination of generations so that they don't get out of sync.
+                    // nothing to do for the first generation on the first tc in the family
+                    if (!_cur_tc->is_first_tc_in_fam && first_generation) {
+                        read_istruct(&_cur_tc->prev_range_done, &_cur_tc->prev);
+                    }
+                }
+                first_generation = 0;
+
                 // switch sets of shareds
                 _advance_generation(%d);
                 
                 // for dependent families, write the prev_range_done on the next TC
-                if (%d > 0) {
+                if (!independent_family) {
                     write_istruct(_cur_tc->next.node_index, 
                                   &_cur_tc->next.tc->prev_range_done, 
                                   1,               // value
@@ -591,7 +602,7 @@ class TFun_2_HydraCFunctions(DefaultVisitor):
                 }
             }
         }
-        """ % (fun_name, gen_loop_fun_name(fundef.name), no_shareds, no_shareds)
+        """ % (gen_loop_fun_name(fundef.name), no_shareds)
         return newitems
 
 
