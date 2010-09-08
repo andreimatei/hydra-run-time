@@ -175,10 +175,13 @@ struct tc_t {
   unsigned long no_threads_per_generation;  // length of regular ranges to be run on this TC
   unsigned long no_threads_per_generation_last;  // length of last range to be run on this TC
   unsigned long gap_between_generations;
-  long start_index;  // the index of the first thread in the first range assigned to this TC
-  long start_index_last_generation;  // the index of the first thread in the _last_ range assigned to this TC
+  long start_index;  // the normalized index of the first thread in the first range assigned to this TC
+  long start_index_last_generation;  // the normalized index of the first thread in the 
+                                     // _last_ range assigned to this TC
 
-  long index_start, index_stop;  // values for current generation; inclusive
+  long index_start, index_stop;  // de-normalized values for current generation; inclusive
+  long denormalized_fam_start_index;  // the real start index of the family. Used to de-normalize start_index
+  long step;  // the step of the family
 
   struct timeval blocking_time;  // if TC is blocked, this is the moment when it was blocked
 
@@ -326,8 +329,9 @@ mapping_decision map_fam(
 //tc_ident_t create_fam(fam_context_t* fc);
 tc_ident_t create_fam(fam_context_t* fc, 
                       thread_func func,
+                      long real_fam_start_index,
+                      long step,
                       default_place_policy_enum default_place_policy
-                      //int no_threads
                       );
 
 long sync_fam(fam_context_t* fc, /*long* shareds_dest,*/ int no_shareds, ...);
@@ -569,6 +573,7 @@ static inline void _advance_generation(unsigned int no_shareds) {
   _cur_tc->current_generation_real++;
   _cur_tc->current_generation ^= 1;
 
+  /*
   if (_cur_tc->no_generations_left > 0) {
     _cur_tc->index_start += _cur_tc->gap_between_generations;
     _cur_tc->index_stop  += _cur_tc->gap_between_generations; 
@@ -576,6 +581,15 @@ static inline void _advance_generation(unsigned int no_shareds) {
     _cur_tc->index_start = _cur_tc->start_index_last_generation;
     _cur_tc->index_stop   = _cur_tc->start_index_last_generation + _cur_tc->no_threads_per_generation_last - 1;
   }
+  */
+}
+
+/*
+ * Transforms an index starting from 0 with step 1, in an index with starting from real_start with step "step".
+ * In other words, computes the correct index for the "normalized_index"th thread in a family.
+ */
+static inline long _denormalize_index(long normalized_index, long real_start, long step) {
+  return real_start + (normalized_index * step);
 }
 
 #endif
