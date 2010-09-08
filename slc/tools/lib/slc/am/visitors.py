@@ -256,9 +256,14 @@ class Create_2_HydraCall(ScopedVisitor):
         no_shareds = str(self.get_no_shareds())
         no_globals = str(self.get_no_globals())
        
-        rrhs = flatten(cr.loc_end, 'allocate_fam(') \
-                + start + ', ' \
-                + end_index + ', ' + step + ', 0, &' + CVarUse(decl = mapping_decision_var) + ')'
+        rrhs = flatten(cr.loc_end, 'allocate_fam('
+                #+ start + ', ' \
+                #+ end_index + ', ' + step + ', 0, &' + CVarUse(decl = mapping_decision_var) + ')'
+                + ', (' + end_index + ' - ' + start + '+ 1) / ' + step    # no_threads
+                + ', 0'  # mapping parent
+                + ', &' + CVarUse(decl = mapping_decision_var)
+                + ')')
+
         allocate_call = CVarSet(decl = fam_context_var, 
                                rhs = rrhs)
         newbl.append(allocate_call + ';\n')

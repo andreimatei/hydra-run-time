@@ -428,10 +428,10 @@ void allocate_local_tcs(int proc_index, tc_ident_t parent, unsigned int no_tcs,
  * Returns NULL if resources couldn't be allocated (either no FC, or no TC's).
  */
 fam_context_t* allocate_fam(
-    //thread_func func,
-    long start_index,
-    long end_index,
-    long step,
+    //long start_index,
+    //long end_index,
+    //long step,
+    unsigned long total_threads,
     struct mapping_node_t* parent_id __attribute__((unused)), 
     const struct mapping_decision* mapping) {
 
@@ -509,7 +509,7 @@ fam_context_t* allocate_fam(
 
   // redistribute the load of the procs where we couldn't get any TC's and
   // compute the number of threads that go to each proc
-  unsigned long total_threads = (end_index - start_index + 1) / step;
+  //unsigned long total_threads = (end_index - start_index + 1) / step;
   int additional_load = load_to_redistribute / allocated_procs;
   int additional_load_last = load_to_redistribute % allocated_procs;
   unsigned long allocated_threads;
@@ -547,9 +547,9 @@ fam_context_t* allocate_fam(
                                   + (allocated_tcs[i].no_threads % mapping->no_ranges_per_tc);
     assert(res->no_threads_per_generation_last > 0);
   }
-  fc->distribution.start_index = start_index;
-  fc->distribution.start_index_last_generation = 
-    start_index + ((mapping->no_ranges_per_tc - 1) * total_no_threads_per_gen);
+  //fc->distribution.start_index = start_index;
+  fc->distribution.start_index_last_generation = ((mapping->no_ranges_per_tc - 1) * total_no_threads_per_gen);
+    //start_index + ((mapping->no_ranges_per_tc - 1) * total_no_threads_per_gen);
 
   return fc;
 
@@ -753,7 +753,9 @@ tc_ident_t create_fam(fam_context_t* fc,
   }
 
   size_t no_res = dist->no_reservations;
-  for (unsigned int i = 0; i < dist->no_reservations; ++i) {
+  unsigned long first_thread_on_proc = 0;
+  unsigned long first_thread_on_proc_last_gen = 0;
+  for (size_t i = 0; i < dist->no_reservations; ++i) {
     const proc_reservation* res = &dist->reservations[i];
    
     if (res->first_tc.node_index == NODE_INDEX) {
@@ -766,8 +768,10 @@ tc_ident_t create_fam(fam_context_t* fc,
                          res->no_threads_per_generation,
                          res->no_threads_per_generation_last,
                          total_threads_per_generation,  // gap_between_generations
-                         dist->start_index,
-                         dist->start_index_last_generation,
+                         first_thread_on_proc,
+                         first_thread_on_proc_last_gen,
+                         //dist->start_index,
+                         //dist->start_index_last_generation,
                          real_fam_start_index,  // the real start index of the family. Used to de-normalize start_index
 
                          step,
@@ -819,7 +823,12 @@ tc_ident_t create_fam(fam_context_t* fc,
     } else {
       assert(0); // TODO: FIXME:
     }
-  }
+    
+    // first range on next TC starts from where this TC left off
+    first_thread_on_proc += res->no_threads_per_generation;
+    first_thread_on_proc_last_gen += res->no_threads_per_generation_last;
+
+  }  // for i in reservations
   return dist->reservations[0].first_tc;
 }
 
@@ -2382,7 +2391,8 @@ static int start(int argc, char** argv) {
   mapping.proc_assignments[0].no_tcs = 1;
 
   fam_context_t* fc = allocate_fam(//&_fam___root_fam, 
-                                    0, 0, 1, NULL, &mapping);
+                                    //0, 0, 1, NULL, &mapping);
+                                    1, NULL, &mapping);
   //fam_context_t* fam = allocate_root_fam(&_fam___root_fam, argc, argv);
   assert(fc);  // allocate shouldn't fail; we're just starting up
   LOG(DEBUG, "creating root_fam\n"); 

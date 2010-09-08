@@ -1,4 +1,3 @@
-- modify calls to allocate (and map?) to pass normalized indexes (start from 0, step = 1)
 - fix map_fam
 - fix network.c and remote allocation in tc.c
 - fix write_global() in tc.c for network

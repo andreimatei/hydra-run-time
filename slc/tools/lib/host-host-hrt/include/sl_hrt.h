@@ -139,7 +139,8 @@ typedef struct {
   unsigned long no_generations;
   proc_reservation reservations[MAX_NO_PROC_ASSIGNMENTS_PER_MAPPING];
   size_t no_reservations;
-  long start_index, start_index_last_generation;
+  //long start_index;
+  long start_index_last_generation;
 }fam_distribution;
 
 typedef struct {
@@ -310,11 +311,10 @@ static inline memdesc_stub_t _create_memdesc_stub(
 void _free_tc(int proc_id, int tc_id);
 
 fam_context_t* allocate_fam(
-    //thread_func func, 
-    //int num_shareds, int num_globals,
-    long start_index, 
-    long end_index,
-    long step,
+    //long start_index, 
+    //long end_index,
+    //long step,
+    unsigned long total_threads,
     struct mapping_node_t* parent_id, 
     const struct mapping_decision* mapping);
 
