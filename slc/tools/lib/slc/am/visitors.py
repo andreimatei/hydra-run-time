@@ -72,7 +72,7 @@ class Create_2_HydraCall(ScopedVisitor):
 
             setter = (flatten(loc, "write_istruct(") 
                     + self.__first_tc + ".node_index, &" + self.__first_tc 
-                    + ('.tc->shareds[%d], ' % index)
+                    + ('.tc->shareds[0][%d], ' % index)
                     #+ '(long)(' + val + ')' 
                     + value 
                     + ', &' + self.__first_tc 
@@ -256,7 +256,7 @@ class Create_2_HydraCall(ScopedVisitor):
         no_shareds = str(self.get_no_shareds())
         no_globals = str(self.get_no_globals())
        
-        rrhs = flatten(cr.loc_end, 'allocate_fam('
+        rrhs = (flatten(cr.loc_end, 'allocate_fam(')
                 #+ start + ', ' \
                 #+ end_index + ', ' + step + ', 0, &' + CVarUse(decl = mapping_decision_var) + ')'
                 + ', (' + end_index + ' - ' + start + '+ 1) / ' + step    # no_threads
@@ -391,13 +391,13 @@ class TFun_2_HydraCFunctions(DefaultVisitor):
         else:  #shared
             #stub_read_cmd = '_long_2_stub(read_istruct(&_cur_tc->shareds[%d], prev))' % param.index
             if self.__state == 0: #begin
-                stub_read_cmd = '_long_2_stub(read_istruct(&_cur_tc->shareds[%d], prev))' % param.index
+                stub_read_cmd = '_long_2_stub(read_istruct(&_cur_tc->shareds[_cur_tc->current_generation][%d], prev))' % param.index
             elif self.__state == 1: #middle
-                stub_read_cmd = '_long_2_stub(read_istruct_same_tc(&_cur_tc->shareds[%d]))' % param.index
+                stub_read_cmd = '_long_2_stub(read_istruct_same_tc(&_cur_tc->shareds[_cur_tc->current_generation][%d]))' % param.index
             elif self.__state == 2: #end
-                stub_read_cmd = '_long_2_stub(read_istruct_same_tc(&_cur_tc->shareds[%d]))' % param.index
+                stub_read_cmd = '_long_2_stub(read_istruct_same_tc(&_cur_tc->shareds[_cur_tc->current_generation][%d]))' % param.index
             elif self.__state == 3: #generic
-                stub_read_cmd = '_long_2_stub(read_istruct(&_cur_tc->shareds[%d], prev))' % param.index
+                stub_read_cmd = '_long_2_stub(read_istruct(&_cur_tc->shareds[_cur_tc->current_generation][%d], prev))' % param.index
             else:
                assert False
     
@@ -416,19 +416,19 @@ class TFun_2_HydraCFunctions(DefaultVisitor):
         else: #shared
             if self.__state == 0: #begin
                 newbl.append(flatten(None, '((') + getp.decl.ctype + ')' +
-                            'read_istruct(&_cur_tc->shareds[%d], prev))' %
+                            'read_istruct(&_cur_tc->shareds[_cur_tc->current_generation][%d], prev))' %
                             param.index)
             elif self.__state == 1: #middle
                 newbl.append(flatten(None, '((') + getp.decl.ctype + ')' +
-                            'read_istruct_same_tc(&_cur_tc->shareds[%d]))' %
+                            'read_istruct_same_tc(&_cur_tc->shareds[_cur_tc->current_generation][%d]))' %
                             param.index)
             elif self.__state == 2: #end
                 newbl.append(flatten(None, '((') + getp.decl.ctype + ')' +
-                            'read_istruct_same_tc(&_cur_tc->shareds[%d]))' %
+                            'read_istruct_same_tc(&_cur_tc->shareds[_cur_tc->current_generation][%d]))' %
                             param.index)
             elif self.__state == 3: #generic
                 newbl.append(flatten(None, '((') + getp.decl.ctype + ')' +
-                            'read_istruct(&_cur_tc->shareds[%d], prev))' %
+                            'read_istruct(&_cur_tc->shareds[_cur_tc->current_generation][%d], prev))' %
                             param.index)
             else:
                assert False
@@ -447,16 +447,16 @@ class TFun_2_HydraCFunctions(DefaultVisitor):
         if setp.decl.seen_get:  # TODO: do I need casting for b in all the branches below?
             if self.__state == 0: #begin
                 newbl.append(flatten(None,#setp.loc,
-                             'write_istruct_same_tc(&_cur_tc->shareds[%d],' %
+                             'write_istruct_same_tc(&_cur_tc->shareds[_cur_tc->current_generation][%d],' %
                               param.index) + b + ')')
                 
             elif self.__state == 1: #middle
                 newbl.append(flatten(None,#setp.loc,
-                             'write_istruct_same_tc(&_cur_tc->shareds[%d],' %
+                             'write_istruct_same_tc(&_cur_tc->shareds[_cur_tc->current_generation][%d],' %
                               param.index) + b + ')')
             elif self.__state == 2 or self.__state == 3: #end and generic
                 newbl.append(flatten(setp.loc,  # end and generic are passed the array of shareds as an argument
-                             'write_istruct(next->node_index, &shareds[%d],' % param.index) \
+                             'write_istruct(next->node_index, &shareds[_cur_tc->current_generation][%d],' % param.index) \
                              + b + ', next, 0);')
             else:
                 assert(0)
