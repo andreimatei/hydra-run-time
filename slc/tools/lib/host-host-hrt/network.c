@@ -13,7 +13,7 @@
 
 #define MAX_NO_PENDING_REQUESTS 1000
 secondary secondaries[MAX_NODES];
-int no_secondaries = 0;
+unsigned int no_secondaries = 0;
 
 pending_request_t pending_requests[MAX_NO_PENDING_REQUESTS];
 pthread_spinlock_t pending_requests_lock;
@@ -110,8 +110,8 @@ static void handle_resp_ping(const resp_ping* req);
 static void handle_req_pull_desc(const req_pull_desc* req);
 static void handle_resp_pull_desc(const resp_pull_desc* req);
 
-static int push_queue_not_empty(int node_index);
-static int dequeue_push_request(int node_index, push_request_t* req);
+static int push_queue_not_empty(unsigned int node_index);
+static int dequeue_push_request(unsigned int node_index, push_request_t* req);
 
 
 /*
@@ -516,7 +516,7 @@ void open_tcp_conn(int node_index) {
 fd_set get_sending_sockets() {
   fd_set res;
   FD_ZERO(&res);
-  for (int i = 0; i < no_secondaries; ++i) {
+  for (unsigned int i = 0; i < no_secondaries; ++i) {
     if (outgoing_state[i].active || push_queue_not_empty(i)) {
       LOG(DEBUG, "network: get_sending_sockets: found socket that wants to send data for secondary %d "
           "because of condition %d\n", i, outgoing_state[i].active ? 0 : 1);
@@ -713,7 +713,7 @@ void* delegation_interface(void* parm) {
       }
       if (found) continue;
       // go through sending sockets
-      for (int i =0; i < no_secondaries; ++i) {
+      for (unsigned int i =0; i < no_secondaries; ++i) {
         if (secondaries[i].socket_tcp == -1) continue;
         if (FD_ISSET(secondaries[i].socket_tcp, &sending)) {
           // can send some more data on this socket
@@ -825,9 +825,9 @@ void sync_with_primary(
     int port_sctp, 
     int port_tcp, 
     int no_procs, 
-    int* node_index,
-    int* tc_holes,
-    int* no_tc_holes) {
+    unsigned int* node_index,
+    unsigned int* tc_holes,
+    unsigned int* no_tc_holes) {
   int sock;
   sock = socket(AF_INET, SOCK_STREAM, 0);
   if (sock < 0) { perror("socket"); exit(EXIT_FAILURE); }
@@ -935,7 +935,7 @@ void sync_with_primary(
   } while (1);
   LOG(INFO, "got information about %d nodes, including myself\n", no_secondaries);
   LOG(DEBUG, "Running with nodes:\n");
-  for (int i = 0; i < no_secondaries; ++i) {
+  for (unsigned int i = 0; i < no_secondaries; ++i) {
     LOG(DEBUG, "%s:%d:%d\n", secondaries[i].addr, secondaries[i].port_sctp, secondaries[i].port_tcp);
   }
 }
@@ -945,7 +945,7 @@ void send_quit_message_to_secondaries() {
   net_request_t req;
   req.type = REQ_QUIT;
 
-  for (int i = 1; i < no_secondaries; ++i) {  // we are at index 0
+  for (unsigned int i = 1; i < no_secondaries; ++i) {  // we are at index 0
     int res = //sctp_sendmsg(secondaries[i].socket_sctp, 
               sctp_sendmsg(delegation_sock_sctp, 
                        &req, 
@@ -961,7 +961,7 @@ void send_quit_message_to_secondaries() {
 
 }
 
-void send_sctp_msg(int node_index, void* buf, int len) {
+void send_sctp_msg(unsigned int node_index, void* buf, int len) {
   assert(node_index != NODE_INDEX);  // we don't want to send to ourselves
   ((net_request_t*)buf)->node_index = NODE_INDEX;  // fill in sender
   int res = //sctp_sendmsg(secondaries[node_index].socket_sctp, 
@@ -982,7 +982,7 @@ void send_sctp_msg(int node_index, void* buf, int len) {
   if (res < 0) handle_error("sctp_sendmsg");
 }
 
-void send_ping(int node_index, int identifier, int request_unblock, i_struct* istructp) {
+void send_ping(unsigned int node_index, int identifier, int request_unblock, i_struct* istructp) {
   req_ping req;
   req.type = REQ_PING;
   req.node_index = NODE_INDEX;
@@ -1099,7 +1099,7 @@ void allocate_remote_tcs(int node_index, int proc_index, int no_tcs, int* tcs, i
 }
 
 void populate_remote_tcs(
-    int node_index,  // destination node
+    unsigned int node_index,  // destination node
     //int* tcs,  // indexes of the TC's on the destination node
     thread_range_t* ranges,
     int no_ranges,
@@ -1135,7 +1135,7 @@ void populate_remote_tcs(
   send_sctp_msg(node_index, &req, sizeof(req));
 }
 
-void write_remote_istruct(int node_index, 
+void write_remote_istruct(unsigned int node_index, 
                           i_struct* istructp, 
                           long val, 
                           const tc_t* reader) {
@@ -1160,7 +1160,7 @@ void write_remote_istruct(int node_index,
  * node. This happens because, before copying them to the next thread, pointers in stubs are set to
  * point to locations in the next TC or in the FC. See write_argmem in tc.c
  */
-void write_remote_istruct_mem(int node_index, 
+void write_remote_istruct_mem(unsigned int node_index, 
                               i_struct* istructp, 
                               memdesc_stub_t val, 
                               memdesc_t* desc,
@@ -1243,7 +1243,7 @@ static void handle_req_create(const req_create* req) {
  * ranges, no_ranges - [IN] - array of ranges that need to be pushed; the contents are copied to an
  *                            internal data structure
  */
-void enqueue_push_request(int node_index, 
+void enqueue_push_request(unsigned int node_index, 
                           int pending_req_index, 
                           int remote_confirm_needed, 
                           const mem_range_t* ranges, 
@@ -1271,7 +1271,7 @@ void enqueue_push_request(int node_index,
 /*
  * Returns 0 if queue is empty, 1 otherwise
  */
-static int push_queue_not_empty(int node_index) {
+static int push_queue_not_empty(unsigned int node_index) {
   int res;
   assert(node_index < no_secondaries);
   pthread_spin_lock(&push_requests_locks[node_index]); 
@@ -1284,7 +1284,7 @@ static int push_queue_not_empty(int node_index) {
  * Returns 0 if queue is empty, 1 otherwise
  * req - [OUT] - the dequeued request
  */
-static int dequeue_push_request(int node_index, push_request_t* req) {
+static int dequeue_push_request(unsigned int node_index, push_request_t* req) {
   int res;
   assert(node_index < no_secondaries);
  

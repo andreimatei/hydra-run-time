@@ -12,6 +12,7 @@
 #define MAX_NODES 1000  // maximum number of nodes supported
 
 #define MIN(a,b) (((a)<(b))?(a):(b))
+#define MAX(a,b) (((a)>(b))?(a):(b))
 
 /*
  * Struct used for blocking until a network response targeting a specific such struct arrives.
@@ -40,12 +41,12 @@ typedef struct secondary {
   //int socket_sctp;  // socket to the delegation interface
 } secondary;
 extern secondary secondaries[1000];
-extern int no_secondaries;
+extern unsigned int no_secondaries;
 
 extern volatile int rt_init_done;
 extern pthread_spinlock_t rt_init_done_lock;
 
-extern int NODE_INDEX;
+extern unsigned int NODE_INDEX;
 
 #define handle_error(msg) \
   do { perror(msg); exit(EXIT_FAILURE); } while (0)

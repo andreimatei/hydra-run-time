@@ -180,16 +180,17 @@ extern int delegation_if_finished;
 
 
 //void* delegation_interface(void* parm);
-void send_ping(int node_index, int identifier, int request_unblock, i_struct* istructp);
+void send_ping(unsigned int node_index, int identifier, int request_unblock, i_struct* istructp);
 void init_network();
 void create_delegation_socket(int* port_sctp_out, int* port_tcp_out);
-void sync_with_primary(int port_sctp, int port_tcp, int no_procs, int* node_index, int* tc_holes, int* no_tc_holes);
+void sync_with_primary(int port_sctp, int port_tcp, int no_procs, 
+                       unsigned int* node_index, unsigned int* tc_holes, unsigned int* no_tc_holes);
 void send_quit_message_to_secondaries();
 pending_request_t* request_remote_tcs(
     int node_index, int proc_index, int no_tcs);
 void block_for_allocate_response(pending_request_t* req, resp_allocate* resp);
 void populate_remote_tcs(
-    int node_index,  // destination node
+    unsigned int node_index,  // destination node
     //int* tcs,  // indexes of the TC's on the destination node
     thread_range_t* ranges,
     int no_ranges,
@@ -206,16 +207,16 @@ void populate_remote_tcs(
                                         // default_place_policy == INHERIT_DEFAULT_PLACE
     );
 void allocate_remote_tcs(int node_index, int proc_index, int no_tcs, int* tcs, int* no_allocated_tcs);
-void write_remote_istruct(int node_index, i_struct* istructp, long val, const tc_t* reader_tc);
-void write_remote_istruct_mem(int node_index, 
+void write_remote_istruct(unsigned int node_index, i_struct* istructp, long val, const tc_t* reader_tc);
+void write_remote_istruct_mem(unsigned int node_index, 
                               i_struct* istructp, 
                               memdesc_stub_t val, 
                               memdesc_t* desc,
                               int copy_desc,
                               const tc_t* reader);
 pending_request_t* get_pending_request_slot(tc_t* blocking_tc);
-void send_sctp_msg(int node_index, void* buf, int len);
-void enqueue_push_request(int node_index, 
+void send_sctp_msg(unsigned int node_index, void* buf, int len);
+void enqueue_push_request(unsigned int node_index, 
                           int pending_req_index, 
                           int remote_confirm_needed, 
                           const mem_range_t* ranges, 

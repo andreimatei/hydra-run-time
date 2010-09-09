@@ -12,7 +12,7 @@
 #include <sys/time.h>
 #include <svp/delegate.h>
 
-extern int NODE_INDEX;  // index of the current node
+extern unsigned int NODE_INDEX;  // index of the current node
 
 void exit(int);
 
@@ -57,9 +57,9 @@ typedef struct {
 
 
 struct tc_ident_t {
-  int node_index;
-  int proc_index;
-  int tc_index;
+  unsigned int node_index;
+  unsigned int proc_index;
+  unsigned int tc_index;
   struct tc_t* tc;
 };
 typedef struct tc_ident_t tc_ident_t;
@@ -110,8 +110,8 @@ struct proc_assignment {
   unsigned int load_percentage;  // between 1 and 100, the percentage of threads that will run on this
                                  // proc, out of all the threads in the family.
   unsigned int no_tcs;
-  int node_index;
-  int proc_index;
+  unsigned int node_index;
+  unsigned int proc_index;
 };
 typedef struct proc_assignment proc_assignment;
 
@@ -156,7 +156,7 @@ typedef struct {
                             //they don't need to be istructs, since they will only be read after the sync,
                             //but we made them istructs anyway to use the infrastructure for writing them
                             //remotely.
-  int index;  // the index of this fam_context among all the fam_contexts allocated on it's node
+  unsigned int index;  // the index of this fam_context among all the fam_contexts allocated on it's node
 
   memdesc_t shared_descs[MAX_ARGS_PER_FAM];  // space for the descriptors corresponding to the stubs written by the
                                              // last thread in the fam. They will be copied here when the shared
@@ -166,6 +166,14 @@ typedef struct {
                                              // descriptor.
 
 } fam_context_t;
+
+/* Mapping hint provided (usually indirectly) by the programmer */
+typedef struct{
+  unsigned int  hint_nodes;
+  unsigned int  hint_procs;
+  unsigned int  hint_tcs;
+  unsigned long hint_block;
+}mapping_hint_t;
 
 struct tc_t {
   tc_ident_t ident;  // identity of this TC
@@ -320,14 +328,12 @@ fam_context_t* allocate_fam(
 
 mapping_decision map_fam(
     thread_func func __attribute__((unused)),
-    long no_threads  __attribute__((unused)),
-    sl_place_t place,
-    int gencallee,  // 1 if the function can be executed on other nodes than the parent, 0 otherwise
-    //mapping_hint_t hint,
-    long block,
+    unsigned long no_threads,
+    sl_place_t place,  // place where the family has been delegated to
+    bool gencallee,  // 1 if the function can be executed on other nodes than the parent, 0 otherwise
+    mapping_hint_t hint,
     struct mapping_node_t* parent_id);
 
-//tc_ident_t create_fam(fam_context_t* fc);
 tc_ident_t create_fam(fam_context_t* fc, 
                       thread_func func,
                       long real_fam_start_index,
@@ -485,13 +491,13 @@ void write_istruct_different_proc(
     volatile i_struct* istructp,
     long val,
     tc_t* potentially_blocked_tc);
-void write_istruct(int node_index,
+void write_istruct(unsigned int node_index,
                    volatile i_struct* istructp,
                    long val, 
                    const tc_ident_t* reading_tc,
                    int is_mem);
 
-void write_argmem(int node_index,
+void write_argmem(unsigned int node_index,
                   volatile i_struct* istructp,
                   memdesc_stub_t stub,
                   memdesc_t* desc_dest,
@@ -531,7 +537,6 @@ static inline long timediff_now(struct timeval t) {
   return micros/1000;
 }
 
-void send_ping(int node_index, int identifier, int request_unblock, i_struct* istructp);
 
 /*
  * Resolve PLACE_DEFAULT and PLACE_LOCAL for current context.

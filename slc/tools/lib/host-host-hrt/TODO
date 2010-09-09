@@ -1,6 +1,7 @@
-- fix map_fam
 - fix network.c and remote allocation in tc.c
 - fix write_global() in tc.c for network
+- for the mapping function spread, the default place for threads in the new family must be PID (the place
+    to which we delegate the new family).
 
 - inspect uses of gettimeofday()
 
@@ -38,6 +39,7 @@ add a version of send_sctp_msg that send messages with the SCTP_UNORDERED flag, 
 TODO FOR PERFORMANCE:
 - remove -pg flag from build of library and program
 - make a single call to grab_available_tc() for getting many tc's at the same time when necessary
+- inspect uses of gettimeofday()
 
 
 TO DISCUSS:

@@ -47,10 +47,10 @@
 
 #define NO_FAM_CONTEXTS_PER_PROC 1024
 
-int NODE_INDEX = -1;
+unsigned int NODE_INDEX = 0;
 //#define NODE_INDEX 16L
 //void* node_start_addr = (void*)(NODE_INDEX * VM_PER_NODE);
-int NO_PROCS = 2;  // the number of processors that will be created and used on the current node
+unsigned int NO_PROCS = 2;  // the number of processors that will be created and used on the current node
 processor_t _processor[MAX_PROCS_PER_NODE];
 
 
@@ -59,8 +59,8 @@ static char primary_address[100];  // ip address of the primary node (for now, i
 static int primary_port;  // see above
 
 
-static int tc_holes[1000];
-static int no_tc_holes = 0;
+static unsigned int tc_holes[1000];
+static unsigned int no_tc_holes = 0;
 
 static const char* log_prefix[20] = {"[CRASH]!!!!!!!!!!!!!!!!!!!! ",  // 0
                               "[CRASH+1] ",  // 1
@@ -253,13 +253,106 @@ int tc_is_valid(int tc_index) {
 
 
 
+
+
+mapping_hint_t interpret_mf_distribute_ex(unsigned int nodes, 
+                                          unsigned int procs,
+                                          unsigned int tcs,
+                                          unsigned long block) {
+  mapping_hint_t r;
+  r.hint_nodes = nodes; r.hint_procs = procs; r.hint_tcs = tcs; r.hint_block = block;
+  return r;
+}
+
+mapping_hint_t interpret_mf_distribute(sl_place_t place,
+                                       unsigned long no_threads,
+                                       bool independent,
+                                       unsigned long n) {
+  mapping_hint_t r;
+  if (no_threads == 0) no_threads = 1;
+  if (n == 0) n = 1;
+  sl_place_t final_place = _place_2_canonical_place(place);
+  if (final_place.tc_index != -1) {
+    r.hint_nodes = r.hint_procs = r.hint_tcs = 1;
+    r.hint_block = no_threads;
+  } else if (final_place.proc_index != -1) {
+    r.hint_nodes = 1; r.hint_procs = 1; 
+    r.hint_tcs = MAX(no_threads / n, 1); 
+    r.hint_block = independent ? n : 1;
+  } else if (final_place.node_index != -1) {
+    r.hint_nodes = 1; r.hint_procs = MAX(no_threads / n, 1); r.hint_tcs = 1; 
+    r.hint_block = independent ? n : 1;
+  } else {
+    r.hint_nodes = no_secondaries; 
+    r.hint_procs = 1; r.hint_tcs = 1; 
+    r.hint_block = independent ? n : 1;
+  }
+
+  return r;
+}
+
+mapping_hint_t interpret_mf_spread(sl_place_t place,
+                                   unsigned long no_threads,
+                                   bool independent,
+                                   unsigned long n) {
+  return interpret_mf_distribute(place, no_threads, independent, n);
+}
+
+mapping_hint_t interpret_mf_none(sl_place_t place,
+                                 unsigned long no_threads,
+                                 bool independent,
+                                 unsigned long block) {
+  return interpret_mf_spread(place, no_threads, independent, block); 
+}
+
+static void figure_out_fam_distribution(sl_place_t place,
+                                        bool gencallee,
+                                        unsigned long no_threads,
+                                              
+                                        mapping_hint_t hint,
+
+                                        unsigned int* no_nodes,
+                                        unsigned int* no_procs,
+                                        unsigned int* no_tcs,
+                                        unsigned long* block,
+                                        unsigned long* no_generations
+                                        ) {
+
+  sl_place_t final_place = _place_2_canonical_place(place);
+  assert(hint.hint_nodes > 0 && hint.hint_procs > 0 && hint.hint_tcs > 0 && hint.hint_block > 0);
+  assert(hint.hint_block <= no_threads);
+
+  if (!gencallee && (final_place.node_index != -1)) {
+    assert(final_place.node_index == (signed)_cur_tc->ident.node_index);
+  }
+
+  // limit by resources
+  hint.hint_nodes = MIN(hint.hint_nodes, no_secondaries);
+  hint.hint_procs = MIN(hint.hint_procs, NO_PROCS);
+  hint.hint_tcs   = MIN(hint.hint_tcs,   NO_TCS_PER_PROC);
+
+  // limit by block size, make sure each TC has at least a chunk
+  unsigned long no_chunks = no_threads / hint.hint_block;
+  assert(no_chunks > 0);
+  hint.hint_nodes = MIN(hint.hint_nodes, no_chunks);
+  hint.hint_procs = MIN(hint.hint_procs, no_chunks / hint.hint_nodes);
+  hint.hint_tcs   = MIN(hint.hint_tcs, no_chunks / (hint.hint_nodes * hint.hint_procs));
+
+  unsigned long threads_per_gen = hint.hint_nodes * hint.hint_procs * hint.hint_tcs * hint.hint_block;
+  *no_generations = no_threads / threads_per_gen;
+
+  *no_nodes = hint.hint_nodes;
+  *no_procs = hint.hint_procs;
+  *no_tcs   = hint.hint_tcs; 
+  *block    = hint.hint_block;
+}
+
 mapping_decision map_fam(
     thread_func func __attribute__((unused)),
-    long no_threads  __attribute__((unused)),
+    unsigned long no_threads,
     sl_place_t place,  // place where the family has been delegated to
-    int gencallee,  // 1 if the function can be executed on other nodes than the parent, 0 otherwise
-    //mapping_hint_t hint,
-    long block,
+    bool gencallee,  // 1 if the function can be executed on other nodes than the parent, 0 otherwise
+    mapping_hint_t hint,
     struct mapping_node_t* parent_id) {
 
   LOG(DEBUG, "map_fam: mapping fam of %d threads\n", 
@@ -273,80 +366,32 @@ mapping_decision map_fam(
 
   sl_place_t final_place = _place_2_canonical_place(place);
 
-  if (block == -1 || block == 0) block = no_threads;
-
-  int no_nodes = 1, no_procs = 1, no_tcs = 1;
-  if (final_place.tc_index != -1) {
-    assert(final_place.node_index != -1 && final_place.proc_index != -1);
-    assert(final_place.tc_index == _cur_tc->ident.tc_index);
-  } else if (final_place.proc_index != -1) {
-    no_tcs = MIN(NO_TCS_PER_PROC, no_threads / block);
-  } else if (final_place.node_index != -1 || no_secondaries == 1) {
-    no_procs = MIN(NO_PROCS, no_threads / block);
-  } else {
-    no_nodes = MIN(no_secondaries, no_threads / block);
-  }
-
-  if (!gencallee) {
-    if (final_place.node_index != -1) {
-      assert(final_place.node_index == _cur_tc->ident.node_index);
-    }
-    no_nodes = 1;
-  }
-
-  /*
-  if (final_place.node_index != -1 && hint.block_node != -1) {
-    hint.block_proc *= hint.block_node;
-    hint.block_node = -1;
-    if (hint.block_proc < 0) hint.block_proc *= -1;
-  }
-  if (final_place.proc_index != -1 && hint.block_proc != -1) {
-    hint.block_tc *= hint.block_proc;
-    hint.block_proc = -1;
-    if (hint.block_tc < 0) hint.block_tc *= -1;
-  }
-  if (final_place.tc_index != -1 && hint.block_tc != -1) {
-    hint.block_tc = -1;
-  }
-  */
-
-  /*
-  if (hint.block_node != -1) {
-    no_nodes = no_threads / hint.block_node;
-    if (no_nodes > no_secondaries) {
-      no_nodes = no_secondaries;
-    }
-  } else if (hint.block_proc != -1) {
-      no_procs = no_threads / hint.block_proc;
-      if (no_procs > NO_PROCS) {  // TODO: take into account that different nodes might have different NO_PROCS
-        no_procs = NO_PROCS;
-      }
-  } else if (hint.block_tc != -1) {
-    no_tcs = no_threads / hint.block_tc;
-    if (no_tcs > NO_TCS_PER_PROC) {
-      no_tcs = NO_TCS_PER_PROC;
-    }
-  }
-  */
+  unsigned int no_nodes, no_procs, no_tcs;
+  unsigned long block;
+  unsigned long no_generations;
+  figure_out_fam_distribution(place, gencallee, no_threads, hint,
+                              &no_nodes, &no_procs, &no_tcs, &block, &no_generations);
 
   assert(no_nodes <= no_secondaries);
   assert(no_procs <= NO_PROCS);
   assert(no_tcs <= NO_TCS_PER_PROC);
 
-  int start_node = final_place.node_index != -1 ? final_place.node_index : _cur_tc->ident.node_index;
-  int start_proc = final_place.proc_index != -1 ? final_place.proc_index : _cur_tc->ident.proc_index;
+  rez.no_ranges_per_tc = no_generations;
+
+  int start_node = final_place.node_index != -1 ? (unsigned)final_place.node_index : _cur_tc->ident.node_index;
+  int start_proc = final_place.proc_index != -1 ? (unsigned)final_place.proc_index : _cur_tc->ident.proc_index;
   //int start_tc   = final_place.tc_index   != -1 ? final_place.tc_index   : _cur_tc->ident.tc_index;
 
   int load_percentage = 100 / (no_nodes * no_procs);
   rez.should_inline = (final_place.tc_index != -1
-                       && final_place.node_index == NODE_INDEX 
-                       && final_place.proc_index == _cur_tc->ident.proc_index
-                       && final_place.tc_index == _cur_tc->ident.tc_index);
+                       && final_place.node_index == (signed)NODE_INDEX 
+                       && final_place.proc_index == (signed)_cur_tc->ident.proc_index
+                       && final_place.tc_index   == (signed)_cur_tc->ident.tc_index);
   if (rez.should_inline) assert(no_nodes == 1 && no_procs == 1 && no_tcs == 1);
   rez.no_proc_assignments = no_nodes * no_procs;
   assert(rez.no_proc_assignments <= MAX_NO_PROC_ASSIGNMENTS_PER_MAPPING);
-  for (int i = 0; i < no_nodes; ++i) {
-    for (int j = 0; j < no_procs; ++j) {
+  for (unsigned int i = 0; i < no_nodes; ++i) {
+    for (unsigned int j = 0; j < no_procs; ++j) {
       rez.proc_assignments[i * no_procs + j].node_index = (start_node + i) % no_secondaries;
       rez.proc_assignments[i * no_procs + j].proc_index = (start_proc + j) % NO_PROCS;
       rez.proc_assignments[i * no_procs + j].no_tcs = no_tcs;
@@ -424,7 +469,7 @@ void allocate_local_tcs(int proc_index, tc_ident_t parent, unsigned int no_tcs,
 
 
 /*
- * Allocates a family context and thread contexts.
+ * Allocates a family context and thread contexts. Fills in the distribution field of the FC.
  * Returns NULL if resources couldn't be allocated (either no FC, or no TC's).
  */
 fam_context_t* allocate_fam(
@@ -1006,7 +1051,7 @@ void mmap_tc_ctrl_struct(int tc_index) {
       no_pages, addr);
 }
 
-void run_tc(int processor_index, tc_t* tc) {
+void run_tc(unsigned int processor_index, tc_t* tc) {
   //int jumped = 0;
   assert(tc->ident.proc_index == processor_index);
 
@@ -1134,7 +1179,7 @@ static void rt_init() {
   init_mem_comm();
 
   // init runnable_queue_locks
-  int i, j;
+  unsigned int i, j;
   for (i = 0; i < NO_PROCS; ++i) {
     if (pthread_spin_init((pthread_spinlock_t*)&runnable_queue_locks[i], PTHREAD_PROCESS_PRIVATE) != 0) {
       perror("pthread_spin_init:"); exit(1);
@@ -1164,7 +1209,7 @@ static void rt_init() {
   for (i = 0; i < NO_PROCS * NO_TCS_PER_PROC; ++i) {
     // check if we should skip this TC due to a hole in the vm
     int skip = 0;
-    for (int j = 0; j < no_tc_holes; ++j) {
+    for (unsigned int j = 0; j < no_tc_holes; ++j) {
       if (tc_holes[j] == i) {
         skip = 1;
         tc_valid[i] = 0;
@@ -1538,7 +1583,7 @@ extern void write_istruct_different_proc(
  * reading_tc corresponds to the TC that will (or already has) read the istruct
  */
 void write_istruct(//i_struct_fat_pointer istruct, 
-                   int node_index,  // destination node, if we're writing a remote istruct
+                   unsigned int node_index,  // destination node, if we're writing a remote istruct
                    volatile i_struct* istructp, 
                    long val, 
                    const tc_ident_t* reading_tc,
@@ -1591,7 +1636,7 @@ void write_istruct(//i_struct_fat_pointer istruct,
  * Writes a shared arg mem for the next sibling thread or the parent. Besides passing along the stub, it also
  * copies the associated descriptor to a different location and updates the stub to point to this new location. 
  */
-void write_argmem(int node_index,
+void write_argmem(unsigned int node_index,
                   volatile i_struct* istructp,
                   memdesc_stub_t stub,
                   memdesc_t* desc_dest,
@@ -2090,7 +2135,7 @@ int am_i_secondary() {
   return 1;
 }
 
-void get_vm_holes(int node_index, int* holes, int* no_holes) {
+void get_vm_holes(int node_index, unsigned int* holes, unsigned int* no_holes) {
   int j = 0;
   *no_holes = 0;
 
@@ -2217,7 +2262,7 @@ void start_nodes(int port_sctp, int port_tcp) {
   }
 
   // set sockets to blocking again
-  for (int i = 0; i < no_secondaries; ++i) {
+  for (unsigned int i = 0; i < no_secondaries; ++i) {
     int arg;
     if (secondaries[i].socket == -1) continue;  // nothing to do for ourselves
     if( (arg = fcntl(secondaries[i].socket, F_GETFL, NULL)) < 0) { 
@@ -2233,7 +2278,7 @@ void start_nodes(int port_sctp, int port_tcp) {
 
   // read from each until we get an '!'
   char buf[5000];
-  for (int i = 0; i < no_secondaries; ++i) {
+  for (unsigned int i = 0; i < no_secondaries; ++i) {
     if (secondaries[i].socket == -1) continue;  // nothing to do for ourselves
     LOG(INFO, "waiting for memory map from secondary %s\n", secondaries[i].addr); 
     int read_bytes = 0;
@@ -2288,7 +2333,7 @@ void start_nodes(int port_sctp, int port_tcp) {
   }
   
   LOG(DEBUG, "Running with nodes:\n");
-  for (int i = 0; i < no_secondaries; ++i) {
+  for (unsigned int i = 0; i < no_secondaries; ++i) {
     LOG(DEBUG, "%s:%d\n", secondaries[i].addr, secondaries[i].port_daemon);
   }
 
@@ -2303,9 +2348,9 @@ void start_nodes(int port_sctp, int port_tcp) {
   
   // transmit the index and all other nodes to each node
   LOG(INFO, "transmitting data to %d secondaries...\n", no_secondaries - 1);
-  for (int i = 0; i < no_secondaries; ++i) {
-    int holes[NO_TCS_PER_PROC * MAX_PROCS_PER_NODE];
-    int no_holes;
+  for (unsigned int i = 0; i < no_secondaries; ++i) {
+    unsigned int holes[NO_TCS_PER_PROC * MAX_PROCS_PER_NODE];
+    unsigned int no_holes;
     get_vm_holes(i, holes, &no_holes);
     if (secondaries[i].socket == -1) continue;  // nothing to do for this node (ourselves)
 
@@ -2314,7 +2359,7 @@ void start_nodes(int port_sctp, int port_tcp) {
     if (no_holes == 0) {
       strcat(buf, "-1;");  // signifies no holes
     } else {
-      for (int j = 0; j < no_holes; j++) {
+      for (unsigned int j = 0; j < no_holes; j++) {
         char s[no_holes * 10];
         if (j == no_holes - 1)
           sprintf(s, "%d", holes[j]);
@@ -2327,7 +2372,7 @@ void start_nodes(int port_sctp, int port_tcp) {
     LOG(DEBUG, "preparing buffer for secondary %s:%d\n", secondaries[i].addr, secondaries[i].port_daemon);
 
     // put all the addresses in the buffer
-    for (int j = 0; j < no_secondaries; ++j) {
+    for (unsigned int j = 0; j < no_secondaries; ++j) {
       char s[100];
       sprintf(s, "%s:%d:%d;", secondaries[j].addr, secondaries[j].port_sctp, secondaries[j].port_tcp);
       strcat(buf, s);
@@ -2348,7 +2393,7 @@ void start_nodes(int port_sctp, int port_tcp) {
   LOG(INFO, "done transmitting data to secondaries\n");
   
   // close all sockets
-  for (int i = 0; i < no_secondaries; ++i) {
+  for (unsigned int i = 0; i < no_secondaries; ++i) {
     if (secondaries[i].socket == -1) continue;  // nothing to do for ourselves
     if (close(secondaries[i].socket) < 0) handle_error("close");
   }
