@@ -264,7 +264,7 @@ void* _memactivate(memdesc_stub_t* stub,
  * Used by propagate operations.
  */
 // TODO: make this function static and remove it from sl_hrt.h. It was put there temporarily.
-void push_data(memdesc_stub_t stub, int dest_node) {
+void push_data(memdesc_stub_t stub, unsigned int dest_node) {
   //static int ping_id = 100;
   LOG(DEBUG, "mem-comm: push_data: pushing data to node %d (stub.S = %d)\n", dest_node, stub.S);
   if (dest_node == NODE_INDEX) return;  // nothing to do
@@ -326,7 +326,7 @@ void _mempropagate(memdesc_stub_t stub) {
  *  - node_index - [IN] - destination node
  *  - first_range - [IN] - first range of the descriptor described by stub
  */
-static pending_request_t* push_elems(int node_index, 
+static pending_request_t* push_elems(unsigned int node_index, 
                                      memdesc_stub_t stub, 
                                      mem_range_t first_range,
                                      int first_elem, 
@@ -390,6 +390,8 @@ void _memscatter_affine(fam_context_t* fc,
                         memdesc_stub_t stub, 
                         //mem_range_t first_range,
                         int a, int b, int c) {
+  // FIXME: TODO:
+  /*
   int start_thread, end_thread;
   int cur_node = -1;
   pending_request_t* pending_pushes[MAX_NODES];
@@ -437,6 +439,7 @@ void _memscatter_affine(fam_context_t* fc,
   for (int i = 0; i < no_pushes; ++i) {
     block_for_confirmation(pending_pushes[i]); 
   }
+  */
 }
 
 /*
@@ -446,13 +449,16 @@ void _memgather_affine(
     fam_context_t* fc,
     memdesc_stub_t stub, 
     int a, int b, int c) {
+  // FIXME: TODO:
+  
+  /*
   int start_thread, end_thread;
   int cur_node = -1;
   pending_request_t* pending_pulls[MAX_NODES];
   int no_pulls = 0;
   assert(get_stub_pointer(stub)->no_ranges > 0);
   mem_range_t first_range = get_stub_pointer(stub)->ranges[0];
-
+  
   for (int i = 0; i < fc->no_ranges; ++i) {
     thread_range_t r = fc->ranges[i];
     if (r.dest.node_index != cur_node) {
@@ -482,6 +488,7 @@ void _memgather_affine(
       block_for_confirmation(pending_pulls[i]); 
     }
   }
+  */
 }
 
 

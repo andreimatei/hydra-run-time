@@ -57,9 +57,9 @@ typedef struct {
 
 
 struct tc_ident_t {
-  unsigned int node_index;
-  unsigned int proc_index;
-  unsigned int tc_index;
+  int node_index;
+  int proc_index;
+  int tc_index;
   struct tc_t* tc;
 };
 typedef struct tc_ident_t tc_ident_t;
@@ -469,6 +469,25 @@ static inline void _return_to_scheduler() {
 //void rt_init();
 //void rt_quit();
 
+mapping_hint_t _interpret_mf_distribute_ex(unsigned int nodes, 
+                                           unsigned int procs,
+                                           unsigned int tcs,
+                                           unsigned long block);
+
+mapping_hint_t _interpret_mf_distribute(sl_place_t place,
+                                       unsigned long no_threads,
+                                       bool independent,
+                                       unsigned long n);
+
+mapping_hint_t _interpret_mf_spread(sl_place_t place,
+                                   unsigned long no_threads,
+                                   bool independent,
+                                   unsigned long n);
+
+mapping_hint_t _interpret_mf_none(sl_place_t place,
+                                 unsigned long no_threads,
+                                 bool independent,
+                                 unsigned long block);
 
 // called by fam_main at the end, instead of the regular thread function exit code
 void end_main();

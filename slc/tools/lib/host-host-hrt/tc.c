@@ -251,20 +251,16 @@ int tc_is_valid(int tc_index) {
   return tc_valid[tc_index];
 }
 
-
-
-
-
-mapping_hint_t interpret_mf_distribute_ex(unsigned int nodes, 
-                                          unsigned int procs,
-                                          unsigned int tcs,
-                                          unsigned long block) {
+mapping_hint_t _interpret_mf_distribute_ex(unsigned int nodes, 
+                                           unsigned int procs,
+                                           unsigned int tcs,
+                                           unsigned long block) {
   mapping_hint_t r;
   r.hint_nodes = nodes; r.hint_procs = procs; r.hint_tcs = tcs; r.hint_block = block;
   return r;
 }
 
-mapping_hint_t interpret_mf_distribute(sl_place_t place,
+mapping_hint_t _interpret_mf_distribute(sl_place_t place,
                                        unsigned long no_threads,
                                        bool independent,
                                        unsigned long n) {
@@ -291,18 +287,18 @@ mapping_hint_t interpret_mf_distribute(sl_place_t place,
   return r;
 }
 
-mapping_hint_t interpret_mf_spread(sl_place_t place,
-                                   unsigned long no_threads,
-                                   bool independent,
-                                   unsigned long n) {
-  return interpret_mf_distribute(place, no_threads, independent, n);
+mapping_hint_t _interpret_mf_spread(sl_place_t place,
+                                    unsigned long no_threads,
+                                    bool independent,
+                                    unsigned long n) {
+  return _interpret_mf_distribute(place, no_threads, independent, n);
 }
 
-mapping_hint_t interpret_mf_none(sl_place_t place,
-                                 unsigned long no_threads,
-                                 bool independent,
-                                 unsigned long block) {
-  return interpret_mf_spread(place, no_threads, independent, block); 
+mapping_hint_t _interpret_mf_none(sl_place_t place,
+                                  unsigned long no_threads,
+                                  bool independent,
+                                  unsigned long block) {
+  return _interpret_mf_spread(place, no_threads, independent, block); 
 }
 
 static void figure_out_fam_distribution(sl_place_t place,
@@ -378,8 +374,8 @@ mapping_decision map_fam(
 
   rez.no_ranges_per_tc = no_generations;
 
-  int start_node = final_place.node_index != -1 ? (unsigned)final_place.node_index : _cur_tc->ident.node_index;
-  int start_proc = final_place.proc_index != -1 ? (unsigned)final_place.proc_index : _cur_tc->ident.proc_index;
+  int start_node = final_place.node_index != -1 ? final_place.node_index : _cur_tc->ident.node_index;
+  int start_proc = final_place.proc_index != -1 ? final_place.proc_index : _cur_tc->ident.proc_index;
   //int start_tc   = final_place.tc_index   != -1 ? final_place.tc_index   : _cur_tc->ident.tc_index;
 
   int load_percentage = 100 / (no_nodes * no_procs);
@@ -803,7 +799,7 @@ tc_ident_t create_fam(fam_context_t* fc,
   for (size_t i = 0; i < dist->no_reservations; ++i) {
     const proc_reservation* res = &dist->reservations[i];
    
-    if (res->first_tc.node_index == NODE_INDEX) {
+    if (res->first_tc.node_index == (signed)NODE_INDEX) {
       if (_cur_tc != NULL) {  // this will be NULL when creating root_fam
         populate_local_tcs(func,
                          res->no_tcs,
@@ -1030,7 +1026,7 @@ long sync_fam(fam_context_t* fc, /*long* shareds_dest,*/ int no_shareds, ...) {
   }
   va_end(ap);
   //fc->empty = 1;  // mark the FC as reusable
-  assert(_cur_tc->ident.proc_index == (fc->index / NO_FAM_CONTEXTS_PER_PROC));  // sanity check; a FC should be used only
+  assert(_cur_tc->ident.proc_index == (signed)(fc->index / NO_FAM_CONTEXTS_PER_PROC));  // sanity check; a FC should be used only
                                                 // on it's processor
   free_fc(fc->index / NO_FAM_CONTEXTS_PER_PROC, fc->index % NO_FAM_CONTEXTS_PER_PROC);
   return 0;  // TODO: what exactly is this return code supposed to be?
@@ -1053,7 +1049,7 @@ void mmap_tc_ctrl_struct(int tc_index) {
 
 void run_tc(unsigned int processor_index, tc_t* tc) {
   //int jumped = 0;
-  assert(tc->ident.proc_index == processor_index);
+  assert(tc->ident.proc_index == (signed)processor_index);
 
   _cur_tc = tc;
   LOG(DEBUG, "run_tc: jumping to user code. proc_index = %d\n", processor_index);
@@ -2544,7 +2540,7 @@ void write_global(fam_context_t* fc, int index, long val, bool is_mem) {
   // write the global to every TC that will run part of the family
 
   for (i = 0; i < fc->distribution.no_reservations; ++i) {
-    if (fc->distribution.reservations[i].first_tc.node_index == NODE_INDEX) {
+    if (fc->distribution.reservations[i].first_tc.node_index == (signed)NODE_INDEX) {
       write_global_to_chain_of_tcs(fc->distribution.reservations[i].first_tc.tc, index, val, is_mem);
     } else {
       assert(0);

@@ -138,6 +138,127 @@ class Create_2_HydraCall(ScopedVisitor):
         return arg
 
 
+    def emit_call_allocate_fam(self, create, mapping_decision_var):
+        newbl = Block()
+
+        fam_context_var = CVarDecl(loc = create.loc_end, name = 'alloc$%s' % create.label,
+                                   ctype = 'fam_context_t*')
+        self.cur_scope.decls += fam_context_var
+        self.__cur_fam_context = fam_context_var  # to be used when visiting arguments of type mem_t
+        
+        no_shareds = str(self.get_no_shareds())
+        no_globals = str(self.get_no_globals())
+        
+        start_index = CVarUse(decl = create.cvar_start)
+        end_index = CVarUse(decl = create.cvar_limit) + " - 1"  # this is now inclusive
+        step = CVarUse(decl = create.cvar_step)
+        
+        no_threads_block = Opaque('') + '((' + end_index + ' - ' + start_index + ' + 1) / ' + step + ')'
+
+        newbl += CVarSet(decl = fam_context_var, rhs = (
+                    flatten(create.loc_end, 'allocate_fam(')
+                    + no_threads_block            # no_threads
+                    + ', 0'                       # parent_id. NULL.
+                    + ', &' +  CVarUse(decl = mapping_decision_var)
+                    + ')'))
+        newbl += ';\n'
+        return newbl, fam_context_var
+
+    def emit_call_map_fam(self, funvar, create, lowcreate, gencallee):
+        newbl = Block()
+    
+        mapping_decision_var = CVarDecl(loc = create.loc_end, name = 'map$%s' % create.label, ctype = 'mapping_decision')
+        self.cur_scope.decls += mapping_decision_var
+        
+        start_index = CVarUse(decl = create.cvar_start)
+        end_index = (Opaque('(') 
+                    + CVarUse(decl = create.cvar_limit) + " - 1"  # this is now inclusive
+                    + Opaque(')'))
+        step = CVarUse(decl = create.cvar_step)
+        mapspec = create.mapping.get_attr("mapping", None)
+        default_place_policy = Opaque('INHERIT_DEFAULT_PLACE')  # inherit from the parent
+        
+        # if statically delegating to PLACE_LOCAL, and a jump to the sequential create
+        #TODO(kena): is there a better way to test for PLACE_LOCAL on the following line?
+        if create.place.__len__() == 1 and create.place.__getitem__(0).text.strip() == "PLACE_LOCAL":
+            print 'found delegation to PLACE_LOCAL; skipping mapping and allocation'
+            newbl += CGoto(target = lowcreate.target_next) + '; // compiler detected delegation to PLACE_LOCAL, so jump to creation of sequential version\n'
+        else:
+            print "didn't find delegation to PLACE_LOCAL %s \"%s\"" % (create.place.__len__(), create.place.__getitem__(0).text)
+
+        # add a dynamic jump to the sequential create
+        newbl += (Opaque('if ( _places_equal(') + CVarUse(decl = create.cvar_place) + ', PLACE_LOCAL)) {'
+                  + CGoto(target = lowcreate.target_next) + ';}\n')
+        
+        # emit a call to interpret the mapping function
+        mapping_hint_var = CVarDecl(loc = create.loc_end, name = 'mapping_hint%s' % create.label, ctype = 'mapping_hint_t')
+        self.cur_scope.decls += mapping_hint_var
+        no_threads_block = Opaque('') + '((' + end_index + ' - ' + start_index + ' + 1) / ' + step + ')'
+
+        if mapspec is not None:
+            mf = mapspec.mf  # the mapping function
+            if mf == "spread":
+                newbl += CVarSet(decl = mapping_hint_var, rhs = (
+                            Opaque('_interpret_mf_spread(')
+                            + create.place     # place
+                            + ', ' + no_threads_block
+                            + ', ' + ('1' if self.get_no_shareds() == 0 else '0')  #independent
+                            + ', ' +mapspec.n
+                            + ')'
+                            ))
+                # TODO: set the default_place_policy such that create.place becames the default place for
+                # all the threads in the new family. Currently we don't have such a policy.
+            elif mf == "distribute":
+                default_place_policy = mapspec.m
+                newbl += CVarSet(decl = mapping_hint_var, rhs = (
+                            Opaque('_interpret_mf_distribute(')
+                            + create.place     # place
+                            + ', ' + no_threads_block
+                            + ', ' + ('1' if self.get_no_shareds() == 0 else '0')  #independent
+                            + ', ' + mapspec.n
+                            + ')'
+                            ))
+                newbl += Opaque(';\n')
+            elif mf == "distribute_ex":
+                default_place_policy = mapspec.default_place_policy
+                newbl += CVarSet(decl = mapping_hint_var, rhs = (
+                            Opaque('_interpret_mf_distribute_ex(')
+                                + mapspec.nodes
+                                + ', ' + mapspec.procs
+                                + ', ' + mapspec.tcs
+                                + ', ' + mapspec.block
+                                + ')'
+                            ))
+                newbl += Opaque(';\n')
+            else:
+                die("unsupported mapping")
+        else:
+            newbl += CVarSet(decl = mapping_hint_var, rhs = (
+                         Opaque('_interpret_mf_spread(')
+                         + create.place     # place
+                         + ', ' + no_threads_block
+                         + ', ' + ('1' if self.get_no_shareds() == 0 else '0')  #independent
+                         + ', ' + create.block
+                         + ')'
+                         ))
+            newbl += Opaque(';\n')
+        
+        # emit a call to map_fam
+        newbl += CVarSet(decl = mapping_decision_var, rhs = (
+                    flatten(create.loc_end, 'map_fam(')
+                    + '&' + gen_meta_loop_fun_name(funvar)          # func
+                    + ', ' + no_threads_block                       # no_threads
+                    + ', ' + create.place                           # place
+                    + ', ' + gencallee                              # gencallee
+                    + ', ' + CVarUse(decl = mapping_hint_var)       # hint
+                    + ', 0'                                         # parent_id. NULL.
+                    + ')' 
+                    ))
+        newbl += Opaque(';\n')
+
+        return newbl, mapping_decision_var, default_place_policy
+
+
     def visit_lowcreate(self, lc):
         cr = self.cur_scope.creates[lc.label]
 
@@ -182,6 +303,7 @@ class Create_2_HydraCall(ScopedVisitor):
         self.__cur_cr = cr
 
         # expand call to map_fam(..)
+        """
         mapping_decision_var = CVarDecl(loc = cr.loc_end, name =
                 'map$%s' % lbl, ctype = 'mapping_decision')
         self.cur_scope.decls += mapping_decision_var
@@ -240,6 +362,10 @@ class Create_2_HydraCall(ScopedVisitor):
 
         mapping_call = CVarSet(decl = mapping_decision_var, rhs = rrhs)
         newbl.append(mapping_call + ';\n')
+        """
+
+        mapcall, mapping_decision_var, default_place_policy = self.emit_call_map_fam(funvar, cr, lc, gencallee)
+        newbl.append(mapcall)
 
         #test is the mapping engine said we should inline the family
         newbl.append(
@@ -248,6 +374,7 @@ class Create_2_HydraCall(ScopedVisitor):
                     )
 
         #expand call to allocate_fam()
+        """
         fam_context_var = CVarDecl(loc = cr.loc_end, name = 'alloc$%s' % lbl,
                                    ctype = 'fam_context_t*')
         self.cur_scope.decls += fam_context_var
@@ -255,11 +382,17 @@ class Create_2_HydraCall(ScopedVisitor):
 
         no_shareds = str(self.get_no_shareds())
         no_globals = str(self.get_no_globals())
+        
+        start_index = CVarUse(decl = cr.cvar_start)
+        end_index = CVarUse(decl = cr.cvar_limit) + " - 1"  # this is now inclusive
+        step = CVarUse(decl = cr.cvar_step)
+        
+        no_threads_block = Opaque('') + '((' + end_index + ' - ' + start_index + ' + 1) / ' + step + ')'
        
         rrhs = (flatten(cr.loc_end, 'allocate_fam(')
                 #+ start + ', ' \
                 #+ end_index + ', ' + step + ', 0, &' + CVarUse(decl = mapping_decision_var) + ')'
-                + ', (' + end_index + ' - ' + start + '+ 1) / ' + step    # no_threads
+                + ', ' + no_threads_block    # no_threads
                 + ', 0'  # mapping parent
                 + ', &' + CVarUse(decl = mapping_decision_var)
                 + ')')
@@ -267,7 +400,11 @@ class Create_2_HydraCall(ScopedVisitor):
         allocate_call = CVarSet(decl = fam_context_var, 
                                rhs = rrhs)
         newbl.append(allocate_call + ';\n')
-        
+        """
+       
+        allocate_call, fam_context_var = self.emit_call_allocate_fam(cr, mapping_decision_var)
+        newbl.append(allocate_call)
+
         # if allocation failed, jump to next target, if available
         newbl.append(Opaque('if (') + CVarUse(decl = fam_context_var) + ' == 0) {\n')
         if lc.target_next is not None:
@@ -313,6 +450,7 @@ class Create_2_HydraCall(ScopedVisitor):
         if not(self.__callist):
             self.__callist.append(flatten(None, ", 0"))
 
+        no_shareds = str(self.get_no_shareds())
 
         sync_call = flatten(cr.loc_end, "sync_fam(") + \
                     CVarUse(decl = fam_context_var) + ', ' + str(no_shareds) # + \
@@ -456,7 +594,7 @@ class TFun_2_HydraCFunctions(DefaultVisitor):
                               param.index) + b + ')')
             elif self.__state == 2 or self.__state == 3: #end and generic
                 newbl.append(flatten(setp.loc,  # end and generic are passed the array of shareds as an argument
-                             'write_istruct(next->node_index, &shareds[_cur_tc->current_generation][%d],' % param.index) \
+                             'write_istruct(next->node_index, &shareds[%d],' % param.index) \
                              + b + ', next, 0);')
             else:
                 assert(0)
@@ -527,9 +665,16 @@ class TFun_2_HydraCFunctions(DefaultVisitor):
         else:
             qual = "extern"
 
+        newitems = Block();
+        #TODO: what does keep mean? :)
         if not keep:
             #newitems = flatten(fundecl.loc, "%s void " % qual) + gen_loop_fun_name(fundecl.name) + "();";
-            newitems = flatten(fundecl.loc, "%s void " % qual) + fundecl.name + "();";
+            #newitems = flatten(fundecl.loc, "%s void " % qual) + fundecl.name + "();";
+
+            # emit declaration for metaloop function
+            newitems += flatten(fundecl.loc, "%s void " % qual) + gen_meta_loop_fun_name(fundecl.name) + "();";
+            # emit declaration for loop function
+            newitems += flatten(fundecl.loc, "%s void " % qual) + gen_loop_fun_name(fundecl.name) + "();";
             return newitems
         else:
             return None
@@ -692,7 +837,9 @@ class TFun_2_HydraCFunctions(DefaultVisitor):
             newitems += "end_main();"
         newitems += """
         }
-        """ 
+        """
+        
+        return newitems 
 
 
     def visit_fundef(self, fundef):
@@ -742,11 +889,12 @@ class TFun_2_HydraCFunctions(DefaultVisitor):
         newitems += generic_body.accept(self)
         newitems += flatten(fundef.loc_end, "return 0; \n}")
 
+        # generate meta loop function
+        newitems += self.gen_meta_loop_fun(fundef, self.__sh_parm_index)
+        
         # generate loop function
         newitems += self.gen_loop_fun(fundef)
         
-        # generate meta loop function
-        newitems += self.gen_meta_loop_fun(fundef, self.__sh_parm_index)
 
         return newitems
 
