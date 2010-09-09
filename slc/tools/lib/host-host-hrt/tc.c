@@ -367,6 +367,7 @@ mapping_decision map_fam(
   unsigned long no_generations;
   figure_out_fam_distribution(place, gencallee, no_threads, hint,
                               &no_nodes, &no_procs, &no_tcs, &block, &no_generations);
+  assert(no_generations >= 0);
 
   assert(no_nodes <= no_secondaries);
   assert(no_procs <= NO_PROCS);
@@ -415,7 +416,10 @@ int no_allocate_requests_per_proc[MAX_PROCS_PER_NODE];  // FIXME: remove this
 /*
  * Allocate a chain of TC's on a specified proc.
  */
-void allocate_local_tcs(int proc_index, tc_ident_t parent, unsigned int no_tcs, 
+void allocate_local_tcs(
+    int proc_index, 
+    //tc_ident_t parent, 
+    unsigned int no_tcs, 
     //int* tcs, 
     unsigned int* no_allocated_tcs,
     tc_ident_t* first_tc,
@@ -427,14 +431,18 @@ void allocate_local_tcs(int proc_index, tc_ident_t parent, unsigned int no_tcs,
   for (unsigned int i = 0; i < no_tcs; ++i) {
     //int tc = atomic_increment_next_tc(proc_index);
     int tc = grab_available_tc(proc_index);
+    LOG(DEBUG, "allocate_local_tcs: grab_available_tc(%d) returned %d\n", proc_index, tc);
     if (tc != -1) {
-      //tcs[*no_allocated_tcs] = tc;
+      tcs[*no_allocated_tcs] = tc;
       *no_allocated_tcs = *no_allocated_tcs + 1;
     } else {
       LOG(DEBUG, "allocate_local_tcs: grab_available_tc(%d) returned -1\n", proc_index);
       break;
     }
   }
+  
+  tc_ident_t dummy; dummy.node_index = dummy.proc_index = dummy.tc_index = -1;
+
   
   // init .prev and .next for TC's other than the first and the last in the chain. For these,
   // the fields will be initialized at population.
@@ -444,7 +452,7 @@ void allocate_local_tcs(int proc_index, tc_ident_t parent, unsigned int no_tcs,
       tc->next = ((tc_t*)TC_START_VM(tcs[i + 1]))->ident;
       tc->is_last_tc_on_proc = false;
     } else {
-      tc->next = parent;
+      tc->next = dummy;
       tc->is_last_tc_on_proc = true;
       *last_tc = tc->ident;
     }
@@ -453,7 +461,7 @@ void allocate_local_tcs(int proc_index, tc_ident_t parent, unsigned int no_tcs,
       tc->prev = ((tc_t*)TC_START_VM(tcs[i - 1]))->ident;
       tc->is_first_tc_on_proc = false;
     } else {
-      tc->prev = parent;
+      tc->prev = dummy;
       tc->is_first_tc_on_proc = true;
       *first_tc = tc->ident;
     }
@@ -517,7 +525,7 @@ fam_context_t* allocate_fam(
     if (as.node_index == NODE_INDEX) {
       LOG(DEBUG, "allocate_fam: requesting %d local TC's\n", as.no_tcs);
       allocate_local_tcs(as.proc_index, 
-                         _cur_tc->ident, 
+                         //_cur_tc->ident, 
                          as.no_tcs, 
                          &allocated_tcs[i].no_allocated_tcs, 
                          &allocated_tcs[i].first_tc,
@@ -2430,6 +2438,7 @@ static int start(int argc, char** argv) {
   mapping.proc_assignments[0].node_index = NODE_INDEX;
   mapping.proc_assignments[0].proc_index = 0;
   mapping.proc_assignments[0].no_tcs = 1;
+  mapping.no_ranges_per_tc = 1;
 
   fam_context_t* fc = allocate_fam(//&_fam___root_fam, 
                                     //0, 0, 1, NULL, &mapping);

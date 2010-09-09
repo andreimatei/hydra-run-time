@@ -1,3 +1,4 @@
+- add the extended mapping function in the compiler
 - fix network.c and remote allocation in tc.c
 - fix write_global() in tc.c for network
 - fix mem_scatter and mem_gather taking into account that now we have many ranges per TC

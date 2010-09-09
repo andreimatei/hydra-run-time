@@ -554,7 +554,7 @@ class TFun_2_HydraCFunctions(DefaultVisitor):
         else: #shared
             if self.__state == 0: #begin
                 newbl.append(flatten(None, '((') + getp.decl.ctype + ')' +
-                            'read_istruct(&_cur_tc->shareds[_cur_tc->current_generation][%d], prev))' %
+                            'read_istruct(&_cur_tc->shareds[_cur_tc->current_generation][%d], prev)' %
                             param.index)
             elif self.__state == 1: #middle
                 newbl.append(flatten(None, '((') + getp.decl.ctype + ')' +

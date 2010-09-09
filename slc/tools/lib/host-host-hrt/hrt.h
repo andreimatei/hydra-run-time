@@ -57,7 +57,10 @@ void* mmap_delegation_interface_stack(size_t* size);
 void parse_own_memory_map(char* map);
 //int atomic_increment_next_tc(int proc_id);
 //void allocate_local_tcs(int proc_index, int no_tcs, int* tcs, int* no_allocated_tcs);
-void allocate_local_tcs(int proc_index, tc_ident_t parent, unsigned int no_tcs, 
+void allocate_local_tcs(
+    int proc_index, 
+    //tc_ident_t parent, 
+    unsigned int no_tcs, 
     //int* tcs, 
     unsigned int* no_allocated_tcs,
     tc_ident_t* first_tc,
