@@ -12,6 +12,7 @@
 #include <sys/time.h>
 #include <svp/delegate.h>
 
+
 extern unsigned int NODE_INDEX;  // index of the current node
 
 void exit(int);
@@ -509,7 +510,8 @@ void end_main();
 /* writer and reader are running in the same TC */
 static inline void write_istruct_same_tc(
   i_struct* istructp, long val) {
-  assert(istructp->state == WRITTEN);  //the istruct must have been written already for the current thread;
+  //assert(istructp->state == WRITTEN);  //the istruct must have been written already for the current thread;
+  istructp->state = WRITTEN;
   istructp->data = val;
 }
 void write_istruct_same_proc(
@@ -590,14 +592,22 @@ static inline int _places_equal(sl_place_t pl1, sl_place_t pl2) {
 /*
  *
  */ 
-static inline void _advance_generation(unsigned int no_shareds) {
-  if (no_shareds > 0) {
+static inline void _advance_generation(unsigned int no_shareds, bool first_generation) {
+  bool first_tc_first_gen = _cur_tc->is_first_tc_in_fam && first_generation;
+  if (no_shareds > 0 && !first_tc_first_gen) {
     assert(_cur_tc->prev_range_done.state == WRITTEN);  // this function should be called after that istruct
                                                   // was found to have been written
   }
 
   // clear .prev_range_done
-  _cur_tc->prev_range_done.state = EMPTY;
+  //if (!(_cur_tc->next.node_index == _cur_tc->ident.node_index  
+  //        && _cur_tc->next.tc_index == _cur_tc->ident.tc_index)) {  // don't clear this if the next range is
+                                    // mapped on the same TC as this one, because, when we'd write it again,
+                                    // write_istruct_same_tc() will be used which has an assert that the
+                                    // istruct is already written. We want to keep that assertion cause it
+                                    // proved itself useful for trapping bugs.
+    _cur_tc->prev_range_done.state = EMPTY;
+  //}
 
   // clear the (still) current set of shareds
   for (unsigned int i = 0; i < no_shareds; ++i) {

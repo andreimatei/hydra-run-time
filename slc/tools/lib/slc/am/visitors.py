@@ -415,7 +415,7 @@ class Create_2_HydraCall(ScopedVisitor):
             # abort the program
             newbl.append(Opaque('printf(stderr, "allocate failed. Aborting."); exit(1);\n}\n'))
 
-        #expand call to create_fam()
+        # expand call to create_fam()
         first_tc_var = CVarDecl(loc = cr.loc_end, name = 'first_tc$%s' % lbl,
                                 ctype = 'tc_ident_t')
         self.cur_scope.decls += first_tc_var
@@ -429,8 +429,8 @@ class Create_2_HydraCall(ScopedVisitor):
                             + ', ' + default_place_policy
                             + ')');
         newbl.append(create_call + ';\n')
-
         self.__first_tc = CVarUse(decl = first_tc_var)
+
         # FIXME: we also have __cur_fam_context. Keep only one
         self.__fam_context = CVarUse(decl = fam_context_var)  
         
@@ -554,7 +554,7 @@ class TFun_2_HydraCFunctions(DefaultVisitor):
         else: #shared
             if self.__state == 0: #begin
                 newbl.append(flatten(None, '((') + getp.decl.ctype + ')' +
-                            'read_istruct(&_cur_tc->shareds[_cur_tc->current_generation][%d], prev)' %
+                            'read_istruct(&_cur_tc->shareds[_cur_tc->current_generation][%d], prev))' %
                             param.index)
             elif self.__state == 1: #middle
                 newbl.append(flatten(None, '((') + getp.decl.ctype + ')' +
@@ -716,12 +716,15 @@ class TFun_2_HydraCFunctions(DefaultVisitor):
             long normalized_start = _cur_tc->start_index;
             const int independent_family = """ + ('1' if no_shareds == 0 else '0') + """;
             int first_generation = 1;
+            """ + 'printf("COMP: in metaloop. Running %ld generations. \\n", _cur_tc->no_generations_left);' + """
             while (_cur_tc->no_generations_left-- > 0) {
+                int no_generations_left = _cur_tc->no_generations_left;  // FIXME: remove this
                 unsigned long threads_in_gen = (_cur_tc->no_generations_left > 0) ? 
                     _cur_tc->no_threads_per_generation : _cur_tc->no_threads_per_generation_last;
                 _cur_tc->index_start = _denormalize_index(normalized_start, _cur_tc->denormalized_fam_start_index, _cur_tc->step);
-                _cur_tc->index_stop  = _denormalize_index(normalized_start + threads_in_gen, _cur_tc->denormalized_fam_start_index, _cur_tc->step);
-                %s();  // call function to loop over the threads in the current range
+                _cur_tc->index_stop  = _denormalize_index(normalized_start + threads_in_gen - 1, _cur_tc->denormalized_fam_start_index, _cur_tc->step);
+                """ + 'printf("COMP: in metaloop. indexes for generation: %ld -> %ld (inclusive). Set of shareds: %d\\n",_cur_tc->index_start, _cur_tc->index_stop, _cur_tc->current_generation);' + """
+                """ + gen_loop_fun_name(fundef.name) + """();  // call function to loop over the threads in the current range
                 
                 // update the start index for next generation
                 if (_cur_tc->no_generations_left > 1) {
@@ -733,14 +736,14 @@ class TFun_2_HydraCFunctions(DefaultVisitor):
                 if (!independent_family) {
                     // synchronize termination of generations so that they don't get out of sync.
                     // nothing to do for the first generation on the first tc in the family
-                    if (!_cur_tc->is_first_tc_in_fam && first_generation) {
+                    if (!(_cur_tc->is_first_tc_in_fam && first_generation)) {
                         read_istruct(&_cur_tc->prev_range_done, &_cur_tc->prev);
                     }
                 }
-                first_generation = 0;
 
                 // switch sets of shareds
-                _advance_generation(%d);
+                _advance_generation(""" + str(no_shareds) + """, first_generation);
+                first_generation = 0;
                 
                 // for dependent families, write the prev_range_done on the next TC
                 if (!independent_family) {
@@ -750,9 +753,25 @@ class TFun_2_HydraCFunctions(DefaultVisitor):
                                   &_cur_tc->next,  // reader
                                   0);              // is_mem
                 }
+            """ + 'printf("COMP: in metaloop. End of generation. generations left = %ld\\n", _cur_tc->no_generations_left);' + """
             }
+
+            if (_is_last_tc_in_fam() && _get_parent_ident()->node_index != -1) {
+                //printf("USER: I am the last thread in a family. Unblocking parent.\\n");
+                write_istruct(_get_parent_ident()->node_index, _get_done_pointer(), 1, _get_parent_ident(), 0);
+            }
+            _free_tc(_cur_tc->ident.proc_index, _cur_tc->ident.tc_index);
+        """
+        if fundef.name <> '__slFfmta___root_fam':
+            print '~~~~~~~ adding call to return_to_scheduler for func ' + fundef.name
+            newitems += "_return_to_scheduler();\n"
+        else:
+            print '~~~~~~~ adding call to end_maine for func ' + fundef.name
+            newitems += "end_main();"
+        newitems += """
         }
-        """ % (gen_loop_fun_name(fundef.name), no_shareds)
+        """
+
         return newitems
 
 
@@ -768,25 +787,37 @@ class TFun_2_HydraCFunctions(DefaultVisitor):
             // in the following block of code, attribute(unused) is used because of the special generation
             // of the function for the root family, in which case those variables would be unused.
             //fam_context_t* fam_context = _get_fam_context();
-            const tc_ident_t* parent = _get_parent_ident();
+            //const tc_ident_t* parent = _get_parent_ident();
             const tc_ident_t* prev __attribute__((unused)) = _get_prev_ident();
             const tc_ident_t* next = _get_next_ident();
                                                                     
-            i_struct* done = _get_done_pointer();
+            //i_struct* done = _get_done_pointer();
             long no_threads = (__end_index - __start_index + 1) / step;
 
             if (no_threads >= 3) {"""
         if fundef.name <> "__slFfmta___root_fam":  # for main, we won't need this branch (and we can't generate it either
                                      # cause we haven't generated the non-generic flavours of the thread func)
             newitems +="""
-                i_struct* shareds __attribute__((unused)) = _is_last_tc_in_fam() ? 
-                                                            _get_final_shareds_pointer() :
-                                                            next->tc->shareds[_cur_tc->current_generation];
-                memdesc_t* shared_descs __attribute__((unused)) = _is_last_tc_in_fam() ? 
-                                                    _get_final_descs_pointer() :
-                                                    next->tc->shared_descs[_cur_tc->current_generation];
+                i_struct* shareds;
+                memdesc_t* shared_descs;
+    
+                if (_is_last_tc_in_fam()) {
+                    if (_cur_tc->no_generations_left == 0) {
+                        shareds = _get_final_shareds_pointer();
+                        shared_descs = _get_final_descs_pointer();
+                    } else {
+                        // write to the next generation
+                        shareds = next->tc->shareds[_cur_tc->current_generation ^ 1];
+                        shared_descs = next->tc->shared_descs[_cur_tc->current_generation ^ 1];
+                    }
+                } else {
+                    // simply write to the next TC, same generation
+                    shareds = next->tc->shareds[_cur_tc->current_generation];
+                    shared_descs = next->tc->shared_descs[_cur_tc->current_generation];
+                }
+
                 %s_begin(prev, __start_index);
-                for (__index = __start_index + step; __index < __end_index; ++__index) {
+                for (__index = __start_index + step; __index <= __end_index; ++__index) {
                     %s_middle(__index); // TODO: check for break return value
                 }
                 %s_end(next, shareds, shared_descs, __end_index);
@@ -805,12 +836,20 @@ class TFun_2_HydraCFunctions(DefaultVisitor):
                     } else {
                         p = &_cur_tc->ident;
                     }
-                    if (__index + step >= __end_index) {
+                    if (__index + step > __end_index) {
                         n = _get_next_ident();
                         if (_is_last_tc_in_fam()) {
-                            // write to the family context
-                            s = _get_final_shareds_pointer();
-                            shared_descs = _get_final_descs_pointer();
+                            if (_cur_tc->no_generations_left == 0) {
+                                // write to the family context
+                                """ + 'printf("COMP: got to the last thread in fam.\\n");' + """
+                                s = _get_final_shareds_pointer();
+                                shared_descs = _get_final_descs_pointer();
+                            } else {
+                                // write to the next generation
+                                """ + 'printf("COMP: got to the last thread in generation across all TCs. Setting shareds to %d\\n", (_cur_tc->current_generation ^ 1));' + """
+                                s = next->tc->shareds[_cur_tc->current_generation ^ 1];
+                                shared_descs = next->tc->shared_descs[_cur_tc->current_generation ^ 1];
+                            }
                         } else {
                             // write to the next tc
                             s = next->tc->shareds[_cur_tc->current_generation];
@@ -819,24 +858,13 @@ class TFun_2_HydraCFunctions(DefaultVisitor):
                     } else {
                         n = &_cur_tc->ident;
                     }
+                    """ + 'printf("COMP: calling generic with index = %ld\\n", __index);' + """
                     """ + fundef.name + """_generic(p, n, s, shared_descs, __index); // TODO: check for break value
                 }
 
             }
-            if (_is_last_tc_in_fam() && parent->node_index != -1) {
-                //printf("USER: I am the last thread in a family. Unblocking parent.\\n");
-                write_istruct(parent->node_index, done, 1, parent, 0);
-            }
-
-            //_cur_tc->finished = 1;
-            _free_tc(_cur_tc->ident.proc_index, _cur_tc->ident.tc_index);
-        """
-        if fundef.name <> '__slFfmta___root_fam':
-            newitems += "_return_to_scheduler();\n"
-        else:
-            newitems += "end_main();"
-        newitems += """
         }
+
         """
         
         return newitems 
