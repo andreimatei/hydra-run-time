@@ -58,7 +58,7 @@ void parse_own_memory_map(char* map);
 //int atomic_increment_next_tc(int proc_id);
 //void allocate_local_tcs(int proc_index, int no_tcs, int* tcs, int* no_allocated_tcs);
 void allocate_local_tcs(
-    int proc_index, 
+    unsigned int proc_index, 
     //tc_ident_t parent, 
     unsigned int no_tcs, 
     //int* tcs, 
@@ -79,9 +79,9 @@ void populate_local_tcs(
     unsigned long no_threads_per_generation_last,  // ditto above for the last generation, which is special
                                                    // because it can have more threads than the rest
     long gap_between_generations,
-    long start_index,         // index of the first thread from the first range run by the first TC on this proc
-    long start_index_last_generation,
-    long denormalized_fam_start_index,  // the real start index of the family. Used to de-normalize start_index
+    unsigned long start_index,                 // (normalized) index of the first thread from the first range run by the first TC on this proc
+    unsigned long start_index_last_generation, // (normalized) index of the first thread from the _last_ range run by the first TC on this proc
+    long denormalized_fam_start_index,  // the real (denormalized) start index of the family. Used to de-normalize start_index
     long step,
 
     tc_ident_t first_tc,  //the first TC assigned to this family on this proc (the head of the chain)
@@ -98,6 +98,8 @@ void populate_local_tcs(
                                         // default_place_policy == INHERIT_DEFAULT_PLACE
      
     );
+
+void write_global_to_chain_of_tcs(tc_t* tc, unsigned int index, long val, bool is_mem);
 
 /*
  * Caps p1 by p2.

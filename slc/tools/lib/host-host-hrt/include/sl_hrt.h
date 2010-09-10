@@ -541,7 +541,7 @@ static inline long read_istruct_same_tc(i_struct* istruct) {
 long read_istruct_different_tc(volatile i_struct* istruct, int same_proc);
 long read_istruct(volatile i_struct* istructp, const tc_ident_t* writing_tc);
 
-void write_global(fam_context_t* ctx, int index, long val, bool is_mem);
+void write_global(fam_context_t* ctx, unsigned int index, long val, bool is_mem);
 
 /*
  * Convert between stubs and longs so stubs can be passed in istructs

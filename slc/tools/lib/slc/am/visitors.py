@@ -718,7 +718,6 @@ class TFun_2_HydraCFunctions(DefaultVisitor):
             int first_generation = 1;
             """ + 'printf("COMP: metaloop. Running %ld generations. \\n", _cur_tc->no_generations_left);' + """
             while (_cur_tc->no_generations_left-- > 0) {
-                int no_generations_left = _cur_tc->no_generations_left;  // FIXME: remove this
                 unsigned long threads_in_gen = (_cur_tc->no_generations_left > 0) ? 
                     _cur_tc->no_threads_per_generation : _cur_tc->no_threads_per_generation_last;
                 _cur_tc->index_start = _denormalize_index(normalized_start, _cur_tc->denormalized_fam_start_index, _cur_tc->step);

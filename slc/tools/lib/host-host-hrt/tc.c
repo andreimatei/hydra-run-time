@@ -418,7 +418,7 @@ int no_allocate_requests_per_proc[MAX_PROCS_PER_NODE];  // FIXME: remove this
  * Allocate a chain of TC's on a specified proc.
  */
 void allocate_local_tcs(
-    int proc_index, 
+    unsigned int proc_index, 
     //tc_ident_t parent, 
     unsigned int no_tcs, 
     //int* tcs, 
@@ -533,7 +533,12 @@ fam_context_t* allocate_fam(
                          &allocated_tcs[i].last_tc);
     } else {
       LOG(DEBUG, "allocate_fam: requesting %d remote TC's\n", as.no_tcs);
-      assert(0); // FIXME TODO
+      allocate_remote_tcs(as.node_index,
+                          as.proc_index,
+                          as.no_tcs,
+                          &allocated_tcs[i].no_allocated_tcs, 
+                          &allocated_tcs[i].first_tc,
+                          &allocated_tcs[i].last_tc);
       LOG(DEBUG, "allocate_fam: back from remote allocation\n");
     }
     if (allocated_tcs[i].no_allocated_tcs == 0) {
@@ -748,9 +753,9 @@ void populate_local_tcs(
     unsigned long no_threads_per_generation_last,  // ditto above for the last generation, which is special
                                                    // because it can have more threads than the rest
     long gap_between_generations,
-    long start_index,         // index of the first thread from the first range run by the first TC on this proc
-    long start_index_last_generation,
-    long denormalized_fam_start_index,  // the real start index of the family. Used to de-normalize start_index
+    unsigned long start_index,                 // (normalized) index of the first thread from the first range run by the first TC on this proc
+    unsigned long start_index_last_generation, // (normalized) index of the first thread from the _last_ range run by the first TC on this proc
+    long denormalized_fam_start_index,  // the real (denormalized) start index of the family. Used to de-normalize start_index
     long step,
 
     tc_ident_t first_tc,  //the first TC assigned to this family on this proc (the head of the chain)
@@ -891,7 +896,34 @@ tc_ident_t create_fam(fam_context_t* fc,
             whole_cluster);
       }
     } else {
-      assert(0); // TODO: FIXME:
+      assert(_cur_tc != NULL);  // this should only be null for root_fam, and that shouldn't be allocated remotely
+      unsigned int node_index = res->first_tc.node_index;
+      LOG(DEBUG, "create_fam: sending remote create request to node %d n", node_index);
+      populate_local_tcs(func,
+          res->no_tcs,
+          (i == 0),  // is_first_proc_on_fam
+          (i == dist->no_reservations - 1),  // is_last_proc_on_fam
+          dist->no_generations,
+          res->no_threads_per_generation,
+          res->no_threads_per_generation_last,
+          total_threads_per_generation,  // gap_between_generations
+          first_thread_on_proc,
+          first_thread_on_proc_last_gen,
+          //dist->start_index,
+          //dist->start_index_last_generation,
+          real_fam_start_index,  // the real start index of the family. Used to de-normalize start_index
+
+          step,
+          res->first_tc,    // first_tc
+          _cur_tc->ident,   // parent
+          i > 0 ? dist->reservations[i-1].last_tc : dist->reservations[no_res-1].last_tc,  // prev
+          i < no_res - 1 ? dist->reservations[i+1].first_tc : dist->reservations[0].first_tc, //next
+          fc->shareds,  // final_shareds
+          fc->shared_descs,  //final_descs
+          &fc->done,         // done istruct
+          default_place_policy,
+          _cur_tc->place_default   // default_place_parent
+          );
     }
     
     // first range on next TC starts from where this TC left off
@@ -1286,6 +1318,17 @@ static void rt_init() {
 
 
 static inline tc_ident_t get_current_context_ident() {
+  // computing the current context based on the stack pointer doesn't work reliably for
+  // the network thread, in it's current form (where is that stack allocated?), so I've replaced
+  // the mechanism to one based on _cur_tc.
+  if (_cur_tc != NULL) {
+    return _cur_tc->ident;
+  } else {
+    tc_ident_t dummy;
+    dummy.node_index = NODE_INDEX; dummy.proc_index = -1; dummy.tc_index = -1;
+    return dummy;
+  }
+  /*
   tc_ident_t ident;
   unsigned long sp;
   __asm__ __volatile__ ("movq %%rsp, %0\n" : "=r" (sp));
@@ -1300,6 +1343,7 @@ static inline tc_ident_t get_current_context_ident() {
 
   ident.proc_index = ident.tc_index / NO_TCS_PER_PROC;
   return ident;
+  */
 }
 
 void idle() {
@@ -2568,7 +2612,7 @@ int main(int argc, char** argv) {
 /*
  *  Recursively writes a value to a global slot in all TC's from a proc assigned to a family
  */
-static void write_global_to_chain_of_tcs(tc_t* tc, unsigned int index, long val, bool is_mem) {
+void write_global_to_chain_of_tcs(tc_t* tc, unsigned int index, long val, bool is_mem) {
   // write the istructure
   write_istruct(tc->ident.node_index, &tc->globals[index], val, &tc->ident, is_mem);
 
@@ -2578,7 +2622,7 @@ static void write_global_to_chain_of_tcs(tc_t* tc, unsigned int index, long val,
   }
 }
 
-void write_global(fam_context_t* fc, int index, long val, bool is_mem) {
+void write_global(fam_context_t* fc, unsigned int index, long val, bool is_mem) {
   unsigned int i;
   // write the global to every TC that will run part of the family
 
@@ -2586,8 +2630,9 @@ void write_global(fam_context_t* fc, int index, long val, bool is_mem) {
     if (fc->distribution.reservations[i].first_tc.node_index == (signed)NODE_INDEX) {
       write_global_to_chain_of_tcs(fc->distribution.reservations[i].first_tc.tc, index, val, is_mem);
     } else {
-      assert(0);
-      //FIXME: TODO:
+      write_global_to_remote_chain(fc->distribution.reservations[i].first_tc.node_index,
+                                   fc->distribution.reservations[i].first_tc,
+                                   index, val, is_mem);
     }
   }
 

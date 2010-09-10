@@ -109,6 +109,7 @@ static void handle_req_ping(const req_ping* req);
 static void handle_resp_ping(const resp_ping* req);
 static void handle_req_pull_desc(const req_pull_desc* req);
 static void handle_resp_pull_desc(const resp_pull_desc* req);
+static void handle_req_write_global_to_chain(const req_write_global_to_chain* req);
 
 static int push_queue_not_empty(unsigned int node_index);
 static int dequeue_push_request(unsigned int node_index, push_request_t* req);
@@ -181,6 +182,10 @@ static void handle_sctp_request(int sock) {
       assert(read == sizeof(resp_pull_desc));
       handle_resp_pull_desc((const resp_pull_desc*)req);
       break;
+    case REQ_WRITE_GLOBAL_TO_CHAIN: 
+      LOG(DEBUG, "network: handle_sctp_request: got REQ_WRITE_GLOBAL_TO_CHAIN\n");
+      assert(read == sizeof(req_write_global_to_chain));
+      handle_req_write_global_to_chain((const req_write_global_to_chain*)req);
     case REQ_PING:
       LOG(DEBUG, "network: handle_sctp_request: got REQ_PING\n");
       assert(read == sizeof(req_ping));
@@ -198,7 +203,6 @@ static void handle_sctp_request(int sock) {
 }
 
 static void handle_req_allocate(const req_allocate* req) {
-  /*
   resp_allocate resp;
   resp.identifier = req->response_identifier;
   resp.type = RESP_ALLOCATE;
@@ -206,14 +210,12 @@ static void handle_req_allocate(const req_allocate* req) {
   resp.response_identifier = -1;
   resp.no_tcs = 0;
 
-  LOG(DEBUG, "network: handle_req_allocate: got a request for %d tcs\n", req->no_tcs);
-  allocate_local_tcs(req->proc_index, req->no_tcs, resp.tcs, &resp.no_tcs);
+  LOG(DEBUG, "network: handle_req_allocate: got a request for %d TC's\n", req->no_tcs);
+  allocate_local_tcs(req->proc_index, req->no_tcs, &resp.no_tcs, &resp.first_tc, &resp.last_tc);
   LOG(DEBUG, "network: handle_req_allocate: seding allocation reply. Giving them %d tcs.\n",
       resp.no_tcs);
 
   send_sctp_msg(req->node_index, &resp, sizeof(resp));
-  */
-  // FIXME TODO
 }
 
 static void handle_resp_allocate(const resp_allocate* req) {
@@ -630,6 +632,7 @@ static int delegation_sock_sctp;
  * Creates a socket where this node will listen for delegation requests;
  */
 void* delegation_interface(void* parm) {
+  _cur_tc = NULL;  // so that context identification based on _cur_tc works.
   int sock_tcp = ((struct delegation_interface_params_t*)parm)->sock_tcp;
   int sock_sctp = ((struct delegation_interface_params_t*)parm)->sock_sctp;
   delegation_sock_sctp = sock_sctp;
@@ -1084,23 +1087,76 @@ void block_for_allocate_response(pending_request_t* req, resp_allocate* resp) {
   free_pending_request_slot(req);
 }
 
-void allocate_remote_tcs(int node_index, int proc_index, int no_tcs, int* tcs, int* no_allocated_tcs) {
+void allocate_remote_tcs(unsigned int node_index, 
+                         unsigned int proc_index, 
+                         unsigned int no_tcs,
+                         unsigned int* no_allocated_tcs,
+                         tc_ident_t* first_tc,
+                         tc_ident_t* last_tc) {
   pending_request_t* req = request_remote_tcs(node_index, proc_index, no_tcs);
   resp_allocate resp;
-  LOG(DEBUG, "allocate_remote_tcs: blocking for reply; asked for %d tcs\n", no_tcs);
+  LOG(DEBUG, "allocate_remote_tcs: blocking for reply; asked for %d TC's from node %d\n", no_tcs, node_index);
   block_for_allocate_response(req, &resp);
-  LOG(DEBUG, "allocate_remote_tcs: got reply; obtained %d tcs\n", resp.no_tcs);
+  LOG(DEBUG, "allocate_remote_tcs: got reply; obtained %d TC's from \n", resp.no_tcs, node_index);
   assert(resp.no_tcs <= no_tcs); // we shouldn't get more tcs than we asked for
   *no_allocated_tcs = resp.no_tcs;
+  *first_tc         = resp.first_tc;
+  *last_tc          = resp.last_tc; 
+  /*
   for (int i = 0; i < resp.no_tcs; ++i) {
     LOG(DEBUG, "allocate_remote_tcs: got tc %d\n", resp.tcs[i]);
     tcs[i] = resp.tcs[i];
   }
+  */
+}
+
+void write_global_to_remote_chain(unsigned int node_index, tc_ident_t first_tc, unsigned int index,
+                                  long val, bool is_mem) {
+  req_write_global_to_chain req;
+  req.type = REQ_WRITE_GLOBAL_TO_CHAIN;
+  req.node_index = NODE_INDEX;
+  req.identifier = -1;
+  req.response_identifier = -1;
+  
+  req.first_tc = first_tc;
+  req.index = index;
+  req.val = val;
+  req.is_mem = is_mem;
+
+  send_sctp_msg(node_index, &req, sizeof(req));
 }
 
 void populate_remote_tcs(
+    unsigned int node_index,
+    thread_func func,
+    unsigned int no_tcs,                      // number of TC's in the chain
+    bool is_first_proc_on_fam,
+    bool is_last_proc_on_fam,
+    unsigned long no_generations,
+    unsigned long no_threads_per_generation,  // total number of threads to be run on these TCs as part 
+                                              // of one generation
+    unsigned long no_threads_per_generation_last,  // ditto above for the last generation, which is special
+                                                   // because it can have more threads than the rest
+    long gap_between_generations,
+    unsigned long start_index,                 // (normalized) index of the first thread from the first range run by the first TC on this proc
+    unsigned long start_index_last_generation, // (normalized) index of the first thread from the _last_ range run by the first TC on this proc
+    long denormalized_fam_start_index,  // the real start index of the family. Used to de-normalize start_index
+    long step,
+
+    tc_ident_t first_tc,  //the first TC assigned to this family on this proc (the head of the chain)
+    tc_ident_t parent,
+    tc_ident_t prev,  // the TC that is going to run the ranges just before the first TC in this chain
+    tc_ident_t next,  // the TC that is going to run the ranges just after the first TC in this chain
+    i_struct* final_shareds, // pointer to the shareds in the FC (NULL if !final_ranges)
+    memdesc_t* final_descs,  // pointer to the descriptor table in the FC
+    i_struct* done,          // pointer to done in the FC
+    default_place_policy_enum default_place_policy,// policy to be used when deciding the 
+                                                   // PLACE_DEFAULT to be inheritied by
+                                                   // the child
+    sl_place_t default_place_parent     // PLACE_DEFAULT of the parent. Used if 
+                                        // default_place_policy == INHERIT_DEFAULT_PLACE
+    /*
     unsigned int node_index,  // destination node
-    //int* tcs,  // indexes of the TC's on the destination node
     thread_range_t* ranges,
     int no_ranges,
     thread_func func,
@@ -1114,6 +1170,7 @@ void populate_remote_tcs(
                                                    // the child
     sl_place_t default_place_parent     // PLACE_DEFAULT of the parent. Used if 
                                         // default_place_policy == INHERIT_DEFAULT_PLACE
+    */
     ) {
   req_create req;
   req.type = REQ_CREATE;
@@ -1121,17 +1178,28 @@ void populate_remote_tcs(
   req.identifier = -1;
   req.response_identifier = -1;
 
-  //memcpy(req.tcs, tcs, no_tcs * sizeof(req.tcs[0]));
-  req.no_ranges = no_ranges;
-  memcpy(req.ranges, ranges, no_ranges * sizeof(req.ranges[0]));
-  req.func = func;
-  req.parent = parent; req.prev = prev; req.next = next;
-  req.final_ranges = final_ranges;
-  req.final_shareds = final_shareds;
-  req.final_descs = final_descs;
-  req.done = done;
+  req.func                 = func;
+  req.no_tcs               = no_tcs;
+  req.is_first_proc_on_fam = is_first_proc_on_fam;
+  req.is_last_proc_on_fam  = is_last_proc_on_fam;
+  req.no_generations       = no_generations;
+  req.no_threads_per_generation = no_threads_per_generation;
+  req.no_threads_per_generation_last = no_threads_per_generation_last;
+  req.gap_between_generations = gap_between_generations;
+  req.start_index          = start_index; 
+  req.start_index_last_generation = start_index_last_generation;
+  req.denormalized_fam_start_index = denormalized_fam_start_index;
+  req.step                 = step;
+  req.first_tc             = first_tc;
+  req.parent               = parent;
+  req.prev                 = prev;
+  req.next                 = next;
+  req.final_shareds        = final_shareds;
+  req.final_descs          = final_descs;
+  req.done                 = done;
   req.default_place_policy = default_place_policy;
   req.default_place_parent = default_place_parent;
+  
   send_sctp_msg(node_index, &req, sizeof(req));
 }
 
@@ -1212,17 +1280,29 @@ static void handle_req_write_istruct_mem(const req_write_istruct_mem* req) {
   write_istruct_different_proc(req->istruct, _stub_2_long(req->val), req->reader_tc);
 }
 
+static void handle_req_write_global_to_chain(const req_write_global_to_chain* req) {
+  LOG(DEBUG, "network: handle_req_write_global_to_chain: got a write request for chain starting with tc %d\n", req->first_tc.tc_index);
+  write_global_to_chain_of_tcs(req->first_tc.tc, req->index, req->val, req->is_mem);
+}
+
 static void handle_req_create(const req_create* req) {
-  /*
   LOG(DEBUG, "network: handle_req_create: got create request\n");
   // sanity check
-  assert(req->default_place_parent.node_index == -1 || req->default_place_parent.node_index == NODE_INDEX);
-  populate_local_tcs(//req->tcs,
-                     req->ranges,
-                     req->no_ranges,
-                     req->func,
+  assert(req->default_place_parent.node_index == -1 || req->default_place_parent.node_index == (signed)NODE_INDEX);
+  populate_local_tcs(req->func,
+                     req->no_tcs,
+                     req->is_first_proc_on_fam,
+                     req->is_last_proc_on_fam,
+                     req->no_generations,
+                     req->no_threads_per_generation,
+                     req->no_threads_per_generation_last,
+                     req->gap_between_generations,
+                     req->start_index,
+                     req->start_index_last_generation,
+                     req->denormalized_fam_start_index,
+                     req->step,
+                     req->first_tc,
                      req->parent, req->prev, req->next,
-                     req->final_ranges,
                      req->final_shareds,
                      req->final_descs,
                      req->done,
@@ -1230,8 +1310,6 @@ static void handle_req_create(const req_create* req) {
                      req->default_place_parent
                      );
   LOG(DEBUG, "network: handle_req_create: finished populating local TC's\n");
-  */
-  // FIXME: TODO
 }
 
 /*
