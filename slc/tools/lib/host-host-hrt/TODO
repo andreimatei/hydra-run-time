@@ -1,4 +1,5 @@
 - fix mem_scatter and mem_gather taking into account that now we have many ranges per TC
+- program crashes when the block size >= the number of threads
 - for the mapping function spread, the default place for threads in the new family must be PID (the place
     to which we delegate the new family).
 
