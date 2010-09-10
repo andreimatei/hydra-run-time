@@ -754,11 +754,11 @@ class TFun_2_HydraCFunctions(DefaultVisitor):
                                   &_cur_tc->next,  // reader
                                   0);              // is_mem
                 }
-            """ + 'printf("COMP: metaloop. End of generation. generations left = %ld\\n", _cur_tc->no_generations_left);' + """
+            """ + 'printf("COMP: metaloop (tc=%d). End of generation. generations left = %ld \\n", _cur_tc->ident.tc_index, _cur_tc->no_generations_left);' + """
             }
 
             if (_is_last_tc_in_fam() && _get_parent_ident()->node_index != -1) {
-                //printf("USER: I am the last thread in a family. Unblocking parent.\\n");
+                printf("COMP: metaloop: last thread in the family done. Unblocking parent.\\n");
                 write_istruct(_get_parent_ident()->node_index, _get_done_pointer(), 1, _get_parent_ident(), 0);
             }
             _free_tc(_cur_tc->ident.proc_index, _cur_tc->ident.tc_index);
@@ -836,8 +836,10 @@ class TFun_2_HydraCFunctions(DefaultVisitor):
                         p = &_cur_tc->ident;
                     }
                     if (__index + step > __end_index) {
+                        """ + 'printf("COMP: loop (tc=%d): this will be the last thread in the tc in the generation.\\n", _cur_tc->ident.tc_index);' + """
                         n = _get_next_ident();
                         if (_is_last_tc_in_fam()) {
+                            """ + 'printf("COMP: loop (tc=%d): this will be the last thread in the family in the generation.\\n", _cur_tc->ident.tc_index);' + """
                             if (_cur_tc->no_generations_left == 0) {
                                 // write to the family context
                                 """ + 'printf("COMP: loop: got to the last thread in fam.\\n");' + """
@@ -845,7 +847,7 @@ class TFun_2_HydraCFunctions(DefaultVisitor):
                                 shared_descs = _get_final_descs_pointer();
                             } else {
                                 // write to the next generation
-                                """ + 'printf("COMP: loop: got to the last thread in generation across all TCs. Setting shareds to %d\\n", (_cur_tc->current_generation ^ 1));' + """
+                                """ + 'printf("COMP: loop (tc=%d): got to the last thread in generation across all TCs. Setting shareds to %d\\n", _cur_tc->ident.tc_index, (_cur_tc->current_generation ^ 1));' + """
                                 s = next->tc->shareds[_cur_tc->current_generation ^ 1];
                                 shared_descs = next->tc->shared_descs[_cur_tc->current_generation ^ 1];
                             }
@@ -853,11 +855,12 @@ class TFun_2_HydraCFunctions(DefaultVisitor):
                             // write to the next tc
                             s = next->tc->shareds[_cur_tc->current_generation];
                             shared_descs = next->tc->shared_descs[_cur_tc->current_generation];
+                            """ + 'printf("COMP: loop (tc=%d): setting shareds to next TC (tc:%d shared:%p)\\n", _cur_tc->ident.tc_index, next->tc_index, &s[0]);' + """
                         }
                     } else {
                         n = &_cur_tc->ident;
                     }
-                    """ + 'printf("COMP: loop: calling generic with index = %ld\\n", __index);' + """
+                    """ + 'printf("COMP: loop (tc=%d): calling generic with index = %ld\\n", _cur_tc->ident.tc_index, __index);' + """
                     """ + fundef.name + """_generic(p, n, s, shared_descs, __index); // TODO: check for break value
                 }
 

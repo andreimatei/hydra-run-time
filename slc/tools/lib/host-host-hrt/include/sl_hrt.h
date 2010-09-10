@@ -429,7 +429,7 @@ static inline const tc_ident_t* _get_parent_ident() {
 }
 
 static inline const tc_ident_t* _get_prev_ident() {
-  if (_cur_tc->current_generation_real > 0) {
+  if (!_cur_tc->is_first_tc_in_fam || _cur_tc->current_generation_real > 0) {
     return &_cur_tc->prev;
   } else {
     return &_cur_tc->parent_ident;
@@ -437,7 +437,7 @@ static inline const tc_ident_t* _get_prev_ident() {
 }
 
 static inline const tc_ident_t* _get_next_ident() {
-  if (_cur_tc->no_generations_left > 0) {
+  if (!_cur_tc->is_last_tc_in_fam || _cur_tc->no_generations_left > 0) {
     return &_cur_tc->next;
   } else {
     return &_cur_tc->parent_ident;
