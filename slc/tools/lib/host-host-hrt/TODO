@@ -1,4 +1,3 @@
-- fix write_global() in tc.c for network
 - fix mem_scatter and mem_gather taking into account that now we have many ranges per TC
 - for the mapping function spread, the default place for threads in the new family must be PID (the place
     to which we delegate the new family).
@@ -53,6 +52,10 @@ does activate. Is this ok? Should we block propagates somehow creation until all
 
 
 KNOWN ISSUES
+
+- language support:
+  - for the mapping function spread, the default place for threads in the new family must be PID (the place
+    to which we delegate the new family). Currently, the default place of the parent is inherited.
 
 - network:
     - in network.c, no_tcp_incoming_sockets needs locking before incrementing and reading it

@@ -322,6 +322,14 @@ static void figure_out_fam_distribution(sl_place_t place,
     assert(final_place.node_index == (signed)_cur_tc->ident.node_index);
   }
 
+  if (!gencallee && hint.hint_nodes > 1) {
+    LOG(WARNING, "Attempting to distribute a family which was not marked as a \"gencallee\" on more than "
+        "the local node. Reverting to distributing on the local node. The requested number of processors "
+        "will be incremented accordingly.\n");
+    hint.hint_procs *= hint.hint_nodes;
+    hint.hint_nodes = 1;
+  }
+
   // limit by resources
   hint.hint_nodes = MIN(hint.hint_nodes, no_secondaries);
   hint.hint_procs = MIN(hint.hint_procs, NO_PROCS);
@@ -369,6 +377,9 @@ mapping_decision map_fam(
                               &no_nodes, &no_procs, &no_tcs, &block, &no_generations);
   assert(no_generations > 0);
 
+  if (!gencallee) {
+    assert(no_nodes == 1);
+  }
   assert(no_nodes <= no_secondaries);
   assert(no_procs <= NO_PROCS);
   assert(no_tcs <= NO_TCS_PER_PROC);
@@ -899,7 +910,9 @@ tc_ident_t create_fam(fam_context_t* fc,
       assert(_cur_tc != NULL);  // this should only be null for root_fam, and that shouldn't be allocated remotely
       unsigned int node_index = res->first_tc.node_index;
       LOG(DEBUG, "create_fam: sending remote create request to node %d n", node_index);
-      populate_local_tcs(func,
+      populate_remote_tcs(
+          node_index,
+          func,
           res->no_tcs,
           (i == 0),  // is_first_proc_on_fam
           (i == dist->no_reservations - 1),  // is_last_proc_on_fam
