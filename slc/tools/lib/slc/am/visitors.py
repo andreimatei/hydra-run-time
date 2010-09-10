@@ -220,6 +220,7 @@ class Create_2_HydraCall(ScopedVisitor):
                             ))
                 newbl += Opaque(';\n')
             elif mf == "distribute_ex":
+                print '!?!?!?! found distribute_ex'
                 default_place_policy = mapspec.default_place_policy
                 newbl += CVarSet(decl = mapping_hint_var, rhs = (
                             Opaque('_interpret_mf_distribute_ex(')

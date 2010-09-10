@@ -170,6 +170,7 @@ m4_define([[sl_index]], [[m4_dnl
 
 m4_define([[sl_mf_spread]], [[[[""", {'type':'attr','name':'mapping','mf':'spread','n':[r""" $1 """]}, r""" ]]]])
 m4_define([[sl_mf_distribute]], [[[[""", {'type':'attr','name':'mapping', 'mf':'distribute', 'n':[r""" $1 """], 'm':[r""" $2 """]}, r""" ]]]])
+m4_define([[sl_mf_distribute_ext]], [[[[""", {'type':'attr','name':'mapping', 'mf':'distribute_ex', 'nodes':[r""" $1 """], 'procs':[r""" $2 """], 'tcs':[r""" $3 """], 'block':[r""" $4 """], 'default_place_policy':[r""" $5 """]}, r""" ]]]])
 
 m4_define([[sl_create_ext]], [[m4_dnl
 m4_pushdef([[_sl_increate]],1)m4_dnl
