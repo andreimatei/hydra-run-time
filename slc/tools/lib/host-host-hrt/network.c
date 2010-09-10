@@ -136,6 +136,7 @@ static void handle_sctp_request(int sock) {
   
   switch (req->type) {
     case REQ_QUIT:
+      LOG(DEBUG, "network: handle_sctp_request: got REQ_QUIT\n");
       terminate_delegation_interface();
       break;
     case REQ_ALLOCATE:
