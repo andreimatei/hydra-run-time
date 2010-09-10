@@ -816,10 +816,10 @@ class TFun_2_HydraCFunctions(DefaultVisitor):
                 }
 
                 %s_begin(prev, __start_index);
-                for (__index = __start_index + step; __index <= __end_index; ++__index) {
+                for (__index = __start_index + step; __index + step <= __end_index; __index += step) {
                     %s_middle(__index); // TODO: check for break return value
                 }
-                %s_end(next, shareds, shared_descs, __end_index);
+                %s_end(next, shareds, shared_descs, __index);
             """ % (fundef.name, fundef.name, fundef.name)
         else:
             newitems += "exit(1);  // main should never be created as a family of more than one thread"

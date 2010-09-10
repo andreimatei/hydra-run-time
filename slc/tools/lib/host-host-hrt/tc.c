@@ -1516,6 +1516,11 @@ static void populate_tc(
   tc->start_index = start_index;
   tc->start_index_last_generation = start_index_last_generation;
 
+  LOG(DEBUG, "populate_tc: tc=%d: Finished setting up this TC: "
+      "no_threads_per_gen = %ld, no_threads_per_gen_last = %ld, start_index = %ld, start_index_last_gen = %ld\n",
+      tc->ident.tc_index, tc->no_threads_per_generation, tc->no_threads_per_generation_last,
+      start_index, start_index_last_generation);
+
   tc->denormalized_fam_start_index = denormalized_fam_start_index;
   tc->step = step;
 
