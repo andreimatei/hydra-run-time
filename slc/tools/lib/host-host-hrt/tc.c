@@ -1371,7 +1371,7 @@ void create_tc(int proc_index, int tc_index) {
   tc->ident.tc_index = tc_index;
   tc->ident.proc_index = tc_index / NO_TCS_PER_PROC;
 
-  //init shared_locks and global_locks
+  // init shared_locks and global_locks
   int i;
   for (i = 0; i < MAX_ARGS_PER_FAM; ++i) {
     for (int j = 0; j < 2; ++j) {
@@ -1383,6 +1383,9 @@ void create_tc(int proc_index, int tc_index) {
       perror("pthread_spin_init:"); exit(1);
     }
   }
+
+  // init lock for prev_range_done istruct
+  if (pthread_spin_init(&tc->prev_range_done.lock, PTHREAD_PROCESS_PRIVATE) != 0) handle_error("pthread_spin_init:");
 
   // init PLACE_LOCAL
   tc->place_local.node_index = NODE_INDEX;
