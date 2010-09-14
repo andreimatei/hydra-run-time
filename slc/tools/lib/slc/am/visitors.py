@@ -55,7 +55,8 @@ class Create_2_HydraCall(ScopedVisitor):
         die("get_arg_index: can't find index for arg %s (shared = %s)" % (arg.name, shared))
         assert(0)
 
-    def do_visit_seta(self, loc, decl, val):
+    # S -> the value of the .S(catter) bit to be set if decl refers to a global CreateArgMem
+    def do_visit_seta(self, loc, decl, val, S):
         #print 'in do_visit_seta. rhs = ' + rhs
         #b = rhs.accept(self)
         setter = None
@@ -70,20 +71,26 @@ class Create_2_HydraCall(ScopedVisitor):
             else:
                 value += Opaque('') + '_stub_2_long(_stub_2_canonical_stub(' + val + ', 0))'
 
-            setter = (flatten(loc, "write_istruct(") 
-                    + self.__first_tc + ".node_index, &" + self.__first_tc 
-                    + ('.tc->shareds[0][%d], ' % index)
-                    #+ '(long)(' + val + ')' 
-                    + value 
-                    + ', &' + self.__first_tc 
-                    )
-            # emit the 'is_mem' argument
             if (not isinstance(decl, CreateArgMem)):
-                setter += ', 0'
-            else:
-                setter += ', 1'
-
-            setter += ');\n'
+                setter = (flatten(loc, "write_istruct(") 
+                     + self.__first_tc + ".node_index, &" + self.__first_tc 
+                        + ('.tc->shareds[0][%d], ' % index)
+                        #+ '(long)(' + val + ')' 
+                        + value 
+                        + ', &' + self.__first_tc
+                        + ');\n'
+                        )
+            
+            else:   # mem argument. Use write_argmem
+                setter = (flatten(loc, "write_argmem(") 
+                        + self.__first_tc + ".node_index" +
+                        + ", &" + self.__first_tc + ('.tc->shareds[0][%d], ' % index)
+                        + value
+                        + ' , ' + self.__first_tc + ('.tc->shared_descs[0][%d]' % index) 
+                        + ', &' + self.__first_tc 
+                        + ');\n'
+                        )
+                
 
         else:                   # global argument
             # find my own index
@@ -99,7 +106,7 @@ class Create_2_HydraCall(ScopedVisitor):
                 # TODO: write to a temporary (we need a .cvar in decl)
                 setter = (flatten(loc, "write_global(") +
                     self.__fam_context + ', %s' % index + ', _stub_2_long(_stub_2_canonical_stub(' 
-                    + val + ', 0)), 1);\n')
+                    + val + ', ' + str(S) +')), 1);\n')
 
         self.__arg_setters.append(setter)
         return None
@@ -107,12 +114,12 @@ class Create_2_HydraCall(ScopedVisitor):
 
     def visit_seta(self, seta):
         b = seta.rhs.accept(self)
-        return self.do_visit_seta(seta.loc, seta.decl, b)
+        return self.do_visit_seta(seta.loc, seta.decl, b, 0)
 
     def visit_setmema(self, seta):
         #print 'Create_2_HydraCall: visit_setmema: arg %s (%d)' % (seta.decl.name, id(seta.decl))
         #print 'Create_2_HydraCall: visiting setmema. rhs = %s. id = %d' % (seta.rhs, id(seta.rhs_decl))
-        return self.do_visit_seta(seta.loc, seta.decl, CVarUse(decl = seta.rhs_decl.cvar_stub))
+        return self.do_visit_seta(seta.loc, seta.decl, CVarUse(decl = seta.rhs_decl.cvar_stub), 0)
 
     def visit_createarg(self, arg):
         # for shareds, append a pointer to the corresponding local variable to a list
@@ -303,66 +310,6 @@ class Create_2_HydraCall(ScopedVisitor):
         self.__cur_cr = cr
 
         # expand call to map_fam(..)
-        """
-        mapping_decision_var = CVarDecl(loc = cr.loc_end, name =
-                'map$%s' % lbl, ctype = 'mapping_decision')
-        self.cur_scope.decls += mapping_decision_var
-        
-        start = CVarUse(decl = cr.cvar_start)
-        end_index = CVarUse(decl = cr.cvar_limit) + " - 1"  # this is now inclusive
-        step = CVarUse(decl = cr.cvar_step)
-
-        #mapping_hint_var = CVarDecl(loc = None, name = 'mapping_hint_%s' % cr.label, ctype = 'mapping_hint_t',
-        #                            init = 'empty_mapping_hint')
-        #self.cur_scope.decls += mapping_hint_var
-
-        mapspec = cr.mapping.get_attr("mapping", None)
-        block = None
-        default_place_policy = Opaque('3')  # inherit from the parent
-        if mapspec is not None:
-            #newbl.append(self.parse_mapping_fun(mapspec, mapping_hint_var))
-            mf = mapspec.mf  # the mapping function
-            if mf == "spread":
-                block = mapspec.n
-                #print 'found spread with block: ' + block
-            elif mf == "distribute":
-                block = mapspec.n
-                default_place_policy = mapspec.m
-                #print 'found spread with block: ' + block + ' and policy: ' + default_place_policy
-            else:
-                die("unsupported mapping")
-        else:
-            block = cr.block
-        #else:
-            #newbl.append(CVarSet(decl = mapping_hint_var, rhs = '{-1,-1,-1}') + ';');
-        #    newbl.append(CVarUse(decl = mapping_hint_var) + ' = {-1,-1,-1};')
-      
-        # if statically delegating to PLACE_LOCAL, and a jump to the sequential create
-        #TODO(kena): is there a better way to test for PLACE_LOCAL on the following line?
-        if cr.place.__len__() == 1 and cr.place.__getitem__(0).text.strip() == "PLACE_LOCAL":
-            print 'found delegation to PLACE_LOCAL; skipping mapping and allocation'
-            newbl.append(CGoto(target = lc.target_next) + '; // compiler detected delegation to PLACE_LOCAL, so jump to creation of sequential version\n')
-        else:
-            print "didn't find delegation to PLACE_LOCAL %s \"%s\"" % (cr.place.__len__(), cr.place.__getitem__(0).text)
-
-        # add a dynamic jump to the sequential create
-        newbl.append(Opaque('if ( _places_equal(') + CVarUse(decl = cr.cvar_place) + ', PLACE_LOCAL)) {'
-                  + CGoto(target = lc.target_next) + ';}\n') 
-        
-
-        rrhs = (flatten(cr.loc_end, 'map_fam(&') 
-                        + gen_loop_fun_name(funvar)                       # func
-                        + ', (' + end_index + ' - ' + start + '+ 1) / ' + step    # no_threads
-                        + ', ' + cr.place                                 #place
-                        + ', ' + gencallee                                #gencallee
-                        #+ ', ' + CVarUse(decl = mapping_hint_var)        # hint
-                        + ', ' + block                                    # block
-                        + ', 0 '                                          # parent_id (NULL)
-                        + ')')
-
-        mapping_call = CVarSet(decl = mapping_decision_var, rhs = rrhs)
-        newbl.append(mapping_call + ';\n')
-        """
 
         mapcall, mapping_decision_var, default_place_policy = self.emit_call_map_fam(funvar, cr, lc, gencallee)
         newbl.append(mapcall)
@@ -374,34 +321,6 @@ class Create_2_HydraCall(ScopedVisitor):
                     )
 
         #expand call to allocate_fam()
-        """
-        fam_context_var = CVarDecl(loc = cr.loc_end, name = 'alloc$%s' % lbl,
-                                   ctype = 'fam_context_t*')
-        self.cur_scope.decls += fam_context_var
-        self.__cur_fam_context = fam_context_var  # to be used when visiting arguments of type mem_t
-
-        no_shareds = str(self.get_no_shareds())
-        no_globals = str(self.get_no_globals())
-        
-        start_index = CVarUse(decl = cr.cvar_start)
-        end_index = CVarUse(decl = cr.cvar_limit) + " - 1"  # this is now inclusive
-        step = CVarUse(decl = cr.cvar_step)
-        
-        no_threads_block = Opaque('') + '((' + end_index + ' - ' + start_index + ' + 1) / ' + step + ')'
-       
-        rrhs = (flatten(cr.loc_end, 'allocate_fam(')
-                #+ start + ', ' \
-                #+ end_index + ', ' + step + ', 0, &' + CVarUse(decl = mapping_decision_var) + ')'
-                + ', ' + no_threads_block    # no_threads
-                + ', 0'  # mapping parent
-                + ', &' + CVarUse(decl = mapping_decision_var)
-                + ')')
-
-        allocate_call = CVarSet(decl = fam_context_var, 
-                               rhs = rrhs)
-        newbl.append(allocate_call + ';\n')
-        """
-       
         allocate_call, fam_context_var = self.emit_call_allocate_fam(cr, mapping_decision_var)
         newbl.append(allocate_call)
 
@@ -481,14 +400,18 @@ class Create_2_HydraCall(ScopedVisitor):
         scatter_call = (flatten(scatter.loc, "_memscatter_affine(") 
                         + CVarUse(decl = fam_context_decl) 
                         + ", " + CVarUse(decl = stub) + ', ' 
-                        + a + ',' + b + ',' + c + ');' )
+                        + a + ',' + b + ',' + c + ', ' 
+                        + CVarUse(self.__cur_cr.cvar_start) + ',' # fam_start_index
+                        + CVarUse(self.__cur_cr.cvar_step)  # step
+                        + ');'
+                        )
                     
         self.__arg_setters.append(scatter_call)
         # create a stub and treat it as a sl_setma(stub)
         # set the S bit on the stub that is being passed
         #new_rhs = flatten(None, "_stub_2_long(_stub_2_canonical_stub(") + CVarUse(decl = stub) + " , 1))"
         new_rhs = CVarUse(decl = stub)
-        self.do_visit_seta(scatter.loc, scatter.decl, new_rhs) 
+        self.do_visit_seta(scatter.loc, scatter.decl, new_rhs, 1) 
 
         return None
 
@@ -595,7 +518,7 @@ class TFun_2_HydraCFunctions(DefaultVisitor):
             elif self.__state == 2 or self.__state == 3: #end and generic
                 newbl.append(flatten(setp.loc,  # end and generic are passed the array of shareds as an argument
                              'write_istruct(next->node_index, &shareds[%d],' % param.index) \
-                             + b + ', next, 0);')
+                             + b + ', next);//, 0);')
             else:
                 assert(0)
         else:  # no need to write to anything; just generate the rhs
@@ -750,15 +673,15 @@ class TFun_2_HydraCFunctions(DefaultVisitor):
                     write_istruct(_cur_tc->next.node_index, 
                                   &_cur_tc->next.tc->prev_range_done, 
                                   1,               // value
-                                  &_cur_tc->next,  // reader
-                                  0);              // is_mem
+                                  &_cur_tc->next);  // reader
+                                  //0);              // is_mem
                 }
             """ + 'printf("COMP: metaloop (tc=%d). End of generation. generations left = %ld \\n", _cur_tc->ident.tc_index, _cur_tc->no_generations_left);' + """
             }
 
             if (_is_last_tc_in_fam() && _get_parent_ident()->node_index != -1) {
                 printf("COMP: metaloop: last thread in the family done. Unblocking parent.\\n");
-                write_istruct(_get_parent_ident()->node_index, _get_done_pointer(), 1, _get_parent_ident(), 0);
+                write_istruct(_get_parent_ident()->node_index, _get_done_pointer(), 1, _get_parent_ident());//, 0);
             }
             _free_tc(_cur_tc->ident.proc_index, _cur_tc->ident.tc_index);
         """

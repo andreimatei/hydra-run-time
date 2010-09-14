@@ -9,6 +9,10 @@ class Create_2_Loop(ScopedVisitor):
     def __init__(self, *args, **kwargs):
         super(Create_2_Loop, self).__init__(*args, **kwargs)
       
+    def visit_scatteraffine(self, scatter):
+        return CVarSet(loc = scatter.loc, decl = scatter.decl.mem_decl.cvar_stub,
+                       rhs = CVarUse(decl = scatter.rhs_decl.cvar_stub))
+
     def visit_seta(self, seta):
         b = seta.rhs.accept(self)
         return CVarSet(loc = seta.loc, decl = seta.decl.cvar, rhs = b) 

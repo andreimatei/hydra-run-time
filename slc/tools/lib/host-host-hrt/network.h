@@ -193,7 +193,12 @@ typedef struct {
   tc_ident_t first_tc;  // first TC in the chain
   unsigned int index;   // index of the global
   long val;             // value to be written
+
   bool is_mem;          // true if the value is a mem_stub
+  bool desc_present;    // true if the .desc field is valid, false if .first_range and .no_ranges are valid
+  mem_range_t first_range;
+  int no_ranges;
+  memdesc_t desc;  // the descriptor associated with the stub;
 }req_write_global_to_chain;
 
 extern struct delegation_interface_params_t delegation_if_arg;
@@ -213,7 +218,7 @@ pending_request_t* request_remote_tcs(
     int node_index, int proc_index, int no_tcs);
 void block_for_allocate_response(pending_request_t* req, resp_allocate* resp);
 void write_global_to_remote_chain(unsigned int node_index, tc_ident_t first_tc, unsigned int index,
-                                  long val, bool is_mem);
+                                  long val, bool is_mem, bool copy_desc);
 void populate_remote_tcs(
     unsigned int node_index,
     thread_func func,
@@ -259,7 +264,15 @@ void enqueue_push_request(unsigned int node_index,
                           int pending_req_index, 
                           int remote_confirm_needed, 
                           const mem_range_t* ranges, 
-                          int no_ranges);
+                          size_t no_ranges,
+                          bool segmented,
+                          unsigned long no_segments,
+                          unsigned long start_first_segment, 
+                          unsigned long start_last_segment,
+                          unsigned long no_elems_per_segment, 
+                          unsigned long no_elems_per_segment_last,
+                          unsigned long gap_between_segments
+                          );
 
 /*
  * Block the current TC until the istruct in req has been written to.

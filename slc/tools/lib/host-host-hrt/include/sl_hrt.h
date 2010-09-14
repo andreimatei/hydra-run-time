@@ -392,15 +392,17 @@ void* _memactivate(memdesc_stub_t* stub,
 void _mempropagate(memdesc_stub_t stub);
 
 /*
- * Scatters the first range of a descriptor so that each thread i in a family gets a consistent view on
- * elements [a*i + a, a*i + b].
+ * Scatters the first range of a descriptor so that the thread with index i in a family gets a consistent view on
+ * elements [a*i + b, a*i + c].
  */
 void _memscatter_affine(fam_context_t* fc, 
                         memdesc_stub_t stub, 
                         //mem_range_t first_range, 
                         int a, 
                         int b, 
-                        int c);
+                        int c,
+                        long fam_start_index,
+                        long step);
 
 /*
  * Gathers from a descriptor that was scattered with _memscatter_affine(.. a,b,c)
@@ -525,8 +527,9 @@ void write_istruct_different_proc(
 void write_istruct(unsigned int node_index,
                    volatile i_struct* istructp,
                    long val, 
-                   const tc_ident_t* reading_tc,
-                   int is_mem);
+                   const tc_ident_t* reading_tc
+                   //int is_mem
+                   );
 
 void write_argmem(unsigned int node_index,
                   volatile i_struct* istructp,

@@ -99,7 +99,7 @@ void populate_local_tcs(
      
     );
 
-void write_global_to_chain_of_tcs(tc_t* tc, unsigned int index, long val, bool is_mem);
+void write_global_to_chain_of_tcs(tc_t* tc, unsigned int index, long val);//, bool is_mem);
 
 /*
  * Caps p1 by p2.

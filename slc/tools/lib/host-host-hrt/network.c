@@ -32,14 +32,22 @@ static int new_sending_socket_pipe_fd[2];  // the 2 end of a pipe use to wake up
  * struct representing the state of reading incoming memory ranges
  */
 typedef struct {
- memdesc_t desc;  // descriptor for the memory that we're currently receiving
- int node_index;  // index of the node that is sending us data; useful if we need to send a confirmation
- int cur_range;   // index of the range within the descriptor desc that we're currently receiving
- int offset_within_range;
- int pending_req_index;  // the index of a pending request slot to write to when all the data
-                         // is received. This can be a local slot or a remote slot.
-                         // -1 if no operation is needed.
- int remote_confirm;   // 1 if the pending_req_index refers to a remote slot; 0 if it refers to a local slot
+  memdesc_t desc;  // descriptor for the memory that we're currently receiving
+  int node_index;  // index of the node that is sending us data; useful if we need to send a confirmation
+  int cur_range;   // index of the range within the descriptor desc that we're currently receiving
+  int offset_within_range;
+  int pending_req_index;  // the index of a pending request slot to write to when all the data
+                          // is received. This can be a local slot or a remote slot.
+                          // -1 if no operation is needed.
+  bool remote_confirm;   // true if the pending_req_index refers to a remote slot; false if it refers to a local slot
+
+  bool segmented;  // true if the incoming transfer is a segmented one. The following fields are only valid
+                   // valid when .segmented == true, and .offset_within_range is no longer used
+  unsigned long no_segments;
+  unsigned long start_first_segment, start_last_segment;  // index of elements
+  unsigned long no_elems_per_segment, no_elems_per_segment_last;  // expressed in elements
+  unsigned long gap_between_segments;  // expressed in elements
+  unsigned long received_bytes;
 }tcp_incoming_state_t;
 
 static tcp_incoming_state_t incoming_state[MAX_NODES];
@@ -47,15 +55,24 @@ static tcp_incoming_state_t incoming_state[MAX_NODES];
 /*
  * struct representing a request to push some memory to a remote node
  */
-typedef struct{
-  mem_range_t ranges[100];
-  int no_ranges;
+typedef struct push_request {
+  mem_range_t ranges[MAX_RANGES_PER_MEM];
+  size_t no_ranges;
   int pending_req_index;    // this index will be embedded in the data stream that
-                            // we pushes. When the remote node receives this stream and reads it all,
-                            // it will write to the pending request slot to unblock either itself or this node.
+  // we push. When the remote node receives this stream and reads it all,
+  // it will write to the pending request slot to unblock either itself or this node.
   int remote_confirm_needed;  // specifies wether pending_req_index refers to a slot on the remote node or
-                              // on the local node.
+  // on the local node.
   struct timeval create_time;  // time when this request was created (enqueued)
+
+  bool segmented;   // if true, than the request refers to a scatter operation that needs to push
+  // elements for the multiple ranges of threads run on a node. The following fields
+  // become valid.
+  unsigned long no_segments;
+  unsigned long start_first_segment, start_last_segment;  // index of elements
+  unsigned long no_elems_per_segment, no_elems_per_segment_last;  // expressed in elements
+  unsigned long gap_between_segments;  // expressed in elements
+
 } push_request_t;
 
 /*
@@ -65,8 +82,9 @@ typedef struct {
   int active;  // 0 if there is no sending state for this remote node
   push_request_t req;  // the memory that we're currently pushing
   int header_sent;  // 1 if the header (describing the ranges, etc.) has been fully sent. 0 otherwise.
-  int cur_range;    // index of the range that is currently in the process of being sent
-  int bytes_sent;   // bytes already sent from cur_range
+  unsigned int cur_range;    // index of the range that is currently in the process of being sent
+  //unsigned long cur_segment;
+  unsigned long bytes_sent;   // bytes already sent from cur_range
   struct timeval start_time;  // time when this state has been created
 }tcp_sending_state_t;
 
@@ -133,7 +151,7 @@ static void handle_sctp_request(int sock) {
 
   //LOG(DEBUG, "SCTP REQUEST: \"%s\"\n", buf);
   net_request_t* req = (net_request_t*)buf;
-  
+
   switch (req->type) {
     case REQ_QUIT:
       LOG(DEBUG, "network: handle_sctp_request: got REQ_QUIT\n");
@@ -187,6 +205,7 @@ static void handle_sctp_request(int sock) {
       LOG(DEBUG, "network: handle_sctp_request: got REQ_WRITE_GLOBAL_TO_CHAIN\n");
       assert(read == sizeof(req_write_global_to_chain));
       handle_req_write_global_to_chain((const req_write_global_to_chain*)req);
+      break;
     case REQ_PING:
       LOG(DEBUG, "network: handle_sctp_request: got REQ_PING\n");
       assert(read == sizeof(req_ping));
@@ -265,30 +284,87 @@ char* parse_memchunk_header(char* buf, int len __attribute__((__unused__)), int 
 
   assert(incoming_state[incoming_index].cur_range == -1); // assert we weren't in the middle of receiving another object
 
+  char cc[100];
+  memcpy(cc, buf, 50);
+  cc[50] = 0;
+  LOG(DEBUG, "network: parse_memchunk_header: header = \"%s\"\n", cc);
+
   memdesc_t res;
-  char* tmp;
-  char* tok = strtok_r(buf, ";", &tmp);  // node_index
+  char* tmp = NULL;
+  int tmp_int;
+
+  char* tok = strtok_r(buf, ";", &tmp);
+  assert(tok);
+  tmp_int = atoi(tok); assert(tmp_int == 0 || tmp_int == 1);
+  incoming_state[incoming_index].segmented = (bool)tmp_int;
+
+  tok = strtok_r(NULL, ";", &tmp);  // node_index
   assert(tok);
   incoming_state[incoming_index].node_index = atoi(tok);
-  tok = strtok_r(NULL, ";", &tmp);  // no_ranges
+
+  tok = strtok_r(NULL, ";", &tmp);  // no_ranges or no_segments
   assert(tok);
-  res.no_ranges = atoi(tok);
+  if (incoming_state[incoming_index].segmented) {
+    incoming_state[incoming_index].no_segments = atoi(tok);
+    res.no_ranges = 1;
+  } else {
+    res.no_ranges = atoi(tok);
+    incoming_state[incoming_index].no_segments = 0;
+    LOG(DEBUG, "network: parse_memchunk_header: no_ranges =  %d\n", res.no_ranges);
+  }
+
   tok = strtok_r(NULL, ";", &tmp);  // pending_req_index
   assert(tok);
   incoming_state[incoming_index].pending_req_index = atoi(tok);
+  LOG(DEBUG, "network: parse_memchunk_header: pending_req_index =  %d\n", incoming_state[incoming_index].pending_req_index);
+
   tok = strtok_r(NULL, ";", &tmp);  // is the pending_req_index referring to a remote slot (or 0 for a local slot)?
   assert(tok);
   incoming_state[incoming_index].remote_confirm = atoi(tok);
+  LOG(DEBUG, "network: parse_memchunk_header: remote_confirm =  %d\n", incoming_state[incoming_index].remote_confirm);
+  
+  if (incoming_state[incoming_index].segmented) {
+    tok = strtok_r(NULL, ";", &tmp);  // start_first_segment
+    assert(tok);
+    incoming_state[incoming_index].start_first_segment = atol(tok);
+    
+    tok = strtok_r(NULL, ";", &tmp);  // start_last_segment
+    assert(tok);
+    incoming_state[incoming_index].start_last_segment = atol(tok);
+
+    tok = strtok_r(NULL, ";", &tmp);  // no_elems_per_segment
+    assert(tok);
+    incoming_state[incoming_index].no_elems_per_segment = atol(tok);
+    
+    tok = strtok_r(NULL, ";", &tmp);  // no_elems_per_segment_last
+    assert(tok);
+    incoming_state[incoming_index].no_elems_per_segment_last = atol(tok);
+    
+    tok = strtok_r(NULL, ";", &tmp);  // gap_between_segments
+    assert(tok);
+    incoming_state[incoming_index].gap_between_segments = atol(tok);
+
+    LOG(DEBUG, "network: parse_memchunk_header: got start_first_segment = %d, start_last_segment = %d,"
+        " gap_between_segments = %d\n", 
+       incoming_state[incoming_index].start_first_segment,
+       incoming_state[incoming_index].start_last_segment,
+       incoming_state[incoming_index].gap_between_segments);
+  }
+  
   for (int i = 0; i < res.no_ranges; ++i) {
+    LOG(DEBUG, "network: handle_incoming_mem_chunk: parsing info about range %d\n", i);
     tok = strtok_r(NULL, ";", &tmp);  // pointer
     assert(tok);
     res.ranges[i].p = (void*)atol(tok);
     tok = strtok_r(NULL, ";", &tmp);  // no_elements
     assert(tok);
     res.ranges[i].no_elements = atoi(tok);
-    tok = strtok_r(NULL, ";", &tmp);  // sizeof_elemement
+    tok = strtok_r(NULL, ";", &tmp);  // sizeof_element
     assert(tok);
     res.ranges[i].sizeof_element = atoi(tok);
+    
+    LOG(DEBUG, "network: handle_incoming_mem_chunk: no_elements = %d, sizeof_element = %d\n",
+        res.ranges[i].no_elements, res.ranges[i].sizeof_element);
   }
   incoming_state[incoming_index].desc = res;
   incoming_state[incoming_index].cur_range = 0;
@@ -296,85 +372,107 @@ char* parse_memchunk_header(char* buf, int len __attribute__((__unused__)), int 
 
   return tmp;
 }
-    
+
 /*
  * Read from a buffer and copies to local memory.
- * Returns 1 if we got all that was required by the incoming_state[invoming_index]; 0 if more data is needed.
+ * Returns true if we got all that was required by the incoming_state[invoming_index]; false if more data is needed.
  * len - [IN] - size of buf
  * bytes_used - [OUT] - counter for the number of bytes consumed from buf
  */
-static int parse_incoming_memchunk(int incoming_index, char* buf, int len, int* bytes_used) {
-  LOG(DEBUG, "network: parse_incoming_memchunk: incoming_index = %d, len = %d\n", incoming_index, len);
+static bool parse_incoming_memchunk(int incoming_index, char* buf, int len, int* bytes_used) {
+  LOG(DEBUG, "network: parse_incoming_memchunk: incoming_index = %d, segmented = %d, len = %d\n", 
+              incoming_index, incoming_state[incoming_index].segmented ,len);
   *bytes_used = 0;
   memdesc_t* desc = &incoming_state[incoming_index].desc;
   int bytes_needed = 0;
   int i;
+  bool segmented = incoming_state[incoming_index].segmented;
+  unsigned long bytes_per_segment = incoming_state[incoming_index].no_elems_per_segment
+                          * desc->ranges[0].sizeof_element;
+  unsigned long bytes_per_segment_last = incoming_state[incoming_index].no_elems_per_segment_last
+                          * desc->ranges[0].sizeof_element;
+  unsigned long cur_segment = 0;
+  unsigned long offset_within_segment = 0;
+  if (segmented) {
+    if (incoming_state[incoming_index].received_bytes 
+        < bytes_per_segment * (incoming_state[incoming_index].no_segments - 1)) {
+      cur_segment = incoming_state[incoming_index].received_bytes / bytes_per_segment;
+      offset_within_segment = incoming_state[incoming_index].received_bytes % bytes_per_segment;
+    } else {
+      cur_segment = incoming_state[incoming_index].no_segments - 1;
+      offset_within_segment = incoming_state[incoming_index].received_bytes 
+                               - bytes_per_segment * (incoming_state[incoming_index].no_segments - 1);
+    }
+  }
 
   do {
     i = incoming_state[incoming_index].cur_range;
-    // compute how much data is still to be received for this range
-    bytes_needed = desc->ranges[i].no_elements * desc->ranges[i].sizeof_element - 
-                   incoming_state[incoming_index].offset_within_range;
-    void* mem_dest = desc->ranges[i].p + incoming_state[incoming_index].offset_within_range;
+    // compute how much data is still to be received for this range or segment
+    if (segmented) {
+      if (cur_segment < incoming_state[incoming_index].no_segments - 1) {
+        bytes_needed = bytes_per_segment - offset_within_segment;
+      } else {
+        bytes_needed = bytes_per_segment_last - offset_within_segment;
+      }
+    } else {
+      bytes_needed = desc->ranges[i].no_elements * desc->ranges[i].sizeof_element - 
+        incoming_state[incoming_index].offset_within_range;
+    }
+    assert(bytes_needed > 0);
+
+    void* mem_dest;
+    if (segmented) {
+      unsigned long start_first_segment = incoming_state[incoming_index].start_first_segment;
+      unsigned long start_last_segment = incoming_state[incoming_index].start_last_segment;
+      unsigned long gap_between_segments = incoming_state[incoming_index].gap_between_segments;
+      if (cur_segment < incoming_state[incoming_index].no_segments - 1) {
+        mem_dest = desc->ranges[i].p 
+          + (start_first_segment + (gap_between_segments * cur_segment)) 
+          * desc->ranges[0].sizeof_element
+          + offset_within_segment;
+      } else {
+        mem_dest = desc->ranges[i].p 
+          + (start_last_segment * desc->ranges[0].sizeof_element)
+          + offset_within_segment;
+      } 
+    } else {
+      mem_dest = desc->ranges[i].p + incoming_state[incoming_index].offset_within_range;
+    }
+
     LOG(DEBUG, "network: parse_incoming_mem_chunk: we need %d bytes for range %d\n", bytes_needed, i);
     int read = MIN(bytes_needed, len);
     *bytes_used += read;
     memcpy(mem_dest, buf, read);
     LOG(DEBUG, "network: parse_incoming_mem_chunk: copied %d bytes at %p\n", read, mem_dest);
+    if (read == 4) {
+      LOG(DEBUG, "network: parse_incoming_mem_chunk: value copied = %d\n", *(int*)mem_dest);
+    }
     bytes_needed -= read;
     len -= read;
     buf += read;
-    incoming_state[incoming_index].offset_within_range += read;
+    if (segmented) {
+      offset_within_segment += read;
+      incoming_state[incoming_index].received_bytes += read;
+    } else {
+      incoming_state[incoming_index].offset_within_range += read;
+    }
     if (bytes_needed == 0) {
-      incoming_state[incoming_index].cur_range++;
-      incoming_state[incoming_index].offset_within_range = 0;
+      if (segmented) {
+        cur_segment++;
+        offset_within_segment = 0;
+      } else {
+        incoming_state[incoming_index].cur_range++;
+        incoming_state[incoming_index].offset_within_range = 0;
+      }
     }
   } while (len > 0 && incoming_state[incoming_index].cur_range < desc->no_ranges);
 
-  if (incoming_state[incoming_index].cur_range == desc->no_ranges) {
-    return 1;
+  if (segmented) {
+    return (cur_segment == incoming_state[incoming_index].no_segments);
   } else {
-    return 0;
+    return (incoming_state[incoming_index].cur_range == desc->no_ranges);
   }
 
-  /*
-  // if we filled up
-  if (incoming_state[incoming_index].cur_range == desc->no_ranges) {
-    LOG(DEBUG, "network: parse_incoming_mem_chunk: finished receiving memory for incoming_state slot %d\n",
-        incoming_index);
-    assert(len == 0);
-  }
-
-  for (i = incoming_state[incoming_index].cur_range; i < desc->no_ranges; ++i) {
-    if (i > incoming_state[incoming_index].cur_range) {
-      mem_dest = desc->ranges[incoming_state[incoming_index].cur_range].p;
-      incoming_state[incoming_index].offset_within_range = 0;
-    }
-    // compute how much data is still to be received for this range
-    bytes_needed = desc->ranges[i].no_elements * desc->ranges[i].sizeof_element - 
-                   incoming_state[incoming_index].offset_within_range;
-    int read = MIN(bytes_needed, len);
-    *bytes_used += read;
-    memcpy(mem_dest, buf, read);
-    LOG(DEBUG, "network: parse_incoming_mem_chunk: copied %d bytes at %p\n", read, mem_dest);
-    bytes_needed -= read;
-    len -= read;
-    if (len == 0) {
-      LOG(DEBUG, "network: parse_incoming_mem_chunk: exhausted all data in incoming buffer\n");
-      break;
-    }
-    incoming_state[incoming_index].offset_within_range += read;
-  }
-  incoming_state[incoming_index].cur_range = bytes_needed ? i : i + 1;
-  if (incoming_state[incoming_index].cur_range == desc->no_ranges) {
-    assert(len == 0);
-    LOG(DEBUG, "network: parse_incoming_mem_chunk: finished receiving memory for incoming_state slot %d\n",
-        incoming_index);
-    return 1;
-  } else {
-    return 0;
-  }
-  */
 }
 
 /*
@@ -427,26 +525,28 @@ static void handle_incoming_mem_chunk(int incoming_index) {
       LOG(DEBUG, "network: handle_incoming_mem_chunk: parsing a memchunk\n");
       LOG(DEBUG, "network: handle_incoming_mem_chunk: r = %d, buf = %p, tmp = %p\n", r, buf, tmp);
 
-      int finished = parse_incoming_memchunk(incoming_index, tmp, r - (tmp - buf), &bytes_used);
+      bool finished = parse_incoming_memchunk(incoming_index, tmp, r - (tmp - buf), &bytes_used);
       LOG(DEBUG, "network: handle_incoming_mem_chunk: done parsing a memchunk. finished = %d\n", finished);
       tmp += bytes_used;
       if (finished) {  // we've got all the data
         LOG(DEBUG, "network: handle_incoming_mem_chunk: finished receiving data for a memdesc\n");
-        
+
         // assert that we've used up all the data read from the socket
         // // FIXME: the current code seems to not handle the case where a single remote node quickly seends different
         // // memory chunks (with different headers). If the read() in this function grabs more than one header, we
         // // ignore the second one (hence the next assert). Fix this somehow.
         // //assert(bytes_used == r - (tmp - buf));
-        
+
         // clear the state
         cur_incoming_mem_range_start = NULL;
         cur_incoming_mem_range_len = 0;
         incoming_state[incoming_index].cur_range = -1;
+        incoming_state[incoming_index].received_bytes = 0;
         int slot_index;
         if ((slot_index = incoming_state[incoming_index].pending_req_index) != -1) {
           if (incoming_state[incoming_index].remote_confirm) {
             // send a confirmation
+            LOG(DEBUG, "network: handle_incoming_mem_chunk: sending remote confirmation\n");
             req_confirmation req;
             req.type = REQ_CONFIRMATION;
             req.node_index = NODE_INDEX;
@@ -463,7 +563,7 @@ static void handle_incoming_mem_chunk(int incoming_index) {
             write_istruct_different_proc(&pending->istruct, 1, pending->blocking_tc);
           }
         }  
-      }
+      } // if (finished)
     }  // loop until all the data that was read from the socket is consumed 
     LOG(DEBUG, "network: handle_incoming_mem_chunk: all the data that was read so far from the socket was consumed\n");
 
@@ -509,8 +609,8 @@ void open_tcp_conn(int node_index) {
   }
 
   if (connect(secondaries[node_index].socket_tcp,
-              addr->ai_addr,
-              addr->ai_addrlen) < 0) handle_error("connect tcp");
+        addr->ai_addr,
+        addr->ai_addrlen) < 0) handle_error("connect tcp");
   //// set the socket to non-blocking mode
   // O_NONBLOCK or O_NDELAY ?
   //if (fcntl(secondaries[node_index].socket_tcp, F_SETFL, O_NDELAY) < 0) handle_error("setting non-blocking");
@@ -539,6 +639,7 @@ fd_set get_sending_sockets() {
         outgoing_state[i].active = 1;
         outgoing_state[i].header_sent = 0;
         outgoing_state[i].cur_range = 0;
+        //outgoing_state[i].cur_segment = 0;
         outgoing_state[i].bytes_sent = 0;
       }
 
@@ -553,23 +654,114 @@ fd_set get_sending_sockets() {
  * Build the header for a push request.
  */
 void build_push_header(const tcp_sending_state_t* s, char* buf, int buf_size, int* len) {
-  // the header looks like <local node index>;<number of ranges>;<pending_req_index>;<remote_confirm>;
-  // (<pointer>;<no elements>;<sizeof element>;)*
-  
+
   assert(s->active);
-  *len = sprintf(buf, "%d;%d;%d;%d;", 
-                 NODE_INDEX, 
-                 s->req.no_ranges, 
-                 s->req.pending_req_index, 
-                 s->req.remote_confirm_needed);
-  for (int i = 0; i < s->req.no_ranges; ++i) {
-    const mem_range_t* r = &s->req.ranges[i];
+
+  if (!s->req.segmented) {
+    LOG(DEBUG, "network: build_push_header: no_ranges = %d\n", s->req.no_ranges);
+    // the header looks like 0;<local node index>;<number of ranges>;<pending_req_index>;<remote_confirm>;
+    // (<pointer>;<no elements>;<sizeof element>;)*
+    *len = sprintf(buf, "0;%d;%lu;%d;%d;", 
+        NODE_INDEX, 
+        s->req.no_ranges, 
+        s->req.pending_req_index, 
+        s->req.remote_confirm_needed);
+    for (unsigned long i = 0; i < s->req.no_ranges; ++i) {
+      const mem_range_t* r = &s->req.ranges[i];
+      *len += sprintf(buf + *len, "%ld;%d;%d;",
+          (long)r->p,
+          r->no_elements,
+          r->sizeof_element);
+    }
+  } else {  // segmented (scatter) request
+    // the header looks like 1;<local node index>;<number of segments>;<pending_req_index>;<remote_confirm>;
+    // <start_first_segment>;<start_last_segment>;<no_elems_per_segment>;<no_elemens_per_segment_last>;
+    // <gap_between_segments>;
+    // <pointer>;<no elements>;<sizeof element>;
+    assert(s->req.no_ranges == 1);  // so far, this is what we support for scatter/gather: one memory range.
+    *len = sprintf(buf, "1;%d;%lu;%d;%d;%lu;%lu;%lu;%lu;%lu;", 
+        NODE_INDEX, 
+        s->req.no_segments, 
+        s->req.pending_req_index, 
+        s->req.remote_confirm_needed,
+        s->req.start_first_segment, 
+        s->req.start_last_segment,
+        s->req.no_elems_per_segment,
+        s->req.no_elems_per_segment_last,
+        s->req.gap_between_segments
+        );
+
+    LOG(DEBUG, "network: build_push_header: pending_req_index = %d, remote_confirm_needed = %d, sending start_first_segment = %d, start_last_segment = %d,"
+        " gap_between_segments = %d\n", 
+       s->req.pending_req_index,
+       s->req.remote_confirm_needed,
+       s->req.start_first_segment,
+       s->req.start_last_segment,
+       s->req.gap_between_segments);
+    
+    const mem_range_t* r = &s->req.ranges[0];
     *len += sprintf(buf + *len, "%ld;%d;%d;",
-                    (long)r->p,
-                    r->no_elements,
-                    r->sizeof_element);
+        (long)r->p,
+        r->no_elements,
+        r->sizeof_element);
   }
   assert(*len < buf_size);
+}
+
+/*
+ * Fills a buffer with as many segments as possible from the first range of a descriptor.
+ * Returns the number of bytes copied to the buffer.
+ */
+static size_t prepare_push_buffer(char* buf, size_t len, const tcp_sending_state_t* s) {
+  assert(s->req.segmented);
+  //unsigned long cur_segment = s->cur_segment;
+  unsigned long cur_segment;
+  unsigned long bytes_per_segment = s->req.no_elems_per_segment * s->req.ranges[0].sizeof_element;
+  unsigned long bytes_per_segment_last = s->req.no_elems_per_segment_last * s->req.ranges[0].sizeof_element;
+  unsigned long offset_within_segment;
+  void* p;
+  mem_range_t range = s->req.ranges[0];
+  if (s->bytes_sent < (s->req.no_segments - 1) * bytes_per_segment) {
+    cur_segment = s->bytes_sent / bytes_per_segment;
+    offset_within_segment = s->bytes_sent % bytes_per_segment;
+    p = range.p
+      + (s->req.start_first_segment + s->req.gap_between_segments * cur_segment) * range.sizeof_element
+      + offset_within_segment;
+  } else {  // last segment
+    assert(s->bytes_sent < (bytes_per_segment * (s->req.no_segments-1)) + bytes_per_segment_last);
+    cur_segment = s->req.no_segments - 1;
+    offset_within_segment = s->bytes_sent - (bytes_per_segment * (s->req.no_segments-1));
+    p = range.p
+      + s->req.start_last_segment * range.sizeof_element
+      + offset_within_segment;
+  }
+
+  size_t res = 0;
+  while (len > 0 && cur_segment < s->req.no_segments) {
+    unsigned long left_in_segment;
+    if (cur_segment == s->req.no_segments - 1) {
+      left_in_segment = s->req.no_elems_per_segment_last * range.sizeof_element - offset_within_segment;
+      p = range.p
+            + s->req.start_last_segment * range.sizeof_element
+            + offset_within_segment;
+    } else {
+      left_in_segment = s->req.no_elems_per_segment * range.sizeof_element - offset_within_segment;
+      p = range.p
+        + (s->req.start_first_segment + s->req.gap_between_segments * cur_segment) * range.sizeof_element
+        + offset_within_segment;
+    }
+    size_t to_copy = MIN(left_in_segment, len);
+    memcpy(buf + res, p, to_copy);
+    len -= to_copy;
+    res += to_copy;
+    if (to_copy == left_in_segment) {
+      cur_segment++;
+      offset_within_segment = 0;
+    } else {
+      offset_within_segment += to_copy;
+    }
+  }
+  return res;
 }
 
 static void push_data(int node_index) {
@@ -597,33 +789,77 @@ static void push_data(int node_index) {
   // send data in non-blocking mode
   LOG(DEBUG, "network: push_data: sending data. cur_range = %d total ranges = %d\n", s->cur_range, s->req.no_ranges);
   mem_range_t r = s->req.ranges[s->cur_range];
-  int tot_send = r.no_elements * r.sizeof_element;
-  int to_send = tot_send - s->bytes_sent;
-  assert((to_send > 0) || (r.no_elements == 0));
-  int flags = MSG_DONTWAIT;
-  if (s->cur_range < s->req.no_ranges - 1)  // if there are more ranges to come
-    flags |= MSG_MORE;  // TODO: verify that select still returns this socket so we can continue sending
-                        // or, loop in this function until send returns 0
-  res = send(sock, r.p + s->bytes_sent, to_send, flags);
-  if (res == -1) {
-    assert(errno == EWOULDBLOCK || errno == EAGAIN);
-    res = 0;
-    LOG(WARNING, "network: push_data: send returned -1 and errno was EWOULDBLOCK or EAGAIN\n");
+  unsigned long tot_send;
+  if (!s->req.segmented) {
+    tot_send = r.no_elements * r.sizeof_element;
+  } else {
+    tot_send = ((s->req.no_segments - 1) * s->req.no_elems_per_segment + s->req.no_elems_per_segment_last)
+                * r.sizeof_element;
   }
-  if (res == to_send) {
-    LOG(DEBUG, "network: push_data: finished sending a range\n");
-    s->cur_range++;
-    s->bytes_sent = 0;
-    if (s->cur_range == s->req.no_ranges) {  // we just finished sending the last part of the last range
+  size_t to_send = tot_send - s->bytes_sent;
+  assert((to_send > 0) || (r.no_elements == 0));
+
+  if (s->req.segmented) {
+    
+    char buf[30000];
+    size_t buf_len = prepare_push_buffer(buf, 30000, s);
+    int flags = MSG_DONTWAIT;
+    if (buf_len < to_send) { // if there are more ranges to come
+      flags |= MSG_MORE;  // TODO: verify that select still returns this socket so we can continue sending
+      // or, loop in this function until send returns 0
+    }
+
+    res = send(sock, buf, buf_len, flags);
+    if (res == -1) {
+      assert(errno == EWOULDBLOCK || errno == EAGAIN);
+      res = 0;
+      LOG(WARNING, "network: push_data: send returned -1 and errno was EWOULDBLOCK or EAGAIN\n");
+    }
+    if (res == (signed)to_send) {
+      LOG(DEBUG, "network: push_data: finished sending all fragments to a node\n");
+      s->cur_range++;
+      s->bytes_sent = 0;
       s->active = 0;
       struct timeval t;
       gettimeofday(&t, NULL);
       LOG(DEBUG, "network: push_data: finished sending memory. The sending state was active for %ld ms. (%ld ms since request for push was enqueued)\n",
           timediff(t, s->start_time), timediff(t, s->req.create_time));
+    } else {
+      s->bytes_sent += res;
+      // TODO: check if we can send more now; use MSG_MORE 
     }
-  } else {
-    s->bytes_sent += res;
-    // TODO: check if we can send more now; use MSG_MORE 
+
+  } else {  // if not a segmented transfer
+
+    int flags = MSG_DONTWAIT;
+    if (s->cur_range < s->req.no_ranges - 1) { // if there are more ranges to come
+      flags |= MSG_MORE;  // TODO: verify that select still returns this socket so we can continue sending
+      // or, loop in this function until send returns 0
+    }
+
+    res = send(sock, r.p + s->bytes_sent, to_send, flags);
+    if (res == -1) {
+      assert(errno == EWOULDBLOCK || errno == EAGAIN);
+      res = 0;
+      LOG(WARNING, "network: push_data: send returned -1 and errno was EWOULDBLOCK or EAGAIN\n");
+    }
+
+    if (res == (signed)to_send) {
+      LOG(DEBUG, "network: push_data: finished sending a range\n");
+      s->cur_range++;
+      s->bytes_sent = 0;
+      if (s->cur_range == s->req.no_ranges) {  // we just finished sending the last part of the last range
+        s->active = 0;
+        struct timeval t;
+        gettimeofday(&t, NULL);
+        LOG(DEBUG, "network: push_data: finished sending memory. The sending state was active for %ld ms. (%ld ms since request for push was enqueued)\n",
+            timediff(t, s->start_time), timediff(t, s->req.create_time));
+      }
+    } else {
+      s->bytes_sent += res;
+      // TODO: check if we can send more now; use MSG_MORE 
+    }
+
   }
 }
 
@@ -717,7 +953,7 @@ void* delegation_interface(void* parm) {
       }
       if (found) continue;
       // go through sending sockets
-      for (unsigned int i =0; i < no_secondaries; ++i) {
+      for (unsigned int i = 0; i < no_secondaries; ++i) {
         if (secondaries[i].socket_tcp == -1) continue;
         if (FD_ISSET(secondaries[i].socket_tcp, &sending)) {
           // can send some more data on this socket
@@ -732,14 +968,6 @@ void* delegation_interface(void* parm) {
 
   }
   return NULL;
-
-  //char buf[1000];
-  //int len = 1000;
-  //if (getsockname(sock, (struct sockaddr*)buf, &len) < 0) handle_error("getsockname");
-
-  //assert(((struct sockaddr*)buf)->sa_family == AF_INET);  // test that we got an IPv4 address
-  //*port = ntohs(((struct sockaddr_in*)buf)->sin_port);
-  //return sock;
 }
 
 
@@ -1111,8 +1339,15 @@ void allocate_remote_tcs(unsigned int node_index,
   */
 }
 
+/*
+ * Sends a request to write a global to a chain of TC's on a remote processor.
+ * is_mem says wether the value is a memdesc_stub. If so, either the whole descriptor will be
+ * copied, or just the first range and the number of ranges, according to copy_desc.
+ */
 void write_global_to_remote_chain(unsigned int node_index, tc_ident_t first_tc, unsigned int index,
-                                  long val, bool is_mem) {
+                                  long val, 
+                                  bool is_mem, 
+                                  bool copy_desc) {
   req_write_global_to_chain req;
   req.type = REQ_WRITE_GLOBAL_TO_CHAIN;
   req.node_index = NODE_INDEX;
@@ -1122,8 +1357,22 @@ void write_global_to_remote_chain(unsigned int node_index, tc_ident_t first_tc, 
   req.first_tc = first_tc;
   req.index = index;
   req.val = val;
-  req.is_mem = is_mem;
 
+  req.is_mem = is_mem;
+  if (is_mem) {
+    req.desc_present = copy_desc;
+    memdesc_stub_t stub = _long_2_stub(val);
+    if (copy_desc) {
+      assert(memdesc_desc_local(stub));
+      req.desc = *get_stub_pointer(stub);
+    } else {
+      req.no_ranges = get_stub_pointer(stub)->no_ranges;
+      req.first_range = get_stub_pointer(stub)->ranges[0];
+    }
+  }
+  
+  LOG(DEBUG, "network: write_global_to_remote_chain: sending write global request\n",
+      sizeof(req), req.type);
   send_sctp_msg(node_index, &req, sizeof(req));
 }
 
@@ -1283,7 +1532,22 @@ static void handle_req_write_istruct_mem(const req_write_istruct_mem* req) {
 
 static void handle_req_write_global_to_chain(const req_write_global_to_chain* req) {
   LOG(DEBUG, "network: handle_req_write_global_to_chain: got a write request for chain starting with tc %d\n", req->first_tc.tc_index);
-  write_global_to_chain_of_tcs(req->first_tc.tc, req->index, req->val, req->is_mem);
+  if (req->is_mem) {
+    // copy the first range and no_ranges to the descriptor; prepare for a possible segfault
+    memdesc_t* my_desc = get_stub_pointer(_long_2_stub(req->val));
+    cur_incoming_mem_range_start = my_desc;
+    cur_incoming_mem_range_len = (unsigned long)my_desc + sizeof(memdesc_t); 
+    if (req->desc_present) {
+      // we have the whole descriptor, copy it over
+      *my_desc = req->desc;
+    } else {
+      // we just have the number of ranges and the first range
+      my_desc->no_ranges = req->no_ranges;
+      my_desc->ranges[0] = req->first_range;
+    }
+  }
+
+  write_global_to_chain_of_tcs(req->first_tc.tc, req->index, req->val);//, req->is_mem);
 }
 
 static void handle_req_create(const req_create* req) {
@@ -1326,7 +1590,15 @@ void enqueue_push_request(unsigned int node_index,
                           int pending_req_index, 
                           int remote_confirm_needed, 
                           const mem_range_t* ranges, 
-                          int no_ranges) {
+                          size_t no_ranges,
+                          bool segmented,
+                          unsigned long no_segments,
+                          unsigned long start_first_segment,   // all expressed in indexes in the array of elements
+                          unsigned long start_last_segment,
+                          unsigned long no_elems_per_segment, 
+                          unsigned long no_elems_per_segment_last,
+                          unsigned long gap_between_segments
+                          ) {
   assert(node_index < no_secondaries);
  
   pthread_spin_lock(&push_requests_locks[node_index]); 
@@ -1336,9 +1608,17 @@ void enqueue_push_request(unsigned int node_index,
   push_requests[node_index][slot].pending_req_index = pending_req_index;
   push_requests[node_index][slot].remote_confirm_needed = remote_confirm_needed;
   gettimeofday(&push_requests[node_index][slot].create_time, NULL);
-  for (int i = 0; i < no_ranges; ++i) {
+  for (size_t i = 0; i < no_ranges; ++i) {
     push_requests[node_index][slot].ranges[i] = ranges[i];
   }
+  push_requests[node_index][slot].segmented = segmented;
+  push_requests[node_index][slot].no_segments = no_segments;
+  push_requests[node_index][slot].start_first_segment = start_first_segment;
+  push_requests[node_index][slot].start_last_segment = start_last_segment;
+  push_requests[node_index][slot].no_elems_per_segment = no_elems_per_segment;
+  push_requests[node_index][slot].no_elems_per_segment_last = no_elems_per_segment_last;
+  push_requests[node_index][slot].gap_between_segments = gap_between_segments;
+
   ++no_push_requests[node_index];
 
   pthread_spin_unlock(&push_requests_locks[node_index]); 
@@ -1396,7 +1676,10 @@ static void handle_req_pull_data(const req_pull_data* req) {
                        req->identifier,  // pending request slot to be written on the remote node
                        0,                // no remote confirmation needed 
                        ranges,           // memory to push
-                       desc->no_ranges);
+                       desc->no_ranges,
+                       false,
+                       0,0,0,0,0,0
+                       );
 }
 
 /*
@@ -1409,9 +1692,9 @@ static void handle_req_pull_data_described(const req_pull_data_described* req) {
                        req->identifier,  // pending request slot to be written on the remote node
                        0,                // no remote confirmation needed 
                        req->desc.ranges,
-                       req->desc.no_ranges
-                       //&req->range,      // memory to push
-                       //1                 // only one range to push 
+                       req->desc.no_ranges,
+                       false,
+                       0,0,0,0,0,0
                        );
 }
 

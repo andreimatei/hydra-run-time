@@ -368,7 +368,10 @@ mapping_decision map_fam(
   assert(place.tc_index == -1);  // we don't support delegating to particular TC's. The current TC can be 
                                  // referred to by PLACE_LOCAL.
 
+  LOG(DEBUG, "map_fam: requested place: node: %d, proc: %d, tc:%d, default: %d, local: %d\n",
+      place.node_index, place.proc_index, place.tc_index, place.place_default, place.place_local);
   sl_place_t final_place = _place_2_canonical_place(place);
+  LOG(DEBUG, "map_fam: resolved place: node: %d, proc: %d, tc:%d\n", final_place.node_index, final_place.proc_index, final_place.tc_index);
 
   unsigned int no_nodes, no_procs, no_tcs;
   unsigned long block;
@@ -389,6 +392,7 @@ mapping_decision map_fam(
 
   int start_node = final_place.node_index != -1 ? final_place.node_index : _cur_tc->ident.node_index;
   int start_proc = final_place.proc_index != -1 ? final_place.proc_index : _cur_tc->ident.proc_index;
+  LOG(DEBUG, "map_fam: starting to map from node %d and proc %d\n", start_node, start_proc);
   //int start_tc   = final_place.tc_index   != -1 ? final_place.tc_index   : _cur_tc->ident.tc_index;
 
   int load_percentage = 100 / (no_nodes * no_procs);
@@ -831,7 +835,7 @@ tc_ident_t create_fam(fam_context_t* fc,
                       default_place_policy_enum default_place_policy
                       ) {
   const fam_distribution* dist = &fc->distribution;
-  long total_threads_per_generation = 0;  // across all procs/tcs...
+  unsigned long total_threads_per_generation = 0;  // across all procs/tcs...
   for (unsigned int i = 0; i < dist->no_reservations; ++i) {
     total_threads_per_generation += dist->reservations[i].no_threads_per_generation;
   }
@@ -909,7 +913,7 @@ tc_ident_t create_fam(fam_context_t* fc,
     } else {
       assert(_cur_tc != NULL);  // this should only be null for root_fam, and that shouldn't be allocated remotely
       unsigned int node_index = res->first_tc.node_index;
-      LOG(DEBUG, "create_fam: sending remote create request to node %d n", node_index);
+      LOG(DEBUG, "create_fam: sending remote create request to node %d\n", node_index);
       populate_remote_tcs(
           node_index,
           func,
@@ -937,6 +941,7 @@ tc_ident_t create_fam(fam_context_t* fc,
           default_place_policy,
           _cur_tc->place_default   // default_place_parent
           );
+      LOG(DEBUG, "create_fam: remote create request sent\n");
     }
     
     // first range on next TC starts from where this TC left off
@@ -946,135 +951,6 @@ tc_ident_t create_fam(fam_context_t* fc,
   }  // for i in reservations
   return dist->reservations[0].first_tc;
 }
-
-
-/*--------------------------------------------------
-* / * 
-*  * Populates and unblocks all the tc-s that have been assigned chunks of the family.
-*  * Returns an identifier of the first tc to service the family.
-*  * /
-* tc_ident_t create_fam(fam_context_t* fc, 
-*                       thread_func func,
-*                       default_place_policy_enum default_place_policy
-*                       //int no_threads
-*                       ) {
-*   //int tcs[MAX_NO_TCS_PER_ALLOCATION];
-*   int no_ranges_for_current_node = 0;
-* 
-*   // populate all TC's
-*   assert(fc->no_ranges > 0);
-*   int cur_node_index = -1;
-* 
-*   int start_index = 0;
-*   // go through the ranges, in chunks allocated to each node
-*   for (int i = 0; i < fc->no_ranges;) {
-*     if (fc->ranges[i].dest.node_index == cur_node_index)
-*       continue;
-* 
-*     // start treating the ranges for a new node
-*     cur_node_index = fc->ranges[i].dest.node_index;
-*     start_index = i;
-*     no_ranges_for_current_node = 0;
-* 
-*     assert(fc->no_ranges <=  MAX_NO_TCS_PER_ALLOCATION);
-*     // build an array of all the indexes of the tc's allocated to the current node
-*     for (; i < fc->no_ranges && fc->ranges[i].dest.node_index == cur_node_index; ++i) {
-*       //tcs[no_tcs++] = fc->ranges[i].dest.tc_index;
-*       ++no_ranges_for_current_node;
-*     }
-* 
-*     // attention: i is now 1 more than the last range that's part of the current node
-*     tc_ident_t parent, prev, next;
-*     if (_cur_tc != NULL) {
-*       parent = _cur_tc->ident;
-*     } else {
-*       // this means we're allocating root_fam. The parent shouldn't matter.
-*       //assert(func == _fam___root_fam);
-*       //assert(func == __root_fam);
-*       assert(func == __slFfmta___root_fam);
-*       parent.node_index = -1; parent.tc = NULL; parent.proc_index = -1; parent.tc_index = -1;
-*     }
-*     if (start_index == 0) {
-*       prev = parent;
-*     } else {
-*       prev = fc->ranges[start_index - 1].dest;
-*     }
-*     if (i == fc->no_ranges) {
-*       next = parent;
-*     } else {
-*       next = fc->ranges[i].dest;
-*     }
-* 
-*     if (cur_node_index == NODE_INDEX) {
-*       if (_cur_tc != NULL) {  // this will be NULL when creating root_fam
-*         populate_local_tcs(//tcs, 
-*             &fc->ranges[start_index], 
-*             no_ranges_for_current_node,//no_tcs, 
-*             func, 
-*             parent, prev, next,
-*             //_cur_tc->ident,  // parent
-*             //i > 0 ? fc->ranges[i-1].dest : _cur_tc->ident,  // prev
-*             //i < fc->no_ranges-1 ? fc->ranges[i+1].dest : _cur_tc->ident,  // next
-*             i == (fc->no_ranges),  // final ranges
-*             fc->shareds,
-*             fc->shared_descs,
-*             &fc->done,
-*             default_place_policy,
-*             _cur_tc->place_default
-*             );
-*       } else {  // creating root_fam
-*         //assert(func == &_fam___root_fam);
-*         //assert(func == &__root_fam);
-*         assert(func == &__slFfmta___root_fam);
-*         tc_ident_t dummy_parent;
-*         // set up a dummy parent; it needs to point to the same node, but different proc and different
-*         // TC than the reader, because we want the reader to use read_istruct_different_proc
-*         dummy_parent.node_index = NODE_INDEX; // no parent
-*         dummy_parent.proc_index = -1; dummy_parent.tc_index = -1; dummy_parent.tc = NULL; 
-*         sl_place_t whole_cluster = {0,0,-1,-1,-1};
-* 
-*         populate_local_tcs(//tcs, 
-*             &fc->ranges[start_index], 
-*             no_ranges_for_current_node, 
-*             func, 
-*             dummy_parent,  // parent
-*             dummy_parent,  // prev
-*             dummy_parent,  // next
-*             i == fc->no_ranges,  // final ranges
-*             fc->shareds,
-*             fc->shared_descs,
-*             &fc->done,
-*             INHERIT_DEFAULT_PLACE,
-*             whole_cluster 
-*             );
-*       }
-*     } else {  // we have a remote allocation
-*       assert(_cur_tc != NULL);  // this should only be null for root_fam, and that shouldn't be allocated remotely
-*       LOG(DEBUG, "create_fam: sending remote create request with %d ranges\n", no_ranges_for_current_node);
-*       populate_remote_tcs(cur_node_index,  // destination node
-*                           //tcs,
-*                           &fc->ranges[start_index],
-*                           no_ranges_for_current_node,
-*                           func,
-*                           parent, prev, next,
-*                           //_cur_tc->ident,  // parent
-*                           //i > 0 ? fc->ranges[i-1].dest : _cur_tc->ident,  // prev
-*                           //i < fc->no_ranges-1 ? fc->ranges[i+1].dest : _cur_tc->ident,  // next
-*                           i == (fc->no_ranges),  // final ranges
-*                           fc->shareds,
-*                           fc->shared_descs,
-*                           &fc->done,
-*                           default_place_policy,
-*                           _cur_tc->place_default
-*                           );  
-*       LOG(DEBUG, "create_fam: sent remote create request\n");
-*     }
-*   }
-* 
-*   return fc->ranges[0].dest;
-* }
-*--------------------------------------------------*/
-
 
 long sync_fam(fam_context_t* fc, /*long* shareds_dest,*/ int no_shareds, ...) {
   //int same_proc = test_same_proc(&_cur_tc->ident, &fc->ranges[fc->no_ranges-1].dest);
@@ -1680,19 +1556,18 @@ void write_istruct(//i_struct_fat_pointer istruct,
                    unsigned int node_index,  // destination node, if we're writing a remote istruct
                    volatile i_struct* istructp, 
                    long val, 
-                   const tc_ident_t* reading_tc,
-                   int is_mem) {
-  //TODO: remove the argument is_mem
-
+                   const tc_ident_t* reading_tc//,
+                   //int is_mem
+                   ) {
   //LOG(DEBUG, "write_istruct: writing istruct %p (my tc:%d)\n", istructp, _cur_tc->ident.tc_index);
   //if (istruct.node_index == NODE_INDEX) {
   if (node_index == NODE_INDEX) {
     //volatile i_struct* istructp;
     tc_ident_t cur_ident = get_current_context_ident();
 
-    assert(cur_ident.node_index == _cur_tc->ident.node_index);  //TODO: remove these
-    assert(cur_ident.proc_index == _cur_tc->ident.proc_index);
-    assert(cur_ident.tc_index == _cur_tc->ident.tc_index);
+    //assert(cur_ident.node_index == _cur_tc->ident.node_index);  //TODO: remove these
+    //assert(cur_ident.proc_index == _cur_tc->ident.proc_index);
+    //assert(cur_ident.tc_index == _cur_tc->ident.tc_index);
 
     assert(reading_tc->node_index == cur_ident.node_index);  // assume same node, for now
     tc_t* dest_tc = (tc_t*)reading_tc->tc;
@@ -1709,11 +1584,12 @@ void write_istruct(//i_struct_fat_pointer istruct,
       }
     }
   } else {  // writing to different node
-    LOG(DEBUG, "write_istruct: writing a remote istruct on node %d\n", node_index);
     //assert(!is_mem);  // remote write of mem args should be handled directly by write_argmem().
-    if (!is_mem) {
+    //if (!is_mem) {
+      LOG(DEBUG, "write_istruct: writing a remote istruct on node %d\n", node_index);
       write_remote_istruct(node_index, (i_struct*)istructp, val, reading_tc->tc);  // cast to strip volatile
-    } else {
+    //} else {
+    /* LOG(DEBUG, "write_istruct: writing a remote istruct (mem) on node %d\n", node_index);
       // we should only get here for globals. Remote write of mem args for shareds 
       // should be handled directly by write_argmem().
       write_remote_istruct_mem(node_index, 
@@ -1723,6 +1599,7 @@ void write_istruct(//i_struct_fat_pointer istruct,
                                0,  // don't copy over the descriptor
                                reading_tc->tc);
     }
+    */
   }
 }
 
@@ -1758,7 +1635,7 @@ void write_argmem(unsigned int node_index,
                              1,   // copy over the descriptor
                              reading_tc->tc);  // cast to strip volatile
   } else {
-    write_istruct(node_index, istructp, _stub_2_long(stub), reading_tc, 1);
+    write_istruct(node_index, istructp, _stub_2_long(stub), reading_tc);//, 1);
   }
 }
 
@@ -2080,7 +1957,7 @@ pthread_cond_t main_finished_cv;  // TODO: do I need to init this?
 int main_finished = 0;
 
 void end_main() {
-  LOG(DEBUG, "end_main:");
+  LOG(DEBUG, "end_main: entering\n");
   pthread_mutex_lock(&main_finished_mutex);
   main_finished = 1;
   pthread_cond_signal(&main_finished_cv);
@@ -2625,13 +2502,20 @@ int main(int argc, char** argv) {
 /*
  *  Recursively writes a value to a global slot in all TC's from a proc assigned to a family
  */
-void write_global_to_chain_of_tcs(tc_t* tc, unsigned int index, long val, bool is_mem) {
+void write_global_to_chain_of_tcs(tc_t* tc, unsigned int index, long val
+                                  //bool is_mem
+                                  //bool desc_present, 
+                                  //const memdesc_t* desc, 
+                                  //int no_ranges, 
+                                  //mem_range_t first_range
+                                  ) {
+
   // write the istructure
-  write_istruct(tc->ident.node_index, &tc->globals[index], val, &tc->ident, is_mem);
+  write_istruct(tc->ident.node_index, &tc->globals[index], val, &tc->ident);//, is_mem);
 
   // recurse
   if (!tc->is_last_tc_on_proc) {
-    write_global_to_chain_of_tcs(tc->next.tc, index, val, is_mem);
+    write_global_to_chain_of_tcs(tc->next.tc, index, val);//, is_mem);
   }
 }
 
@@ -2639,13 +2523,14 @@ void write_global(fam_context_t* fc, unsigned int index, long val, bool is_mem) 
   unsigned int i;
   // write the global to every TC that will run part of the family
 
+  LOG(DEBUG, "write_global: entering\n");
   for (i = 0; i < fc->distribution.no_reservations; ++i) {
     if (fc->distribution.reservations[i].first_tc.node_index == (signed)NODE_INDEX) {
-      write_global_to_chain_of_tcs(fc->distribution.reservations[i].first_tc.tc, index, val, is_mem);
+      write_global_to_chain_of_tcs(fc->distribution.reservations[i].first_tc.tc, index, val);//, is_mem);
     } else {
       write_global_to_remote_chain(fc->distribution.reservations[i].first_tc.node_index,
                                    fc->distribution.reservations[i].first_tc,
-                                   index, val, is_mem);
+                                   index, val, is_mem, true);
     }
   }
 

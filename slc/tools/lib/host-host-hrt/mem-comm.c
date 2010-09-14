@@ -25,7 +25,7 @@ static void* get_elem_pointer(const mem_range_t* range, int start_elem) {
   return range->p + (start_elem * range->sizeof_element);
 }
 
-int memdesc_desc_local(memdesc_stub_t stub) {
+bool memdesc_desc_local(memdesc_stub_t stub) {
   return (stub.node == NODE_INDEX);
 }
 
@@ -83,9 +83,6 @@ memdesc_stub_t _stub_2_canonical_stub(memdesc_stub_t stub, int S) {
  */
 void pull_desc(memdesc_t* new_desc, memdesc_stub_t* stub, memdesc_t* orig_desc) {//,
                       //mem_range_t first_range, unsigned int no_ranges) {
-  //memdesc_t* old_desc = get_stub_pointer(stub);
-  //assert(old_desc->no_ranges == 1); // TODO: if > 1, pull the metadata from the remote node
-  //FIXME: pull if no_ranges > 1
   if (orig_desc->no_ranges > 1) {
 
     if (stub->node == NODE_INDEX) {
@@ -223,9 +220,6 @@ void* _memactivate(memdesc_stub_t* stub,
                    memdesc_stub_t* new_stub
                    ) {
   LOG(DEBUG, "mem-comm: _memactivate: entering\n");
-  // FIXME: TODO: think about the decision made, namely to take a new_desc as an argument and initialize only
-  // the first range. We could have pull_data fill in the new descriptor fully, and then we could set .node on
-  // the new stub to the current node.
   if (!memdesc_data_local(*stub)) {
     pull_data(stub);
   }
@@ -235,28 +229,15 @@ void* _memactivate(memdesc_stub_t* stub,
     new_stub->have_data = 1;
     new_stub->data_provider = NODE_INDEX;
     new_stub->S = 0;
-    // .pointer and .node remain as in the original
     new_stub->node = stub->node;
     //new_stub->pointer = stub->pointer;
-    pull_desc(new_desc, new_stub, get_stub_pointer(*stub));
+    pull_desc(new_desc, new_stub, get_stub_pointer(*stub));  // this will initialize new_stub.pointer
   }
   
-  /*
-  memdesc_t* old_desc = get_stub_pointer(*stub);
-  if (new_desc != NULL) {
-    // initialize the first range of the new descriptor. The first range needs to be valid,
-    // even though the rest are not, because it will be used by subsequent operations on the new stub.
-    new_desc->no_ranges = old_desc->no_ranges;//no_ranges;
-    new_desc->ranges[0] = old_desc->ranges[0];//first_range;
-  }
-  */
-
-  
-  //FIXME: new_stub->pointer has to be set to new_desc and the descriptor has to be pulled
-
-  //return first_range.orig_p;
-  //return old_desc->ranges[0].orig_p;
-  return get_stub_pointer(*stub)->ranges[0].orig_p;
+  memdesc_t *desc = get_stub_pointer(*stub);
+  void *res = desc->ranges[0].orig_p;
+  LOG(DEBUG, "mem-comm: _memactivate: returning %p (desc = %p)\n", res, desc);
+  return res;
 }
 
 
@@ -290,7 +271,9 @@ void push_data(memdesc_stub_t stub, unsigned int dest_node) {
                        pending->id,  // pending request slot to be written on this node
                        1,                // remote confirmation needed 
                        desc->ranges,           // memory to push
-                       desc->no_ranges);
+                       desc->no_ranges,
+                       false,
+                       0,0,0,0,0,0);
 
   // block on the pending request slot
   LOG(DEBUG, "mem-comm: push_data: blocking until all the push data is received.\n");
@@ -326,30 +309,63 @@ void _mempropagate(memdesc_stub_t stub) {
  *  - node_index - [IN] - destination node
  *  - first_range - [IN] - first range of the descriptor described by stub
  */
-static pending_request_t* push_elems(unsigned int node_index, 
-                                     memdesc_stub_t stub, 
-                                     mem_range_t first_range,
-                                     int first_elem, 
-                                     int last_elem) {
-  LOG(DEBUG, "mem-comm: push_elems: entering\n", node_index);
+static pending_request_t* push_elems_affine(
+                                     unsigned int node_index, 
+                                     memdesc_stub_t stub,
+                                     int a, int b, int c,
+                                     long fam_start_index,
+                                     long step,
+                                     unsigned long no_generations,
+                                     unsigned long gap_between_generations,
+                                     unsigned long start_thread,
+                                     unsigned long threads_per_generation,
+                                     unsigned long start_thread_last_gen,
+                                     unsigned long threads_per_generation_last 
+                                     //mem_range_t first_range,
+                                     //int first_elem, 
+                                     //int last_elem
+                                     ) {
   assert(node_index != NODE_INDEX);
-  assert(first_elem <= last_elem);
   assert(memdesc_data_local(stub));
   pending_request_t* pending = get_pending_request_slot(_cur_tc);  // this index will embedded in the data 
   assert(pending != NULL);  // TODO: handle error
-  mem_range_t range;
-  range.p = get_elem_pointer(&first_range, first_elem);
-  //range.p = first_range.p + (first_elem - 1) * first_range.sizeof_element;
-  range.orig_p = NULL;  // sholdn't be used
-  range.no_elements = last_elem - first_elem + 1;
-  range.sizeof_element = first_range.sizeof_element;
+  mem_range_t first_range = get_stub_pointer(stub)->ranges[0];
 
   LOG(DEBUG, "mem-comm: push_elems: enqueueing push request for node %d\n", node_index);
+  long start_index = _denormalize_index(start_thread, fam_start_index, step);
+  long stop_index  = _denormalize_index(start_thread + threads_per_generation - 1, fam_start_index, step);
+  long start_elem = a * start_index + b;
+  long stop_elem = a * stop_index + c;
+  
+  long start_index_last = _denormalize_index(start_thread_last_gen, fam_start_index, step);
+  long stop_index_last  = _denormalize_index(start_thread_last_gen + threads_per_generation_last - 1, 
+                                             fam_start_index, step);
+  long start_elem_last = a * start_index_last + b;
+  long stop_elem_last  = a * stop_index_last + c;
+
+  long start_index_second_gen = _denormalize_index(start_thread + gap_between_generations, fam_start_index, step);
+  //long stop_index_second_gen  = _denormalize_index(
+  //                                      start_thread + threads_per_generation - 1 + gap_between_generations,
+  //                                      fam_start_index, step);
+  
+  long start_elem_second_gen = a * start_index_second_gen + b;
+  //long stop_elem_second_gen  = a * stop_index_second_gen + c;
+
+  unsigned long no_elems_per_segment = stop_elem - start_elem + 1;
+  unsigned long no_elems_per_segment_last = stop_elem_last - start_elem_last + 1;
+
   enqueue_push_request(node_index,   // destination node
                        pending->id,  // pending request slot to be written on this node
-                       1,            // remote confirmation needed 
-                       &range,       // memory to push
-                       1             // number of ranges to push
+                       true,         // remote confirmation needed 
+                       &first_range, // memory to push
+                       1,            // number of ranges to push
+                       true,         // segmented
+                       no_generations,
+                       start_elem,
+                       start_elem_last,
+                       no_elems_per_segment,
+                       no_elems_per_segment_last,
+                       start_elem_second_gen - start_elem
                        );
   return pending;
 }
@@ -383,14 +399,81 @@ static pending_request_t* pull_elems(int node_index,
 }
 
 /*
- * Scatters the first range of a descriptor so that each thread i in a family gets a consistent view on
+ * Scatters the first range of a descriptor so that the thread with index i in a family gets a consistent view on
  * elements [a*i + b, a*i + c].
  */
 void _memscatter_affine(fam_context_t* fc, 
                         memdesc_stub_t stub, 
                         //mem_range_t first_range,
-                        int a, int b, int c) {
-  // FIXME: TODO:
+                        int a, int b, int c,
+                        long fam_start_index,
+                        long step) {
+  pending_request_t* pending_pushes[MAX_NODES];
+  size_t no_pushes = 0;
+  int cur_node = -1;
+  unsigned long start_thread, start_thread_last_gen;
+  unsigned long no_threads = 0, no_threads_last_gen = 0;
+  unsigned long no_generations = fc->distribution.no_generations;
+  unsigned long total_threads_per_generation = 0;  // across all procs/tcs...
+  for (unsigned int i = 0; i < fc->distribution.no_reservations; ++i) {
+    total_threads_per_generation += fc->distribution.reservations[i].no_threads_per_generation;
+  }
+  
+  start_thread = 0;
+  start_thread_last_gen = fc->distribution.start_index_last_generation;
+  for (size_t i = 0; i < fc->distribution.no_reservations; ++i) {
+    proc_reservation res = fc->distribution.reservations[i];
+    if (res.first_tc.node_index == cur_node) {  // continue adding to current node
+      no_threads += res.no_threads_per_generation;
+      no_threads_last_gen += res.no_threads_per_generation_last;
+    } else {
+      if (cur_node != -1 && cur_node != (signed)NODE_INDEX) {
+        // send elements
+        pending_pushes[no_pushes++] = push_elems_affine(
+                                                 cur_node,
+                                                 stub,
+                                                 a, b, c, fam_start_index, step,
+                                                 total_threads_per_generation,
+                                                 no_generations,
+                                                 start_thread,
+                                                 no_threads,
+                                                 start_thread_last_gen,
+                                                 no_threads_last_gen);
+                                                  
+      }
+
+      cur_node = res.first_tc.node_index;
+      start_thread += no_threads;
+      start_thread_last_gen += no_threads_last_gen;
+      no_threads = res.no_threads_per_generation;
+      no_threads_last_gen = res.no_threads_per_generation_last;
+    }
+  }
+
+  if (cur_node != -1 && cur_node != (signed)NODE_INDEX) {
+    // send elements to last node
+    pending_pushes[no_pushes++] = push_elems_affine(
+      cur_node,
+      stub,
+      a, b, c, 
+      fam_start_index, 
+      step,
+      no_generations,
+      total_threads_per_generation,
+      start_thread,
+      no_threads,
+      start_thread_last_gen,
+      no_threads_last_gen);
+  }
+
+  // block until all the push operations complete
+  // TODO: this is ugly; we block on one operation at a time.
+  // What we'd really want is a semaphore 
+  LOG(DEBUG, "mem-comm: scatter: blocking for %d confirmation(s)\n", no_pushes);
+  for (size_t i = 0; i < no_pushes; ++i) {
+    block_for_confirmation(pending_pushes[i]); 
+  }
+
   /*
   int start_thread, end_thread;
   int cur_node = -1;
