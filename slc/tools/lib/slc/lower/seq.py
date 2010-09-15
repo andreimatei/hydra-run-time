@@ -19,6 +19,8 @@ class Create_2_Loop(ScopedVisitor):
     
     def visit_setmema(self, seta):
         #print 'Create_2_Loop: visit_setmema: arg %s (%d)' % (seta.decl.name, id(seta.decl))
+        #print 'Create_2_Loop: seta.decl: %s , seta.rhs_decl: %s' % (seta.decl.__class__.__name__,
+        #        seta.rhs_decl.__class__.__name__)
         return CVarSet(loc = seta.loc, 
                        decl = seta.decl.mem_decl.cvar_stub, 
                        rhs = CVarUse(decl = seta.rhs_decl.cvar_stub))

@@ -1,12 +1,8 @@
-- in slc/lower/lowgeta.py:
-  - visit_gatheraffine doesn't take into account the situation where the sequential path for create was taken
-  - visit_getmema must be checked
+- in slc/lower/lowgeta.py, visit_gatheraffine doesn't take into account the situation where the sequential path for create was taken
 - program crashes when the block size >= the number of threads
 - for the mapping function spread, the default place for threads in the new family must be PID (the place
     to which we delegate the new family).
 
-- for scatter, when sending the data over the network (network.c: prepare_push_buffer() and push_data)
-  the .p member of the mem_range is used, as opposed to .orig_p. Is this OK?
 - revisit the uses of .p and .orig_p in descriptors
 - inspect uses of gettimeofday()
 

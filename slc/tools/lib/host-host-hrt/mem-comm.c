@@ -416,6 +416,13 @@ void _memscatter_affine(fam_context_t* fc,
   unsigned long no_threads = 0, no_threads_last_gen = 0;
   unsigned long no_generations = fc->distribution.no_generations;
   unsigned long total_threads_per_generation = 0;  // across all procs/tcs...
+  assert(memdesc_data_local(stub));  // we must have the data for scattering
+  assert(get_stub_pointer(stub)->no_ranges == 1);  // we only support this
+  assert(get_stub_pointer(stub)->ranges[0].p == get_stub_pointer(stub)->ranges[0].orig_p);  // for now, this is the only thing we support (since prepare_push_buffer()
+                                  // and push_data() in network.c use the .p member). TODO: think if we can
+                                  // support more than this (i.e. scattering for stubs that are the result
+                                  // of a restrict operation) and decide whether the functions in network.c
+                                  // should continue to use .p or should switch to .orig_p
   for (size_t i = 0; i < fc->distribution.no_reservations; ++i) {
     total_threads_per_generation += fc->distribution.reservations[i].no_threads_per_generation;
   }
