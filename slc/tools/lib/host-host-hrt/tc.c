@@ -2202,7 +2202,6 @@ void start_nodes(int port_sctp, int port_tcp) {
     memset(&hints, 0, sizeof(hints));
     hints.ai_family = AF_INET;
     hints.ai_socktype = SOCK_SEQPACKET;
-    //secondaries[i].socket_sctp = socket(AF_INET, SOCK_SEQPACKET, IPPROTO_SCTP);
     // fill in the addr_sctp field
     int res;
     char port[10];

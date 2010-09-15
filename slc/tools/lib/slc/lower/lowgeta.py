@@ -6,7 +6,8 @@ class ReduceGetA(DefaultVisitor):
           return CVarUse(loc = geta.loc, decl = geta.decl.cvar)
             
       def visit_getmema(self, getma):
-          # FIXME: check this fun. make sure it works even if the create took the sequential path
+          #print 'in visit_getmema: getma.decl.mem_decl: type = %s id = %d' % (getma.decl.mem_decl.__class__.__name__,
+          #        id(getma.decl.mem_decl))
           return CVarSet(loc = getma.loc, 
                          decl = getma.lhs_decl.cvar_stub, 
                          rhs = CVarUse(decl = getma.decl.mem_decl.cvar_stub))
