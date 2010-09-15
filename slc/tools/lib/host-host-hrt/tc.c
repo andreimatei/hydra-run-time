@@ -1580,22 +1580,8 @@ void write_istruct(//i_struct_fat_pointer istruct,
       }
     }
   } else {  // writing to different node
-    //assert(!is_mem);  // remote write of mem args should be handled directly by write_argmem().
-    //if (!is_mem) {
-      LOG(DEBUG, "write_istruct: writing a remote istruct on node %d\n", node_index);
-      write_remote_istruct(node_index, (i_struct*)istructp, val, reading_tc->tc);  // cast to strip volatile
-    //} else {
-    /* LOG(DEBUG, "write_istruct: writing a remote istruct (mem) on node %d\n", node_index);
-      // we should only get here for globals. Remote write of mem args for shareds 
-      // should be handled directly by write_argmem().
-      write_remote_istruct_mem(node_index, 
-                               (i_struct*)istructp,  // cast to strip volatile
-                               _long_2_stub(val), 
-                               get_stub_pointer(_long_2_stub(val)),
-                               0,  // don't copy over the descriptor
-                               reading_tc->tc);
-    }
-    */
+    LOG(DEBUG, "write_istruct: writing a remote istruct on node %d\n", node_index);
+    write_remote_istruct(node_index, (i_struct*)istructp, val, reading_tc->tc);  // cast to strip volatile
   }
 }
 
@@ -1645,18 +1631,6 @@ void write_istruct_no_checks(
   istructp->data = val;
   istructp->state = WRITTEN;
 }
-
-/*
-void write_memrange_ancillary(int node_index,
-                              int tc_index,
-                              int global,  // 1 for global slot, 0 for shared slot
-                              int slot_index,
-                              mem_range_t range,
-                              const tc_ident_t* reading_tc) {
-  
-}
-*/
-
 
 /* handles same or different proc*/
 long read_istruct_different_tc(volatile i_struct* istruct, int same_proc) {
@@ -1742,24 +1716,12 @@ void unblock_tc(tc_t* tc, int same_processor) {
   //pthread_spinlock_t* lock;
   LOG(DEBUG, "unblock_tc: unblocking TC ("PRINT_TC_IDENT_FORMAT"). It was blocked for %ld ms.\n", 
       PRINT_TC_IDENT(tc->ident), timediff(t, tc->blocking_time));
-  /*
-  if (!same_processor) {
-    lock = (pthread_spinlock_t*)&runnable_queue_locks[tc->ident.proc_index];
-    pthread_spin_lock(lock);
-  }
-  */
-  //tc->blocked = 0;
 
   // insert in queue
   int proc_index = tc->ident.proc_index;
   //runnable_tcs[proc_index][runnable_count[proc_index]++] = tc->ident.tc_index;
   mark_tc_as_runnable(proc_index, tc->ident.tc_index, !same_processor);
 
-  /*
-  if (!same_processor) {
-    pthread_spin_unlock(lock);
-  }
-  */
 }
 
 void yield(tc_t* yielding_tc) {
@@ -1873,9 +1835,6 @@ void mark_tc_as_runnable(int proc_id, int tc_id, int lock_needed) {
  * Insert a TC in the free list. Called by code inserted by the compiler at the end of loop functions.
  */
 void _free_tc(int proc_id, int tc_id) {
-  //tc_t* tc = (tc_t*)TC_START_VM(tc_id);
-  //tc->finished = 1;
-  
   pthread_spin_lock((pthread_spinlock_t*)&allocate_tc_locks[proc_id]);
 
   int* end = &end_available_tcs[proc_id];
@@ -1902,41 +1861,6 @@ static void free_fc(int proc_id, int fc_id) {
 
   pthread_spin_unlock((pthread_spinlock_t*)&fam_contexts_locks[proc_id]);
 }
-
-/*--------------------------------------------------
-* int atomic_increment_next_tc(int proc_id) {
-*   int rez = -1;
-*   LOG(DEBUG, "atomic_increment_next_tc: looking for tc on proc %d\n", proc_id);
-*   pthread_spin_lock((pthread_spinlock_t*)&allocate_tc_locks[proc_id]);
-*   int i;
-*   int start_tc = proc_id * NO_TCS_PER_PROC;
-*   tc_t* tc = NULL;
-*   for (i = start_tc; i < start_tc + NO_TCS_PER_PROC; ++i) {
-*     if (!tc_is_valid(i)) continue;  // skip TC's that haven't been created (due to holes in the addr space)
-*     tc = (tc_t*)TC_START_VM(i);
-*     //if (tc->blocked == -1) {
-*     if (tc->finished == 1) {
-*       //LOG(DEBUG, "atomic_increment_next_tc: found tc %d (%p)\n", i, tc);
-*       rez = i;
-*       //LOG(DEBUG, "atomic_increment_next_tc: accessing ->finished (%p)\n", &tc->finished);
-*       //tc->blocked = 0;
-*       tc->finished = 0;
-*       break;
-*     }
-*   }
-*   pthread_spin_unlock((pthread_spinlock_t*)&allocate_tc_locks[proc_id]);
-* 
-*   if (rez != -1) {
-*     for (int j = 0; j < MAX_ARGS_PER_FAM; ++j) {
-*       tc->shareds[j].state = EMPTY;
-*       tc->globals[j].state = EMPTY;
-*     }
-*   }
-*   
-*   return rez;
-* }
-*--------------------------------------------------*/
-
 
 void rt_quit() {
   //TODO:
@@ -2108,11 +2032,6 @@ void get_vm_holes(int node_index, unsigned int* holes, unsigned int* no_holes) {
   *no_holes = 0;
 
   LOG(DEBUG, "get_vm_holes: computing tc holes for %d mem_ranges.\n", no_mem_ranges);
-  /*
-  for (int j = 0; j < no_mem_ranges; ++j) {
-    LOG(DEBUG, "mem_range %d: %p - %p \n", j, (void*)mem_ranges[j].l, (void*)mem_ranges[j].r);
-  }
-  */
 
   for (int i = 0; i < NO_TCS_PER_PROC * MAX_PROCS_PER_NODE; ++i) {  // TODO: here i should see how many procs 
                                                   // a node has and just iterate through those, instead of
@@ -2128,7 +2047,6 @@ void get_vm_holes(int node_index, unsigned int* holes, unsigned int* no_holes) {
     
     if ( (l <= start_vm && end_vm <= r) || (start_vm <= l && l <= end_vm ) || (start_vm <= r && r <= end_vm) ) {
       holes[(*no_holes)++] = i;
-      //LOG(DEBUG, "get_vm_holes: found hole!\n");
     }
   }
 }
@@ -2186,9 +2104,7 @@ void start_nodes(int port_sctp, int port_tcp) {
   int waiting_for = no_slaves;  // number of peers we're waiting for
   while ((waiting_for > 0) && (tv.tv_sec > 0)) {
     if (no_slaves == 0) break;
-    //fd_set copy_read = master;
     fd_set copy_write = master;
-    // fd_set copy_exception = master;  // TODO: check for errors (is the code correct now?)
     assert(max_socket + 1 < FD_SETSIZE);
     int res = select(max_socket + 1, NULL, &copy_write, NULL, &tv);
     if (res < 0) { handle_error("select"); }

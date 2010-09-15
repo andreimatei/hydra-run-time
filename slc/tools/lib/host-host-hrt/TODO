@@ -1,8 +1,6 @@
 - in slc/lower/lowgeta.py:
   - visit_gatheraffine doesn't take into account the situation where the sequential path for create was taken
   - visit_getmema must be checked
-- stub_2_canonical_stub always erases .have_data!
-- compilation fails on memtest.c
 - program crashes when the block size >= the number of threads
 - for the mapping function spread, the default place for threads in the new family must be PID (the place
     to which we delegate the new family).
@@ -12,11 +10,10 @@
 - revisit the uses of .p and .orig_p in descriptors
 - inspect uses of gettimeofday()
 
-- handle should_inline
 
-rename "prev" to "_prev" and the other params of the various flavors of thread functions created by the compiler (foo_begin, foo_middle...)
+- rename "prev" to "_prev" and the other params of the various flavors of thread functions created by the compiler (foo_begin, foo_middle...)
 
-receive memchunks directly where they have to be placed in memory, avoid buffering
+- receive memchunks directly where they have to be placed in memory, avoid buffering
 
 scatter blocks until all confirmations come; if i have multiple scatter's in a create,
         maybe i want to block on the reunion of the 2 sets of confirmations at once...
@@ -54,8 +51,12 @@ before being sent to the second chunk (thread 1 is mapped on node 1, thread 2 on
 so each thread gets 2 cells but only updates one, first thread does propagate before second thread
 does activate. Is this ok? Should we block propagates somehow creation until all data has been distributed
 (how would we know when all activates are done?)
-- discuss with Raphael about schemes for distibuting the threads in a fam, and what aditional concurrency some schemes might produce. When assigning multiple chunks to a TC, does a block size != 1 make any sense?
-
+- think about the need for .have_data in a stub. It's only purpose seems to be to let the programmer do
+activate twice from a thread, without actually pulling memory the second time. Is this desirable? Note
+that stub_2_canonical_stub always erases .have_data even when the destination is on the same node. In practice
+this seems to be benign, since it's usually ok to do it from parent to child (since _usually_ the parent is 
+the data provider) and from child to child (shared), since _usually_ a child passes it's own view up a shared
+that it received, so it is himself the data_provider. Is this ok?
 
 KNOWN ISSUES
 
