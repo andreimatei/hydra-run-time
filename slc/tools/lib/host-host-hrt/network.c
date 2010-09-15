@@ -293,7 +293,7 @@ char* parse_memchunk_header(char* buf, int len __attribute__((__unused__)), int 
   char cc[100];
   memcpy(cc, buf, 50);
   cc[50] = 0;
-  LOG(DEBUG, "network: parse_memchunk_header: header = \"%s\"\n", cc);
+  LOG(DEBUG + 1, "network: parse_memchunk_header: header = \"%s\"\n", cc);
 
   memdesc_t res;
   char* tmp = NULL;
@@ -316,18 +316,18 @@ char* parse_memchunk_header(char* buf, int len __attribute__((__unused__)), int 
   } else {
     res.no_ranges = atoi(tok);
     incoming_state[incoming_index].no_segments = 0;
-    LOG(DEBUG, "network: parse_memchunk_header: no_ranges =  %d\n", res.no_ranges);
+    LOG(DEBUG + 1, "network: parse_memchunk_header: no_ranges =  %d\n", res.no_ranges);
   }
 
   tok = strtok_r(NULL, ";", &tmp);  // pending_req_index
   assert(tok);
   incoming_state[incoming_index].pending_req_index = atoi(tok);
-  LOG(DEBUG, "network: parse_memchunk_header: pending_req_index =  %d\n", incoming_state[incoming_index].pending_req_index);
+  LOG(DEBUG + 1, "network: parse_memchunk_header: pending_req_index =  %d\n", incoming_state[incoming_index].pending_req_index);
 
   tok = strtok_r(NULL, ";", &tmp);  // is the pending_req_index referring to a remote slot (or 0 for a local slot)?
   assert(tok);
   incoming_state[incoming_index].remote_confirm = atoi(tok);
-  LOG(DEBUG, "network: parse_memchunk_header: remote_confirm =  %d\n", incoming_state[incoming_index].remote_confirm);
+  LOG(DEBUG + 1, "network: parse_memchunk_header: remote_confirm =  %d\n", incoming_state[incoming_index].remote_confirm);
   
   if (incoming_state[incoming_index].segmented) {
     tok = strtok_r(NULL, ";", &tmp);  // start_first_segment
@@ -350,7 +350,7 @@ char* parse_memchunk_header(char* buf, int len __attribute__((__unused__)), int 
     assert(tok);
     incoming_state[incoming_index].gap_between_segments = atol(tok);
 
-    LOG(DEBUG, "network: parse_memchunk_header: got start_first_segment = %d, start_last_segment = %d,"
+    LOG(DEBUG + 1, "network: parse_memchunk_header: got start_first_segment = %d, start_last_segment = %d,"
         " gap_between_segments = %d\n", 
        incoming_state[incoming_index].start_first_segment,
        incoming_state[incoming_index].start_last_segment,
@@ -358,7 +358,7 @@ char* parse_memchunk_header(char* buf, int len __attribute__((__unused__)), int 
   }
   
   for (int i = 0; i < res.no_ranges; ++i) {
-    LOG(DEBUG, "network: handle_incoming_mem_chunk: parsing info about range %d\n", i);
+    LOG(DEBUG + 1, "network: handle_incoming_mem_chunk: parsing info about range %d\n", i);
     tok = strtok_r(NULL, ";", &tmp);  // pointer
     assert(tok);
     res.ranges[i].p = (void*)atol(tok);
@@ -369,7 +369,7 @@ char* parse_memchunk_header(char* buf, int len __attribute__((__unused__)), int 
     assert(tok);
     res.ranges[i].sizeof_element = atoi(tok);
     
-    LOG(DEBUG, "network: handle_incoming_mem_chunk: no_elements = %d, sizeof_element = %d\n",
+    LOG(DEBUG + 1, "network: handle_incoming_mem_chunk: no_elements = %d, sizeof_element = %d\n",
         res.ranges[i].no_elements, res.ranges[i].sizeof_element);
   }
   incoming_state[incoming_index].desc = res;
@@ -498,15 +498,15 @@ static void handle_incoming_mem_chunk(int incoming_index) {
     assert(r > 0);
 
     while (tmp < (buf + r)) {  // loop until all the data was consumed
-      LOG(DEBUG, "network: handle_incoming_mem_chunk: we have some data to parse (%d bytes).\n",
+      LOG(DEBUG + 1, "network: handle_incoming_mem_chunk: we have some data to parse (%d bytes).\n",
           (buf + r) - tmp);
       // if this is the first time we're receiving data for this incoming_state slot, read the header
       if (incoming_state[incoming_index].cur_range == -1) {
-        LOG(DEBUG, "network: handle_incoming_mem_chunk: parsing a header since incoming_state is not initialized.\n");
+        LOG(DEBUG + 1, "network: handle_incoming_mem_chunk: parsing a header since incoming_state is not initialized.\n");
         // this will initialize incoming_state[incoming_index]
         char* old_tmp = tmp;
         tmp = parse_memchunk_header(tmp, r - (tmp - buf), incoming_index);
-        LOG(DEBUG, "network: handle_incoming_mem_chunk: done parsing header. It consumed %d bytes.\n",
+        LOG(DEBUG + 1, "network: handle_incoming_mem_chunk: done parsing header. It consumed %d bytes.\n",
             tmp - old_tmp);
       }
 
@@ -515,7 +515,7 @@ static void handle_incoming_mem_chunk(int incoming_index) {
         if ((slot_index = incoming_state[incoming_index].pending_req_index) != -1) {
           struct timeval t; gettimeofday(&t, NULL);
           pending_request_t* pending = &pending_requests[slot_index];
-          LOG(DEBUG, "network: handle_incoming_mem_chunk: it seems we have received some memory data," \
+          LOG(DEBUG + 1, "network: handle_incoming_mem_chunk: it seems we have received some memory data," \
               "The TC pulling the data has been blocked for %ld ms.\n", 
               timediff(t,pending->blocking_tc->blocking_time));
         }
@@ -528,14 +528,14 @@ static void handle_incoming_mem_chunk(int incoming_index) {
       cur_incoming_mem_range_len = desc->ranges[range_no].no_elements * desc->ranges[range_no].sizeof_element; 
 
       int bytes_used = 0;
-      LOG(DEBUG, "network: handle_incoming_mem_chunk: parsing a memchunk\n");
-      LOG(DEBUG, "network: handle_incoming_mem_chunk: r = %d, buf = %p, tmp = %p\n", r, buf, tmp);
+      LOG(DEBUG + 1, "network: handle_incoming_mem_chunk: parsing a memchunk\n");
+      LOG(DEBUG + 1, "network: handle_incoming_mem_chunk: r = %d, buf = %p, tmp = %p\n", r, buf, tmp);
 
       bool finished = parse_incoming_memchunk(incoming_index, tmp, r - (tmp - buf), &bytes_used);
-      LOG(DEBUG, "network: handle_incoming_mem_chunk: done parsing a memchunk. finished = %d\n", finished);
+      LOG(DEBUG + 1, "network: handle_incoming_mem_chunk: done parsing a memchunk. finished = %d\n", finished);
       tmp += bytes_used;
       if (finished) {  // we've got all the data
-        LOG(DEBUG, "network: handle_incoming_mem_chunk: finished receiving data for a memdesc\n");
+        LOG(DEBUG + 1, "network: handle_incoming_mem_chunk: finished receiving data for a memdesc\n");
 
         // assert that we've used up all the data read from the socket
         // // FIXME: the current code seems to not handle the case where a single remote node quickly seends different
@@ -552,7 +552,6 @@ static void handle_incoming_mem_chunk(int incoming_index) {
         if ((slot_index = incoming_state[incoming_index].pending_req_index) != -1) {
           if (incoming_state[incoming_index].remote_confirm) {
             // send a confirmation
-            LOG(DEBUG, "network: handle_incoming_mem_chunk: sending remote confirmation\n");
             req_confirmation req;
             req.type = REQ_CONFIRMATION;
             req.node_index = NODE_INDEX;
@@ -583,7 +582,7 @@ static void handle_incoming_mem_chunk(int incoming_index) {
       int res = select(sock, &set, NULL, NULL, &tv);
       if (res < 0) handle_error("select");
       if (FD_ISSET(sock, &set)) {
-        LOG(DEBUG, "network: handle_incoming_mem_chunk: socket has more data for us. looping.\n");
+        LOG(DEBUG + 1, "network: handle_incoming_mem_chunk: socket has more data for us. looping.\n");
         continue;
       } else {
         LOG(DEBUG, "network: handle_incoming_mem_chunk: socket doesn't have more data for us. quitting.\n");
@@ -664,7 +663,7 @@ void build_push_header(const tcp_sending_state_t* s, char* buf, int buf_size, in
   assert(s->active);
 
   if (!s->req.segmented) {
-    LOG(DEBUG, "network: build_push_header: no_ranges = %d\n", s->req.no_ranges);
+    LOG(DEBUG + 1, "network: build_push_header: no_ranges = %d\n", s->req.no_ranges);
     // the header looks like 0;<local node index>;<number of ranges>;<pending_req_index>;<remote_confirm>;
     // (<pointer>;<no elements>;<sizeof element>;)*
     *len = sprintf(buf, "0;%d;%lu;%d;%d;", 
@@ -697,7 +696,7 @@ void build_push_header(const tcp_sending_state_t* s, char* buf, int buf_size, in
         s->req.gap_between_segments
         );
 
-    LOG(DEBUG, "network: build_push_header: pending_req_index = %d, remote_confirm_needed = %d, sending start_first_segment = %d, start_last_segment = %d,"
+    LOG(DEBUG + 1, "network: build_push_header: pending_req_index = %d, remote_confirm_needed = %d, sending start_first_segment = %d, start_last_segment = %d,"
         " gap_between_segments = %d\n", 
        s->req.pending_req_index,
        s->req.remote_confirm_needed,
@@ -907,7 +906,7 @@ void* delegation_interface(void* parm) {
     fd_set copy, sending;
     int got_work = 0;
     while(!got_work) {   // loop while we get messages to rebuild the writing sockets collection
-      LOG(DEBUG, "network: delegation interface: starting building sockets collection\n");
+      LOG(DEBUG + 1, "network: delegation interface: starting building sockets collection\n");
       // add new tcp incoming sockets to the collection, if any
       if (no_tcp_incoming_sockets != old_tcp_incoming_sockets) {
         // if we have new incoming sockets, add them to the collection
@@ -923,15 +922,15 @@ void* delegation_interface(void* parm) {
       // build collection of sockets that need to send data
       sending = get_sending_sockets();
       assert(FD_ISSET(new_sending_socket_pipe_fd[0], &copy));
-      LOG(DEBUG, "network: delegation_interface: entering select.\n");
+      LOG(DEBUG + 1, "network: delegation_interface: entering select.\n");
       int res = select(FD_SETSIZE, &copy, &sending, NULL, NULL);//&time);
-      LOG(DEBUG, "network: delegation_interface: out of select!\n");
+      LOG(DEBUG + 1, "network: delegation_interface: out of select!\n");
       if (res <= 0) handle_error("select");
       if (!FD_ISSET(new_sending_socket_pipe_fd[0], &copy)) { // if we got anything but the pipe, we need to treat it
-        LOG(DEBUG, "network: delegation interface: got out of select. It's not the pipe.\n");
+        LOG(DEBUG + 1, "network: delegation interface: got out of select. It's not the pipe.\n");
         got_work = 1;
       } else {
-        LOG(DEBUG, "network: delegation interface: we have something on the pipe; need to loop\n");
+        LOG(DEBUG + 1, "network: delegation interface: we have something on the pipe; need to loop\n");
         char c;//buf[100];
         int res = read(new_sending_socket_pipe_fd[0], &c, 1);
         // TODO: do a fcnt or whatever to set the pipe in non-blocking mode, and read as much as possible
@@ -939,7 +938,7 @@ void* delegation_interface(void* parm) {
         assert(res == 1);
       }
     }
-    LOG(DEBUG, "network: delegation interface: got out of select; we actually have work to do\n");
+    LOG(DEBUG + 1, "network: delegation interface: got out of select; we actually have work to do\n");
 
     if (FD_ISSET(sock_sctp, &copy)) {
       handle_sctp_request(sock_sctp);

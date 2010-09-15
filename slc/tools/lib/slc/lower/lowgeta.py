@@ -18,12 +18,11 @@ class ReduceGetA(DefaultVisitor):
         b = gather.b
         c = gather.c
         create = gather.decl.create
-        print ' id of gather.decl.create = ' + str(id(create))
-        print ' id of gather.decl = ' + str(id(gather.decl))
+        #print ' id of gather.decl.create = ' + str(id(create))
+        #print ' id of gather.decl = ' + str(id(gather.decl))
 
-        create = gather.decl.create
-        fam_context = gather.decl.create.fam_context
-        cvar_stub = gather.decl.create.scatter_stubs[gather.name]
+        fam_context = create.fam_context
+        cvar_stub = create.scatter_stubs[gather.name]
         new_items = Block()
         new_items += (flatten(gather.loc, '')
                 + '_memgather_affine('

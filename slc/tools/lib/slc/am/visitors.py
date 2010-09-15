@@ -69,7 +69,7 @@ class Create_2_HydraCall(ScopedVisitor):
             if (not isinstance(decl, CreateArgMem)):
                 value += Opaque('(long)(') + val + ')'
             else:
-                value += Opaque('') + '_stub_2_long(_stub_2_canonical_stub(' + val + ', 0))'
+                value += Opaque('') + '_stub_2_canonical_stub(' + val + ', 0)'
 
             if (not isinstance(decl, CreateArgMem)):
                 setter = (flatten(loc, "write_istruct(") 
@@ -86,7 +86,7 @@ class Create_2_HydraCall(ScopedVisitor):
                         + self.__first_tc + ".node_index"
                         + ", &" + self.__first_tc + ('.tc->shareds[0][%d], ' % index)
                         + value
-                        + ' , ' + self.__first_tc + ('.tc->shared_descs[0][%d]' % index) 
+                        + ' , &' + self.__first_tc + ('.tc->shared_descs[0][%d]' % index) 
                         + ', &' + self.__first_tc 
                         + ');\n'
                         )
@@ -389,18 +389,19 @@ class Create_2_HydraCall(ScopedVisitor):
         b = scatter.b
         c = scatter.c
         stub = scatter.rhs_decl.cvar_stub
-        #desc = scatter.rhs_decl.cvar_desc
-        # save a pointer to the stub and to the fam context in the argument declaration
-        print 'scatter_affine: type of scatter.decl = ' + scatter.decl.__class__.__name__
-        print 'scatter_affine: type of scatter.decl.mem_decl = ' + scatter.decl.mem_decl.__class__.__name__
-        print 'scatter_affine: type of scatter.decl.create = ' + scatter.decl.create.__class__.__name__
-        print ' id of scatter.decl.create = ' + str(id(scatter.decl.create))
-        print ' id of scatter.decl = ' + str(id(scatter.decl))
+        
+        #print 'scatter_affine: type of scatter.decl = ' + scatter.decl.__class__.__name__
+        #print 'scatter_affine: type of scatter.decl.mem_decl = ' + scatter.decl.mem_decl.__class__.__name__
+        #print 'scatter_affine: type of scatter.decl.create = ' + scatter.decl.create.__class__.__name__
+        #print ' id of scatter.decl.create = ' + str(id(scatter.decl.create))
+        #print ' id of scatter.decl = ' + str(id(scatter.decl))
 
         #scatter.decl.scatter_stub = stub
         #scatter.decl.fam_context = self.__cur_fam_context  #TODO: the fam context should be saved
                                         # in some other place, maybe in the create (scatter.decl.create)...
                                         # Discuss with Raphael
+
+        # save a reference to the fam_context and to the stub in the create, to be used by gather
         scatter.decl.create.fam_context = self.__cur_fam_context
         if not hasattr(scatter.decl.create, 'scatter_stubs'):
             scatter.decl.create.scatter_stubs = {}
@@ -547,7 +548,6 @@ class TFun_2_HydraCFunctions(DefaultVisitor):
         b = (Opaque('') + '_stub_2_canonical_stub(' 
             + CVarUse(decl = setp.rhs_decl.cvar_stub) + ', '
             + CVarUse(decl = setp.rhs_decl.cvar_stub) + '.S)')
-        b_long = (Opaque('_stub_2_long(') + b + ')')
         #b = setp.rhs.accept(self)
         param = self.__paramNames_2_params[setp.name]
         newbl = []
@@ -559,7 +559,9 @@ class TFun_2_HydraCFunctions(DefaultVisitor):
         #TODO: see if the same optimization regarding seen_get can be used like in setp
 
         if self.__state == 0 or self.__state == 1:  # begin and middle
-            newbl.append(flatten(setp.loc, 'write_argmem(NODE_INDEX, &_cur_tc->shareds[_cur_tc->current_generation][%d], ' % param.index)
+            newbl.append((flatten(setp.loc, 'write_argmem('))
+                    + 'NODE_INDEX, '
+                    + ('&_cur_tc->shareds[_cur_tc->current_generation][%d], ' % param.index)
                     + b + ', '
                     + '&_cur_tc->shared_descs[_cur_tc->current_generation][%d], ' % param.index
                     + '&_cur_tc->ident)'
