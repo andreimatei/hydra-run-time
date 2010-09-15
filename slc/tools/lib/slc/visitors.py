@@ -558,7 +558,10 @@ class PrintVisitor(DefaultVisitor):
           return ci
 
     def visit_gatheraffine(self, sa):
-          self.__out.write(' sl_gather_affine(%s, ' % sa.name)
+          if hasattr(sa, 'decl'):
+            self.__out.write(' sl_gather_affine-%s(%s, ' % (str(id(sa.decl)),sa.name))
+          else:
+            self.__out.write(' sl_gather_affine(%s, ' % sa.name)
           sa.a.accept(self)
           self.__out.write(', ')
           sa.b.accept(self)
@@ -568,7 +571,10 @@ class PrintVisitor(DefaultVisitor):
           return sa
 
     def visit_scatteraffine(self, sa):
-          self.__out.write(' sl_scatter_affine(%s, %s, ' % (sa.name, sa.rhs))
+          if hasattr(sa, 'decl'):
+            self.__out.write(' sl_scatter_affine-%s(%s, %s, ' % (str(id(sa.decl)),sa.name, sa.rhs))
+          else:
+            self.__out.write(' sl_scatter_affine(%s, %s, ' % (sa.name, sa.rhs))
           sa.a.accept(self)
           self.__out.write(', ')
           sa.b.accept(self)

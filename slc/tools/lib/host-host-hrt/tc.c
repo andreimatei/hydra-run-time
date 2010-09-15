@@ -1059,13 +1059,9 @@ void* mmap_processor_stack(int processor_index) {
 
 
 // TODO: find a better way to allocate a stack for this thread
-static const int delegation_if_stack_size = 1 << 15;
-static char delegation_if_stack[1<<15];
+static const int delegation_if_stack_size = 1 << 20;
+static char delegation_if_stack[1<<20];
 
-/*--------------------------------------------------
-* static const int sending_if_stack_size = 1 << 15;
-* static char sending_if_stack[1<<15];
-*--------------------------------------------------*/
 
 /*
  * Map a stack for the pthread handling the delegation interface.
@@ -2533,17 +2529,6 @@ void write_global(fam_context_t* fc, unsigned int index, long val, bool is_mem) 
                                    index, val, is_mem, true);
     }
   }
-
-/*--------------------------------------------------
-* 
-*   for (i = 0; i < ctx->no_ranges; ++i) {
-*     tc_ident_t id = ctx->ranges[i].dest;
-*     //assert(id.node_index == _cur_tc->ident.node_index);  // TODO
-*     tc_t* dest = (tc_t*)TC_START_VM_EX(id.node_index, id.tc_index);
-*     assert(dest == id.tc);  // TODO: if this assert proves to hold, remove the line above
-*     write_istruct(id.node_index, &(id.tc->globals[index]), val, &id, is_mem);
-*   }
-*--------------------------------------------------*/
 }
 
 /*

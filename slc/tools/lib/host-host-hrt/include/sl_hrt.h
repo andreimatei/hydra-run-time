@@ -407,12 +407,12 @@ void _memscatter_affine(fam_context_t* fc,
 /*
  * Gathers from a descriptor that was scattered with _memscatter_affine(.. a,b,c)
  */
-void _memgather_affine(fam_context_t* fc, 
-                       memdesc_stub_t stub, 
-                       //mem_range_t first_range, 
-                       int a, 
-                       int b, 
-                       int c);
+void _memgather_affine(
+    fam_context_t* fc,
+    mem_range_t range,
+    int a, int b, int c,
+    long fam_start_index,
+    long step);
 
 /* Used by a thread func to get it's range of indexes */
 static inline long _get_start_index() {

@@ -43,6 +43,20 @@ typedef struct secondary {
 extern secondary secondaries[1000];
 extern unsigned int no_secondaries;
 
+/*
+ *  Container for all the data necessary to figure out everything about the way a mem_range was
+ *  scattered with memscatter_affine()
+ */
+typedef struct scatter_affine_desc {
+    mem_range_t range;
+    unsigned long no_segments;
+    unsigned long start_first_segment;   // all expressed in indexes in the array of elements
+    unsigned long start_last_segment;
+    unsigned long no_elems_per_segment;
+    unsigned long no_elems_per_segment_last;
+    unsigned long gap_between_segments;
+} scatter_affine_desc_t;
+
 extern volatile int rt_init_done;
 extern pthread_spinlock_t rt_init_done_lock;
 

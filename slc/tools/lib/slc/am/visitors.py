@@ -83,7 +83,7 @@ class Create_2_HydraCall(ScopedVisitor):
             
             else:   # mem argument. Use write_argmem
                 setter = (flatten(loc, "write_argmem(") 
-                        + self.__first_tc + ".node_index" +
+                        + self.__first_tc + ".node_index"
                         + ", &" + self.__first_tc + ('.tc->shareds[0][%d], ' % index)
                         + value
                         + ' , ' + self.__first_tc + ('.tc->shared_descs[0][%d]' % index) 
@@ -391,10 +391,21 @@ class Create_2_HydraCall(ScopedVisitor):
         stub = scatter.rhs_decl.cvar_stub
         #desc = scatter.rhs_decl.cvar_desc
         # save a pointer to the stub and to the fam context in the argument declaration
-        scatter.decl.scatter_stub = stub
-        scatter.decl.fam_context = self.__cur_fam_context  #TODO: the fam context should be saved
+        print 'scatter_affine: type of scatter.decl = ' + scatter.decl.__class__.__name__
+        print 'scatter_affine: type of scatter.decl.mem_decl = ' + scatter.decl.mem_decl.__class__.__name__
+        print 'scatter_affine: type of scatter.decl.create = ' + scatter.decl.create.__class__.__name__
+        print ' id of scatter.decl.create = ' + str(id(scatter.decl.create))
+        print ' id of scatter.decl = ' + str(id(scatter.decl))
+
+        #scatter.decl.scatter_stub = stub
+        #scatter.decl.fam_context = self.__cur_fam_context  #TODO: the fam context should be saved
                                         # in some other place, maybe in the create (scatter.decl.create)...
                                         # Discuss with Raphael
+        scatter.decl.create.fam_context = self.__cur_fam_context
+        if not hasattr(scatter.decl.create, 'scatter_stubs'):
+            scatter.decl.create.scatter_stubs = {}
+        scatter.decl.create.scatter_stubs[scatter.name] = stub
+
         create = scatter.decl.create
         fam_context_decl = self.__cur_fam_context
         scatter_call = (flatten(scatter.loc, "_memscatter_affine(") 
@@ -415,7 +426,9 @@ class Create_2_HydraCall(ScopedVisitor):
 
         return None
 
+        """
     def visit_gatheraffine(self, gather):
+        print '~!~!~!~!~!~!~!~!~!~!~!~!~~~~~~~~~~~~~~~~~~~~~~ seen gather'
         a = gather.a
         b = gather.b
         c = gather.c
@@ -429,6 +442,7 @@ class Create_2_HydraCall(ScopedVisitor):
                 + a + ', ' + b + ', ' + c + ')'
                 )
         return new_items
+        """
     
     #def visit_getmema(self, getma):
     #    new_items = (Opaque('') + CVarUse(loc = getma.loc, decl = getma.lhs_decl.cvar_stub) + ' = '
@@ -440,6 +454,7 @@ class TFun_2_HydraCFunctions(DefaultVisitor):
         super(TFun_2_HydraCFunctions, self).__init__(*args, **kwargs)
         #self.__shlist = None
         #self.__gllist = None
+
 
     def visit_getmemp(self, getp):
         newbl = []
@@ -544,9 +559,9 @@ class TFun_2_HydraCFunctions(DefaultVisitor):
         #TODO: see if the same optimization regarding seen_get can be used like in setp
 
         if self.__state == 0 or self.__state == 1:  # begin and middle
-            newbl.append(flatten(setp.loc, 'write_argmem(NODE_INDEX, &_cur_tc->shareds[%d], ' % param.index)
+            newbl.append(flatten(setp.loc, 'write_argmem(NODE_INDEX, &_cur_tc->shareds[_cur_tc->current_generation][%d], ' % param.index)
                     + b + ', '
-                    + '&_cur_tc->shared_descs[%d], ' % param.index
+                    + '&_cur_tc->shared_descs[_cur_tc->current_generation][%d], ' % param.index
                     + '&_cur_tc->ident)'
                    )
         elif self.__state == 2 or self.__state == 3: #end and generic
@@ -588,7 +603,7 @@ class TFun_2_HydraCFunctions(DefaultVisitor):
         else:
             qual = "extern"
 
-        newitems = Block();
+        newitems = Block()
         #TODO: what does keep mean? :)
         if not keep:
             #newitems = flatten(fundecl.loc, "%s void " % qual) + gen_loop_fun_name(fundecl.name) + "();";
@@ -863,7 +878,6 @@ class TFun_2_HydraCFunctions(DefaultVisitor):
         return flatten(et.loc, " return 0 ")
 
 class Mem_2_HRT(DefaultVisitor):
-
     def visit_memdef(self, d):
         #print 'Mem_2_HRT: visiting memdef %s. id = %d' % (d.name, id(d))
         scope = d.scope

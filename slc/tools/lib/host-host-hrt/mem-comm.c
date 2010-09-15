@@ -20,10 +20,11 @@ void _memdesc(memdesc_t* memdesc, void* p, unsigned int no_elements, unsigned in
   memdesc->ranges[0].sizeof_element = sizeof_element;
 }
 
-
-static void* get_elem_pointer(const mem_range_t* range, int start_elem) {
-  return range->p + (start_elem * range->sizeof_element);
-}
+/*--------------------------------------------------
+* static void* get_elem_pointer(const mem_range_t* range, int start_elem) {
+*   return range->p + (start_elem * range->sizeof_element);
+* }
+*--------------------------------------------------*/
 
 bool memdesc_desc_local(memdesc_stub_t stub) {
   return (stub.node == NODE_INDEX);
@@ -307,7 +308,6 @@ void _mempropagate(memdesc_stub_t stub) {
  * when the push operation is done.
  * Params:
  *  - node_index - [IN] - destination node
- *  - first_range - [IN] - first range of the descriptor described by stub
  */
 static pending_request_t* push_elems_affine(
                                      unsigned int node_index, 
@@ -321,10 +321,8 @@ static pending_request_t* push_elems_affine(
                                      unsigned long threads_per_generation,
                                      unsigned long start_thread_last_gen,
                                      unsigned long threads_per_generation_last 
-                                     //mem_range_t first_range,
-                                     //int first_elem, 
-                                     //int last_elem
                                      ) {
+  // TODO: replace calculations in this function with a call to threads_2_scatter_affine_desc
   assert(node_index != NODE_INDEX);
   assert(memdesc_data_local(stub));
   pending_request_t* pending = get_pending_request_slot(_cur_tc);  // this index will embedded in the data 
@@ -370,29 +368,89 @@ static pending_request_t* push_elems_affine(
   return pending;
 }
 
+static scatter_affine_desc_t threads_2_scatter_affine_desc(
+    mem_range_t range,
+    unsigned long no_generations,
+    long fam_start_index,          // denormalized (real) index of the first thread of the family 
+                                   // (not specific to this node)
+    long step,
+    int a, int b, int c,           // parameters used for memscatter_affine
+    unsigned long start_thread,    // (normalized) index of the first thread to be run on a node
+    unsigned long start_thread_last_gen,  // (normalized) index of the first thread to be run as part of 
+                                          // the last generation (on a particular node)
+    unsigned long threads_per_generation,
+    unsigned long threads_per_generation_last,
+    unsigned long gap_between_generations  // number of threads that are skipped between the last one run
+                                           // on a particular node as part of a generation, and the first one
+                                           // run on the same node as part of the same generation
+    ) {
+  scatter_affine_desc_t desc;
+
+  long start_index = _denormalize_index(start_thread, fam_start_index, step);
+  long stop_index = _denormalize_index(start_thread + threads_per_generation - 1, fam_start_index, step);
+  long start_index_second_gen = _denormalize_index(start_thread + gap_between_generations, fam_start_index, step);
+  long start_index_last = _denormalize_index(start_thread_last_gen, fam_start_index, step);
+  long stop_index_last  = _denormalize_index(start_thread_last_gen + threads_per_generation_last - 1, fam_start_index, step);
+  unsigned long start_elem = a * start_index + b;
+  unsigned long start_elem_second_gen = a * start_index_second_gen + b;
+  unsigned long stop_elem = a * stop_index + c;
+  unsigned long start_elem_last = a * start_index_last + b;
+  unsigned long stop_elem_last = a * stop_index_last + c;
+
+
+  desc.range = range;
+  desc.no_segments = no_generations;
+  desc.start_first_segment = start_elem;
+  desc.start_last_segment = a * start_index_last + b;
+  desc.no_elems_per_segment = stop_elem - start_elem + 1;
+  desc.no_elems_per_segment_last = stop_elem_last - start_elem_last + 1;
+  desc.gap_between_segments = start_elem_second_gen - start_elem;
+
+  return desc;
+}
+
+
 /*
- * Pulls elements [first_elem...last_elem] from the first range of a descriptor, from a particular node.
+ * Pulls elements of the first range of a descriptor according to the way they were scattered by
+ * memscatter_affin().
  * Used for gather operations.
  */
-static pending_request_t* pull_elems(int node_index, 
-                       mem_range_t first_range,
-                       int first_elem, 
-                       int last_elem) {
+static pending_request_t* pull_elems_affine(
+    int node_index,
+    scatter_affine_desc_t scatter_desc
+    /* 
+    memdesc_stub_t stub,
+    int a, int b, int c,
+    long fam_start_index,
+    long step,
+    unsigned long no_generations,
+    unsigned long gap_between_generations,
+    unsigned long start_thread,
+    unsigned long threads_per_generation,
+    unsigned long start_thread_last_gen,
+    unsigned long threads_per_generation_last
+    */
+    ) {
+
   pending_request_t* pending = get_pending_request_slot(_cur_tc);  // this index will embedded in the data 
   assert(pending != NULL);  // TODO: handle error
   
   // build a req_pull_data_described
-  req_pull_data_described req;
-  req.type = REQ_PULL_DATA_DESCRIBED;
+  req_pull_data_affine req;
+  req.type = REQ_PULL_DATA_AFFINE;
   req.node_index = NODE_INDEX;
-  req.identifier = pending->id;  
-  // TODO: check this function again
+  req.identifier = pending->id;  // a confirmation will be sent using this slot
   req.response_identifier = -1;
+
+  /*
   req.desc.no_ranges = 1;
   req.desc.ranges[0].p = get_elem_pointer(&first_range, first_elem);
   req.desc.ranges[0].orig_p = NULL;  // sholdn't be used
   req.desc.ranges[0].no_elements = last_elem - first_elem + 1;
   req.desc.ranges[0].sizeof_element = first_range.sizeof_element;
+  */
+  req.scatter_desc = scatter_desc;
+  
   send_sctp_msg(node_index, &req, sizeof(req));
 
   return pending;
@@ -415,7 +473,7 @@ void _memscatter_affine(fam_context_t* fc,
   unsigned long no_threads = 0, no_threads_last_gen = 0;
   unsigned long no_generations = fc->distribution.no_generations;
   unsigned long total_threads_per_generation = 0;  // across all procs/tcs...
-  for (unsigned int i = 0; i < fc->distribution.no_reservations; ++i) {
+  for (size_t i = 0; i < fc->distribution.no_reservations; ++i) {
     total_threads_per_generation += fc->distribution.reservations[i].no_threads_per_generation;
   }
   
@@ -433,8 +491,8 @@ void _memscatter_affine(fam_context_t* fc,
                                                  cur_node,
                                                  stub,
                                                  a, b, c, fam_start_index, step,
-                                                 total_threads_per_generation,
                                                  no_generations,
+                                                 total_threads_per_generation,
                                                  start_thread,
                                                  no_threads,
                                                  start_thread_last_gen,
@@ -526,13 +584,84 @@ void _memscatter_affine(fam_context_t* fc,
 }
 
 /*
- * Gathers from a descriptor that was scattered with _memscatter_affine.
+ * Gathers from a descriptor that was scattered with _memscatter_affine(... a,b,c).
  */
 void _memgather_affine(
     fam_context_t* fc,
-    memdesc_stub_t stub, 
-    int a, int b, int c) {
-  // FIXME: TODO:
+    mem_range_t range,
+    int a, int b, int c,
+    long fam_start_index,
+    long step) {
+  unsigned long no_threads = 0, no_threads_last_gen = 0;
+  unsigned long start_thread = 0, start_thread_last_gen = fc->distribution.start_index_last_generation;
+  int cur_node = -1;
+  pending_request_t* pending_pulls[MAX_NODES];
+  size_t no_pulls = 0;
+
+  LOG(DEBUG, "mem-comm: _memgather_affine: entering\n");
+
+  unsigned long total_threads_per_generation = 0;  // across all procs/tcs...
+  for (size_t i = 0; i < fc->distribution.no_reservations; ++i) {
+    total_threads_per_generation += fc->distribution.reservations[i].no_threads_per_generation;
+  }
+  
+  for (size_t i = 0; i < fc->distribution.no_reservations; ++i) {
+    proc_reservation res = fc->distribution.reservations[i];
+    if (res.first_tc.node_index == cur_node) {  // continue adding to the current node
+      no_threads += res.no_threads_per_generation;
+      no_threads_last_gen += res.no_threads_per_generation_last;
+    } else {
+      if (cur_node != -1 && cur_node != (signed)NODE_INDEX) {
+        // pull elements
+        scatter_affine_desc_t desc = threads_2_scatter_affine_desc(range,
+                                                                   fc->distribution.no_generations,
+                                                                   fam_start_index,
+                                                                   step,
+                                                                   a, b, c,
+                                                                   start_thread,
+                                                                   start_thread_last_gen,
+                                                                   no_threads,
+                                                                   no_threads_last_gen,
+                                                                   total_threads_per_generation);
+                                                                
+        LOG(DEBUG, "mem-comm: _memgather_affine: pulling from a node\n");
+        pending_request_t* pending = pull_elems_affine(cur_node, desc); 
+        pending_pulls[no_pulls++] = pending;
+      }
+      cur_node = res.first_tc.node_index;
+      start_thread += no_threads;
+      start_thread_last_gen += no_threads_last_gen;
+      no_threads = res.no_threads_per_generation;
+      no_threads_last_gen = res.no_threads_per_generation_last;
+    }
+  }
+
+  if (cur_node != -1 && cur_node != (signed)NODE_INDEX) {
+    // pull elements from last node
+    LOG(DEBUG, "mem-comm: _memgather_affine: pulling from last node\n");
+    scatter_affine_desc_t desc = threads_2_scatter_affine_desc(range,
+        fc->distribution.no_generations,
+        fam_start_index,
+        step,
+        a, b, c,
+        start_thread,
+        start_thread_last_gen,
+        no_threads,
+        no_threads_last_gen,
+        total_threads_per_generation);
+
+    pending_request_t* pending  = pull_elems_affine(cur_node, desc); 
+    pending_pulls[no_pulls++] = pending;
+  }
+  // block until all the push operations complete
+  // TODO: this is ugly; we block on one operation at a time.
+  // What we'd really want is a semaphore 
+  LOG(DEBUG, "mem-comm: _memgather_affine: blocking for %d confirmation(s)\n", no_pulls);
+  for (size_t i = 0; i < no_pulls; ++i) {
+    block_for_confirmation(pending_pulls[i]); 
+  }
+
+
   
   /*
   int start_thread, end_thread;

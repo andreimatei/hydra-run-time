@@ -18,6 +18,7 @@ typedef enum request_type {
   REQ_CONFIRMATION,
   REQ_PULL_DATA,
   REQ_PULL_DATA_DESCRIBED,
+  REQ_PULL_DATA_AFFINE,   // request to pull elements from a range distributed with memscatter_affine
   REQ_PULL_DESC,  // request to pull a descriptor
   RESP_PULL_DESC,
   REQ_WRITE_GLOBAL_TO_CHAIN,  // request to write a global to a chain of TCs from the child family
@@ -180,6 +181,18 @@ typedef struct {
   //mem_range_t range; 
   memdesc_t desc;  // descriptor of the data that needs to be pulled
 }req_pull_data_described;
+
+/*
+ * Request to pull data from a range that was (partially) spread to this node using memscatter_affine.
+ */
+typedef struct {
+  request_type type;
+  unsigned int node_index;  // originating node
+  int identifier;  // index of the pending request slot that needs to be written when the data is received
+  int response_identifier;
+ 
+  scatter_affine_desc_t scatter_desc;
+}req_pull_data_affine;
 
 /*
  * Request to write a global to a chain of TC's from a child family

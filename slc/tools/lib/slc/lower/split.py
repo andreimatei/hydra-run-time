@@ -95,6 +95,13 @@ class SplitCreates(ScopedVisitor):
                 #if isinstance(d, CreateArgMem):    
                 #    print '!!!!!!!!!!!!!!!!!!!'
                 memo[id(d)] = d
+        
+        # we don't want the Create node itself to be copied, so we add it to the dict
+        # TODO(kena): amatei 15/09/2010: as per discussion, exactly why the Create was being copied before adding it
+        # to the memo dictionary is not completely clear. Most likely the nodes for the arguments are linked to it.
+        # Whether or not the nodes for the arguments (CreateArg, CreateArgMem) should be copied themselves is not clear. Right now,
+        # they seem to be.
+        memo[id(self.cur_scope.creates[lc.label])] = self.cur_scope.creates[lc.label]
                   
         #print 'SplitCreates: visit_lowcreate: built memo dict. len = %d' % len(memo)
 

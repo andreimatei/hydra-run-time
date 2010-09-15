@@ -45,7 +45,7 @@ class Create_2_LowCreate(DefaultVisitor):
         newbody = Block(loc = cr.body.loc, loc_end = cr.body.loc_end)
         for a in cr.args:
             if isinstance(a, CreateArgMem):
-                argdecl = MemDef(name = 'Cai%s' % a.name) # TODO: I had to remove the '$'-s because they didn't match some regular exp...?
+                argdecl = MemDef(name = 'Cai%s' % a.name) # TODO: I had to remove the '$'s because they didn't match some regular exp...?
                 argdecl.set_op = SetMemA()  # so that the next visitor only generate a stub definition, no descriptor
                 argdecl.scope = cr.scope
                 decls += argdecl

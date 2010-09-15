@@ -126,6 +126,7 @@ static void handle_req_pull_data_described(const req_pull_data_described* req);
 static void handle_req_ping(const req_ping* req);
 static void handle_resp_ping(const resp_ping* req);
 static void handle_req_pull_desc(const req_pull_desc* req);
+static void handle_req_pull_data_affine(req_pull_data_affine* req);
 static void handle_resp_pull_desc(const resp_pull_desc* req);
 static void handle_req_write_global_to_chain(const req_write_global_to_chain* req);
 
@@ -190,6 +191,11 @@ static void handle_sctp_request(int sock) {
       LOG(DEBUG, "network: handle_sctp_request: got REQ_PULL_DATA_DESCRIBED\n");
       assert(read == sizeof(req_pull_data_described));
       handle_req_pull_data_described((req_pull_data_described*)req);
+      break;
+    case REQ_PULL_DATA_AFFINE:
+      LOG(DEBUG, "network: handle_sctp_request: got REQ_PULL_DATA_AFFINE\n");
+      assert(read == sizeof(req_pull_data_affine));
+      handle_req_pull_data_affine((req_pull_data_affine*)req);
       break;
     case REQ_PULL_DESC:
       LOG(DEBUG, "network: handle_sctp_request: got REQ_PULL_DESC\n");
@@ -1695,6 +1701,22 @@ static void handle_req_pull_data_described(const req_pull_data_described* req) {
                        req->desc.no_ranges,
                        false,
                        0,0,0,0,0,0
+                       );
+}
+
+static void handle_req_pull_data_affine(req_pull_data_affine* req) {
+  enqueue_push_request(req->node_index,  // destination node
+                       req->identifier,  // pending request slot to be written on the remote node
+                       0,                // no remote confirmation needed 
+                       &req->scatter_desc.range,
+                       1,                // no_ranges
+                       true,             // segmented
+                       req->scatter_desc.no_segments,
+                       req->scatter_desc.start_first_segment,
+                       req->scatter_desc.start_last_segment,
+                       req->scatter_desc.no_elems_per_segment,
+                       req->scatter_desc.no_elems_per_segment_last,
+                       req->scatter_desc.gap_between_segments
                        );
 }
 

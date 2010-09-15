@@ -1,4 +1,8 @@
-- fix mem_gather taking into account that now we have many ranges per TC
+- in slc/lower/lowgeta.py:
+  - visit_gatheraffine doesn't take into account the situation where the sequential path for create was taken
+  - visit_getmema must be checked
+- stub_2_canonical_stub always erases .have_data!
+- compilation fails on memtest.c
 - program crashes when the block size >= the number of threads
 - for the mapping function spread, the default place for threads in the new family must be PID (the place
     to which we delegate the new family).

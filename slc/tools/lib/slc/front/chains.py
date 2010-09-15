@@ -39,7 +39,7 @@ _chains = {
         ('flattencr',Create_2_Loop()),
         ('flattenfun',TFun_2_CFun()),
         ] + _common_suffix,
-    # FIXME: after the build errors are corrected, swap hrt with hrt_seq. hrt_seq is a copy of old hrt (naked), and hrt is where development happens for hybrid.
+    # FIXME: after the build errors are corrected, swap hrt with hrt_old. hrt_old is a copy of old hrt (naked), and hrt is where development happens for hybrid.
     'hrt' : _common_prefix + [
         ('flatten_mem', Mem_2_HRT()),
         #('test1', Test_Visitor()),
@@ -58,7 +58,7 @@ _chains = {
         ('flattenfun', ScopedVisitor(Dispatcher({'fmta':TFun_2_HydraCFunctions(),
                                                  'fseq':TFun_2_CFun()}))),
         ] + _common_suffix,
-    'hrt+old' : _common_prefix + [
+    'hrt-old' : _common_prefix + [
         ('lseta', LinkSetA()),
         ('autores', AutoResolve()),
         ('flatten_mem', Mem_2_HRT()),
