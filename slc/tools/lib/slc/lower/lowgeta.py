@@ -19,12 +19,21 @@ class ReduceGetA(DefaultVisitor):
         b = gather.b
         c = gather.c
         create = gather.decl.create
+        fam_context_var = create.fam_context_var
         #print ' id of gather.decl.create = ' + str(id(create))
         #print ' id of gather.decl = ' + str(id(gather.decl))
 
         fam_context = create.fam_context
         cvar_stub = create.scatter_stubs[gather.name]
         new_items = Block()
+
+        # test whether the create path taken at runtime was the regular one (as opposed to the sequential one)
+        # we do this in a less than very elegant way, by testing the fam_context var.
+        # If the regular path wasn't taken, there's nothing for gather to do.
+        # TODO: switch to a more elegant way of figuring out which create path was chosen.
+        new_items += (flatten(gather.loc, 'if (')
+                     + CVarUse(decl = fam_context_var) + ' != 0) {' 
+                    )
         new_items += (flatten(gather.loc, '')
                 + '_memgather_affine('
                 + CVarUse(decl = fam_context) + ', '
@@ -32,7 +41,8 @@ class ReduceGetA(DefaultVisitor):
                 + a + ', ' + b + ', ' + c 
                 + ', ' + create.start
                 + ', ' + create.step
-                + ')'
+                + ');'
+                + '}'  # closing bracket for the if from above
 
                 )
         return new_items

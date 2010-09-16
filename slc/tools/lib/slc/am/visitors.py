@@ -149,7 +149,10 @@ class Create_2_HydraCall(ScopedVisitor):
         newbl = Block()
 
         fam_context_var = CVarDecl(loc = create.loc_end, name = 'alloc$%s' % create.label,
-                                   ctype = 'fam_context_t*')
+                                   ctype = 'fam_context_t*', init = '0') # init to NULL so it can be tested later;
+                                                                # if it is found to be != NULL, it will mean that
+                                                                # the create path taken at runtime was the regular one
+                                                                # (as opposed to the sequential one)
         self.cur_scope.decls += fam_context_var
         self.__cur_fam_context = fam_context_var  # to be used when visiting arguments of type mem_t
         
@@ -323,6 +326,9 @@ class Create_2_HydraCall(ScopedVisitor):
         #expand call to allocate_fam()
         allocate_call, fam_context_var = self.emit_call_allocate_fam(cr, mapping_decision_var)
         newbl.append(allocate_call)
+        cr.fam_context_var = fam_context_var  # link the fam_context_var to the create; it will be used later
+                                              # by gather to test whether the create path taken at run-time
+                                              # was the regular one (as opposed to the sequential one)
 
         # if allocation failed, jump to next target, if available
         newbl.append(Opaque('if (') + CVarUse(decl = fam_context_var) + ' == 0) {\n')
