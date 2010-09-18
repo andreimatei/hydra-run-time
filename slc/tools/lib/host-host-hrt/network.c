@@ -387,7 +387,7 @@ char* parse_memchunk_header(char* buf, int len __attribute__((__unused__)), int 
  */
 static bool parse_incoming_memchunk(int incoming_index, char* buf, int len, int* bytes_used) {
   LOG(DEBUG, "network: parse_incoming_memchunk: incoming_index = %d, segmented = %d, len = %d\n", 
-              incoming_index, incoming_state[incoming_index].segmented ,len);
+              incoming_index, incoming_state[incoming_index].segmented, len);
   *bytes_used = 0;
   memdesc_t* desc = &incoming_state[incoming_index].desc;
   int bytes_needed = 0;

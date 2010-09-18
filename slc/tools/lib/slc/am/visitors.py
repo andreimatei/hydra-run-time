@@ -191,10 +191,11 @@ class Create_2_HydraCall(ScopedVisitor):
         # if statically delegating to PLACE_LOCAL, and a jump to the sequential create
         #TODO(kena): is there a better way to test for PLACE_LOCAL on the following line?
         if create.place.__len__() == 1 and create.place.__getitem__(0).text.strip() == "PLACE_LOCAL":
-            print 'found delegation to PLACE_LOCAL; skipping mapping and allocation'
+            #print 'found delegation to PLACE_LOCAL; skipping mapping and allocation'
             newbl += CGoto(target = lowcreate.target_next) + '; // compiler detected delegation to PLACE_LOCAL, so jump to creation of sequential version\n'
         else:
-            print "didn't find delegation to PLACE_LOCAL %s \"%s\"" % (create.place.__len__(), create.place.__getitem__(0).text)
+            #print "didn't find delegation to PLACE_LOCAL %s \"%s\"" % (create.place.__len__(), create.place.__getitem__(0).text)
+            pass
 
         # add a dynamic jump to the sequential create
         newbl += (Opaque('if ( _places_equal(') + CVarUse(decl = create.cvar_place) + ', PLACE_LOCAL)) {'
@@ -272,20 +273,20 @@ class Create_2_HydraCall(ScopedVisitor):
     def visit_lowcreate(self, lc):
         cr = self.cur_scope.creates[lc.label]
 
-        print >>sys.stderr, "BLOCK create ", cr.fun, cr.block
-        print >>sys.stderr, "PLACE create ", cr.fun, cr.place
-        print >>sys.stderr, "EXTRAS create ", cr.fun, cr.extras
+        #print >>sys.stderr, "BLOCK create ", cr.fun, cr.block
+        #print >>sys.stderr, "PLACE create ", cr.fun, cr.place
+        #print >>sys.stderr, "EXTRAS create ", cr.fun, cr.extras
         gencallee = cr.extras.get_attr("gencallee", None)
         if gencallee is not None:
             gencallee = Opaque('1')
-            print >>sys.stderr, "found gencallee on create"
+            #print >>sys.stderr, "found gencallee on create"
         else:
-            print >>sys.stderr, "didn't find gencallee on create"
+            #print >>sys.stderr, "didn't find gencallee on create"
             gencallee = Opaque('0')
-        print >>sys.stderr, "MAPPING create ", cr.fun, cr.mapping
+        #print >>sys.stderr, "MAPPING create ", cr.fun, cr.mapping
         n = cr.mapping.get_attr("localize", None)
-        if n is not None:
-            print >>sys.stderr, "found localize: ", n
+        #if n is not None:
+            #print >>sys.stderr, "found localize: ", n
             
         #Create place: cr.cvar_place  (CVarUse(decl = cr.cvar_place))
 
@@ -821,10 +822,11 @@ class TFun_2_HydraCFunctions(DefaultVisitor):
     def visit_fundef(self, fundef):
         # make copies of the body for begin, middle and end
         import sys
-        print >>sys.stderr, "EXTRAS fundef ", fundef.name, fundef.extras
+        #print >>sys.stderr, "EXTRAS fundef ", fundef.name, fundef.extras
         n = fundef.extras.get_attr('gencallee', None)
         if n is not None:
-            print >>sys.stderr, "got gencallee"
+            #print >>sys.stderr, "got gencallee"
+            pass
 
         begin_body = copy.deepcopy(fundef.body)
         middle_body = copy.deepcopy(fundef.body)
