@@ -216,6 +216,14 @@ struct tc_t {
                              // then b <= a <= b+1
   i_struct globals[MAX_ARGS_PER_FAM];
 
+  i_struct prev_tc_done;  // only valid when running _independent_ families. Is read by the metaloop function
+                          // before ending to make sure that the previous TC has finished running all it's ranges.
+                          // It is written in the metaloop just after it is read. Used to synchronize
+                          // the termination of the various TC's involved in running an independent family
+                          // so that we don't unblock the parent (from sync) before all children are done.
+                          // TODO: a better option might be to maintain an atomic counter on the parent
+                          // and unblock the parent after all the TC's (or, better yet, all the procs)
+                          // involved in running the child family have decremented it.
 
   //fam_context_t* fam_context;  // family context of the thread of the family 
                                // currently occupying the TC

@@ -11,6 +11,11 @@
 
 - receive memchunks directly where they have to be placed in memory, avoid buffering
 
+- implement another mechanism for making sure that the parent of an independent family is not unblocked before
+  all child threads finish: implement an atomic counter in the fam context that all the TC's 
+  (or, better yet, all the procs) involved in running the child family have decremented it.
+
+
 scatter blocks until all confirmations come; if i have multiple scatter's in a create,
         maybe i want to block on the reunion of the 2 sets of confirmations at once...
 

@@ -703,7 +703,20 @@ class TFun_2_HydraCFunctions(DefaultVisitor):
             """ + 'printf("COMP: metaloop (tc=%d). End of generation. generations left = %ld \\n", _cur_tc->ident.tc_index, _cur_tc->no_generations_left);' + """
             }
 
+            if (independent_family) {
+                if (!_cur_tc->is_first_tc_in_fam) {
+                    read_istruct(&_cur_tc->prev_tc_done, &_cur_tc->prev);
+                }
+                if (!_is_last_tc_in_fam()) {
+                    write_istruct(_cur_tc->next.node_index,
+                              &_cur_tc->next.tc->prev_tc_done,
+                              1,
+                              _get_next_ident());
+                }
+            }
+
             if (_is_last_tc_in_fam() && _get_parent_ident()->node_index != -1) {
+                //tc_ident_t tci = _cur_tc->ident;  // FIXME: remove this
                 printf("COMP: metaloop: last thread in the family done. Unblocking parent.\\n");
                 write_istruct(_get_parent_ident()->node_index, _get_done_pointer(), 1, _get_parent_ident());//, 0);
             }

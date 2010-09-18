@@ -1316,6 +1316,8 @@ void create_tc(int proc_index, int tc_index) {
   // init lock for prev_range_done istruct
   if (pthread_spin_init(&tc->prev_range_done.lock, PTHREAD_PROCESS_PRIVATE) != 0) handle_error("pthread_spin_init:");
 
+  if (pthread_spin_init(&tc->prev_tc_done.lock, PTHREAD_PROCESS_PRIVATE) != 0) handle_error("pthread_spin_init:");
+
   // init PLACE_LOCAL
   tc->place_local.node_index = NODE_INDEX;
   tc->place_local.proc_index = proc_index;
@@ -1768,6 +1770,7 @@ static int grab_available_tc(int proc_id) {
       tc->globals[j].state = EMPTY;
     }
     tc->prev_range_done.state = EMPTY;
+    tc->prev_tc_done.state = EMPTY;
   }
   
   return rez;
