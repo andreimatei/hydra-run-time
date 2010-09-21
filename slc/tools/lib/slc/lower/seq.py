@@ -4,6 +4,10 @@ from ..msg import warn
 
 #### Sequential transforms ####
 
+def die(msg):
+    print >>sys.stderr, "%s: %s" % (sys.argv[0], msg)
+    sys.exit(1)
+
 class Create_2_Loop(ScopedVisitor):
 
     def __init__(self, *args, **kwargs):
@@ -46,7 +50,12 @@ class Create_2_Loop(ScopedVisitor):
         if arg.type.startswith("sh"):
             self.__callist.append(Opaque(', &'))
             self.__callist.append(CVarUse(decl = arg.mem_decl.cvar_stub))
-            self.__protolist += Opaque(', ') + arg.mem_decl.cvar_stub.ctype + Opaque(' *')
+            # for shared mem args, also pass a pointer to the descriptor
+            self.__callist.append(Opaque(', &'))
+            self.__callist.append(CVarUse(decl = arg.mem_decl.cvar_desc))
+
+            self.__protolist += (Opaque(', ') + arg.mem_decl.cvar_stub.ctype + Opaque(' *')
+                                +Opaque(', ') + arg.mem_decl.cvar_desc.ctype + Opaque(' *'))
         else:
             self.__callist.append(flatten(None, ', '))
             self.__callist.append(CVarUse(decl = arg.mem_decl.cvar_stub))
@@ -180,12 +189,22 @@ class TFun_2_CFun(DefaultVisitor):
         
     def visit_setmemp(self, setp):
         # copy the stub as it is, since it's going to be read on the same node
-        b = CVarUse(decl = setp.rhs_decl.cvar_stub)
+        stub = CVarUse(decl = setp.rhs_decl.cvar_stub)
+        desc = CVarUse(decl = setp.rhs_decl.cvar_desc)
         if setp.name in self.__shlist:
-            format = "(*__slP_%s) = "
+            res = Block()
+            # copy the descriptor
+            res += (Opaque("(*__slP_desc_%s) = " % setp.name)
+                    + desc + ';\n'
+                    + 'set_stub_pointer(&' + stub + (', __slP_desc_%s);\n' % setp.name)
+                    )
+            res += (Opaque("(*__slP_%s) = " % setp.name) + stub + ';\n')
+            return res
         else:
-            format = " __slP_%s = "
-        return [flatten(setp.loc, format % setp.name), b]
+            die('attempting to write to a global arg mem')
+            #format = " __slP_%s = "
+        #return [flatten(setp.loc, format % setp.name), b]
+        pass
 
     def visit_funparm(self, parm):
         if parm.type.startswith("sh"):
@@ -208,6 +227,8 @@ class TFun_2_CFun(DefaultVisitor):
         if parm.type.startswith("sh"):
             self.__shlist.append(parm.name)
             self.__buffer += (Opaque(', memdesc_stub_t* const __slP_%s ' % parm.name))
+            # for shareds, the function also takes a pointer to a descriptor
+            self.__buffer += (Opaque(', memdesc_t* __slP_desc_%s' % parm.name))
         else:
             self.__gllist.append(parm.name)
             self.__buffer += (Opaque(', memdesc_stub_t __slP_%s ' % parm.name))

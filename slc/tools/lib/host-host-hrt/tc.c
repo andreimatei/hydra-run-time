@@ -1602,7 +1602,7 @@ void write_argmem(unsigned int node_index,
   }
 
   if (desc_dest != get_stub_pointer(stub)) {
-    assert(memdesc_desc_local(stub));  // TODO: pull the descriptor if it ain't local and remove this assertion
+    assert(memdesc_desc_local(stub));
     if (node_index == NODE_INDEX) {
       *desc_dest  = *get_stub_pointer(stub);
     }

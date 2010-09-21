@@ -1,4 +1,3 @@
-- in slc/lower/lowgeta.py, visit_gatheraffine doesn't take into account the situation where the sequential path for create was taken
 - program crashes when the block size >= the number of threads
 - for the mapping function spread, the default place for threads in the new family must be PID (the place
     to which we delegate the new family).

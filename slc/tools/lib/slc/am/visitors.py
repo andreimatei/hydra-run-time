@@ -913,7 +913,7 @@ class Mem_2_HRT(DefaultVisitor):
         # possible values for set_op include MemDesc, GetMemP, SetMemA, MemActivate (lhs), MemExtend (lhs)
         # TODO: figure out if there are other operations when the descriptor is not needed
         descriptor_needed = True
-        if isinstance(d.set_op, GetMemP) or isinstance(d.set_op, SetMemA):
+        if isinstance(d.set_op, GetMemP): #or isinstance(d.set_op, SetMemA):
             descriptor_needed = False
 
         if descriptor_needed:
