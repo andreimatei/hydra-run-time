@@ -6,6 +6,11 @@ about the C type of stubs and descriptors, plus it makes a call to set_stub_poin
   run to completion. This is a problem, as concurrency is reduced.
 - for the mapping function spread, the default place for threads in the new family must be PID (the place
     to which we delegate the new family).
+- there is a single type of network message for passing globals, mem or not, so we waste space for a
+  descriptor even when we pass a boolean. Actually, ideally we would have 3 types of messages - global,
+  mem-global with descriptor, mem-global with first range over. If the network subsystem would support it,
+  we'd like to have message of varying length so, if a descriptor has fewer ranges than the maximum, we
+  wouldn't waste space
 
 - revisit the uses of .p and .orig_p in descriptors
 - inspect uses of gettimeofday()

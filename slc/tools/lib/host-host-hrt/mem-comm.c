@@ -113,9 +113,9 @@ void pull_desc(memdesc_t* new_desc, memdesc_stub_t* stub, memdesc_t* orig_desc) 
 }
 
 static void pull_data(memdesc_stub_t* stub) {
-  assert(stub->data_provider != NODE_INDEX);  // shouldn't be called on such a descriptor; the compiler
-                            // should ensure that the generic version of a thread func is not invoked on the
-                            // same node as the parent
+  assert(stub->data_provider != NODE_INDEX);  // shouldn't be called on such a descriptor;
+                            // upper layers should ensure
+                            // that the no-op of pulling from the local node is detected
   assert(!stub->have_data);
 
   // get pending request slot

@@ -2444,7 +2444,17 @@ void write_global(fam_context_t* fc, unsigned int index, long val, bool is_mem) 
     } else {
       write_global_to_remote_chain(fc->distribution.reservations[i].first_tc.node_index,
                                    fc->distribution.reservations[i].first_tc,
-                                   index, val, is_mem, true);
+                                   index, val, is_mem, true);  // TODO: in principle, it would probably be better
+                // if we wouldn't copy the descriptor for globals (last argument = false). In the common
+                // scenario where the children just activate the stub without a rhs, or when they first 
+                // restrict it, the descriptor is not needed as the first range would do. However,
+                // since at the moment (23.09.2010) the network subsystem does not have support for
+                // variable length messages, and we don't have 2 kinds of messages for passing mem globals
+                // ,with the descriptor and without (actually, we don't even have a separate message type
+                // for passing globals which are not mem - so we waste the space for a descriptor even
+                // when we pass a bool),
+                // we might as well copy the descriptor, since we're wasting the space in the network
+                // message anyway.
     }
   }
 }

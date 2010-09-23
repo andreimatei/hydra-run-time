@@ -177,7 +177,8 @@ class Create_2_HydraCall(ScopedVisitor):
     def emit_call_map_fam(self, funvar, create, lowcreate, gencallee):
         newbl = Block()
     
-        mapping_decision_var = CVarDecl(loc = create.loc_end, name = 'map$%s' % create.label, ctype = 'mapping_decision')
+        mapping_decision_var = CVarDecl(loc = create.loc_end, name = 'map$%s' % create.label, 
+                                        ctype = 'mapping_decision')
         self.cur_scope.decls += mapping_decision_var
         
         start_index = CVarUse(decl = create.cvar_start)
@@ -202,7 +203,8 @@ class Create_2_HydraCall(ScopedVisitor):
                   + CGoto(target = lowcreate.target_next) + ';}\n')
         
         # emit a call to interpret the mapping function
-        mapping_hint_var = CVarDecl(loc = create.loc_end, name = 'mapping_hint%s' % create.label, ctype = 'mapping_hint_t')
+        mapping_hint_var = CVarDecl(loc = create.loc_end, name = 'mapping_hint%s' % create.label, 
+                                    ctype = 'mapping_hint_t')
         self.cur_scope.decls += mapping_hint_var
         no_threads_block = Opaque('') + '((' + end_index + ' - ' + start_index + ' + 1) / ' + step + ')'
 
