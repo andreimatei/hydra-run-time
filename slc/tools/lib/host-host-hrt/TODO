@@ -1,4 +1,9 @@
+- seq-c is not ready for merging... besides other possible problems, visit_createargmem makes assumptions
+about the C type of stubs and descriptors, plus it makes a call to set_stub_pointer
 - program crashes when the block size >= the number of threads
+- right now, no matter where the setp statements are located in the body, they will be
+  moved at the end by the Create_2_HydraCall visitor. This means that the children reading them are not unblocked until the body is
+  run to completion. This is a problem, as concurrency is reduced.
 - for the mapping function spread, the default place for threads in the new family must be PID (the place
     to which we delegate the new family).
 

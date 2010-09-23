@@ -357,10 +357,13 @@ class Create_2_HydraCall(ScopedVisitor):
         newbl.append(create_call + ';\n')
         self.__first_tc = CVarUse(decl = first_tc_var)
 
-        # FIXME: we also have __cur_fam_context. Keep only one
+        # TODO: we also have __cur_fam_context. Keep only one
         self.__fam_context = CVarUse(decl = fam_context_var)  
         
         # consume body
+        # TODO: right now, no matter where the setp statements are located in the body, they will be
+        # moved at the end. This means that the children reading them are not unblocked until the body is
+        # run to completion. This is a problem, as concurrency is reduced.
         newbl.append(lc.body.accept(self))
         
         #consume arguments
@@ -403,11 +406,6 @@ class Create_2_HydraCall(ScopedVisitor):
         #print ' id of scatter.decl.create = ' + str(id(scatter.decl.create))
         #print ' id of scatter.decl = ' + str(id(scatter.decl))
 
-        #scatter.decl.scatter_stub = stub
-        #scatter.decl.fam_context = self.__cur_fam_context  #TODO: the fam context should be saved
-                                        # in some other place, maybe in the create (scatter.decl.create)...
-                                        # Discuss with Raphael
-
         # save a reference to the fam_context and to the stub in the create, to be used by gather
         scatter.decl.create.fam_context = self.__cur_fam_context
         if not hasattr(scatter.decl.create, 'scatter_stubs'):
@@ -428,34 +426,12 @@ class Create_2_HydraCall(ScopedVisitor):
         self.__arg_setters.append(scatter_call)
         # create a stub and treat it as a sl_setma(stub)
         # set the S bit on the stub that is being passed
-        #new_rhs = flatten(None, "_stub_2_long(_stub_2_canonical_stub(") + CVarUse(decl = stub) + " , 1))"
         new_rhs = CVarUse(decl = stub)
         self.do_visit_seta(scatter.loc, scatter.decl, new_rhs, 1) 
 
         return None
 
-        """
-    def visit_gatheraffine(self, gather):
-        print '~!~!~!~!~!~!~!~!~!~!~!~!~~~~~~~~~~~~~~~~~~~~~~ seen gather'
-        a = gather.a
-        b = gather.b
-        c = gather.c
-        cvar_stub = gather.decl.scatter_stub
-        fam_context = gather.decl.fam_context
-        new_items = Block()
-        new_items += (flatten(gather.loc, '')
-                + '_memgather_affine('
-                + CVarUse(decl = fam_context) + ', '
-                + CVarUse(decl = cvar_stub) + ', '
-                + a + ', ' + b + ', ' + c + ')'
-                )
-        return new_items
-        """
     
-    #def visit_getmema(self, getma):
-    #    new_items = (Opaque('') + CVarUse(loc = getma.loc, decl = getma.lhs_decl.cvar_stub) + ' = '
-    #                + CVarUse(loc = getma.loc, decl = getma.decl.cvar))
-    #    return new_items
 
 class TFun_2_HydraCFunctions(DefaultVisitor):
     def __init__(self, *args, **kwargs):
