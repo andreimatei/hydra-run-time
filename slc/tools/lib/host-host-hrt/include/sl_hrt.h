@@ -38,6 +38,9 @@ typedef struct memdesc {
 
   mem_range_t ranges[MAX_RANGES_PER_MEM];
   int no_ranges;
+  char padding[24];  // padding to make the size of the structure a multiple of 32, so that
+                     // each element from an array of structures whose base is alligned on a 32-bit
+                     // boundary is still alligned on a 32-bit boundary
 }memdesc_t  __attribute__ ((aligned (32)));  // because pointers to these have to use less bits, cause
                                              // we stuff them in memdesc_stub_t's
 
@@ -303,7 +306,7 @@ static inline memdesc_t* get_stub_pointer(memdesc_stub_t stub) {
 
 static inline void set_stub_pointer(memdesc_stub_t* stub, const memdesc_t* desc) {
   // assert that the desc is alligned properly
-  assert(((unsigned long)desc & 15) == 0);
+  assert(((unsigned long)desc & 0x1F) == 0);
   stub->pointer = ((unsigned long)desc >> 5);
 }
 

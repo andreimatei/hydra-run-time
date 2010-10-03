@@ -627,120 +627,13 @@ fam_context_t* allocate_fam(
                i, res->no_threads_per_generation, res->no_threads_per_generation_last,
                allocated_tcs[i].no_threads);
   }
-  //fc->distribution.start_index = start_index;
   fc->distribution.start_index_last_generation = ((mapping->no_ranges_per_tc - 1) * total_no_threads_per_gen);
-    //start_index + ((mapping->no_ranges_per_tc - 1) * total_no_threads_per_gen);
   LOG(DEBUG, "allocate_fam: computed start_index_last_generation = %ld\n", fc->distribution.start_index_last_generation);
 
   return fc;
 
 
 
-/*
-  //find TC's
-  long total_threads = (end_index - start_index + 1) / step;
-  long allocated_threads = 0;
-
-  typedef struct allocated_tcs_t {
-    int allocated_tcs;
-    int tcs[MAX_NO_TCS_PER_ALLOCATION];
-    int no_threads; 
-  }allocated_tcs_t;
-
-  allocated_tcs_t allocated_tcs[mapping->no_proc_assignments];
-  unsigned int load_to_redistribute = 0;
-  unsigned int allocated_procs = 0;
-  int last_allocated_proc_index = -1;
-
-  for (i = 0; i < mapping->no_proc_assignments; ++i) {
-    proc_assignment as = mapping->proc_assignments[i];
-    assert(as.no_tcs <= MAX_NO_TCS_PER_ALLOCATION);
-    if (as.node_index == NODE_INDEX) {
-      LOG(DEBUG, "allocate_fam: requesting %d local TC's\n", as.no_tcs);
-      allocate_local_tcs(as.proc_index, as.no_tcs, allocated_tcs[i].tcs, &allocated_tcs[i].allocated_tcs);
-    } else {
-      LOG(DEBUG, "allocate_fam: requesting %d remote TC's\n", as.no_tcs);
-      allocate_remote_tcs(as.node_index, as.proc_index, as.no_tcs, 
-                          allocated_tcs[i].tcs, 
-                          &allocated_tcs[i].allocated_tcs);
-      LOG(DEBUG, "allocate_fam: back from remote allocation\n");
-    }
-
-    if (allocated_tcs[i].allocated_tcs == 0) {
-      // redistribute the load assigned to this proc
-      load_to_redistribute += as.load_percentage;
-      LOG(DEBUG, "failed to allocate TC's on node %d processor %d\n", 
-          NODE_INDEX, as.proc_index);
-    } else {
-      last_allocated_proc_index = i;
-      ++allocated_procs;
-      LOG(DEBUG, "allocated %d TC's on node %d processor %d\n", 
-          allocated_tcs[i].allocated_tcs, NODE_INDEX, as.proc_index);
-    }
-  }
-
-  // if no TC's could be allocated anywhere, return failure
-  if (last_allocated_proc_index == -1) {
-    // free the allocated family context
-    free_fc(fc->index / NO_FAM_CONTEXTS_PER_PROC, fc->index % NO_FAM_CONTEXTS_PER_PROC);
-    return NULL;
-  }
-
-  LOG(DEBUG, "finished allocating resources. Load to redistribute: %d\%\n", 
-      load_to_redistribute);
-
-  // redistribute the load of the procs where we couldn't get any TC's and
-  // compute the number of threads that go to each proc
-  int additional_load = load_to_redistribute / allocated_procs;
-  int additional_load_last = load_to_redistribute % allocated_procs;
-  for (int i = 0; i <= last_allocated_proc_index; ++i) {
-    if (allocated_tcs[i].allocated_tcs == 0) continue;
-    proc_assignment as = mapping->proc_assignments[i];
-    // compute the load (in percentages) going to this proc
-    int load = as.load_percentage + additional_load;
-    if (i == last_allocated_proc_index) load += additional_load_last;
-
-    // compute the number of threads going to this proc
-    if (i != last_allocated_proc_index) {
-      allocated_tcs[i].no_threads = load * total_threads / 100;
-      allocated_threads += allocated_tcs[i].no_threads;
-    } else {
-      allocated_tcs[i].no_threads = total_threads - allocated_threads;
-    }
-  }
-
-  // fill in the ranges in the FC
-  int no_ranges = 0;
-  int thread_index = start_index;  // next thread to allocate
-  for (int i = 0; i <= last_allocated_proc_index; ++i) {
-    if (allocated_tcs[i].allocated_tcs == 0) continue;
-
-    unsigned long threads_for_proc = allocated_tcs[i].no_threads;
-    unsigned long threads_for_tc = threads_for_proc / allocated_tcs[i].allocated_tcs;
-    unsigned long threads_for_tc_last = threads_for_proc % allocated_tcs[i].allocated_tcs;
-    unsigned long ranges_for_tc = mapping->no_ranges_per_tc;
-    assert(ranges_for_tc <= threads_for_tc);
-    
-    for (int j = 0; j < allocated_tcs[i].allocated_tcs; ++j) { 
-      fc->ranges[no_ranges].index_start = thread_index;
-      fc->ranges[no_ranges].index_end = thread_index + step * (threads_for_tc - 1);
-      thread_index = fc->ranges[no_ranges].index_end + step;
-      
-      fc->ranges[no_ranges].dest.node_index = mapping->proc_assignments[i].node_index;
-      fc->ranges[no_ranges].dest.proc_index = mapping->proc_assignments[i].proc_index;
-      fc->ranges[no_ranges].dest.tc_index = allocated_tcs[i].tcs[j];
-      fc->ranges[no_ranges].dest.tc = 
-        (tc_t*)TC_START_VM_EX(mapping->proc_assignments[i].node_index, allocated_tcs[i].tcs[j]);
-      
-      no_ranges++;
-    }
-    // add a few threads to the last tc for a proc
-    fc->ranges[no_ranges-1].index_end += step * threads_for_tc_last;
-  }
-  fc->no_ranges = no_ranges;
-
-  return fc;
-*/
 }
 
 static inline int test_same_node(const tc_ident_t* l, const tc_ident_t* r) {
@@ -1114,8 +1007,10 @@ static void rt_init() {
   assert((void*)&allocate_tc_locks[0].lock == (void*)&allocate_tc_locks[0]);
 
   // check that the descriptors in the tables in FC's are properly aligned
+  assert((sizeof(memdesc_t) % 32) == 0);
   assert(((unsigned long)(&fam_contexts[0][0].shared_descs[0])) % 32 == 0);
   assert(((unsigned long)(&fam_contexts[0][1].shared_descs[0])) % 32 == 0);
+  assert(((unsigned long)(&fam_contexts[0][0].shared_descs[1])) % 32 == 0);
 
   //init_network();
   init_mem_comm();
