@@ -64,10 +64,14 @@ class Create_2_HydraCall(ScopedVisitor):
         if decl.type.startswith("sh"):      # shared argument
             # find my own index
             index = self.get_arg_index(arg = decl, shared = True)
-            
+            floating = decl.type.startswith("shf")        
+
             value = Block()
             if (not isinstance(decl, CreateArgMem)):
-                value += Opaque('(long)(') + val + ')'
+                if not floating:
+                    value += Opaque('(long)(') + val + ')'
+                else:
+                    value += Opaque('((cast_helper)(') + val + ')).as_integer'
             else:
                 value += Opaque('') + '_stub_2_canonical_stub(' + val + ', 0)'
 
@@ -93,6 +97,8 @@ class Create_2_HydraCall(ScopedVisitor):
                 
 
         else:                   # global argument
+            assert decl.type.startswith("gl")        
+            floating = decl.type.startswith("glf")        
             # find my own index
             index = self.get_arg_index(arg = decl, shared = False)
             # setting a global is done by first writing to a local var (so that the parent can read it
@@ -100,8 +106,15 @@ class Create_2_HydraCall(ScopedVisitor):
             # that we don't execute the rhs again)
             if (not isinstance(decl, CreateArgMem)):
                 setter = CVarSet(loc = loc, decl = decl.cvar, rhs = val) + ';  // setting local copy'
+    
+                value = Block()
+                if not floating:
+                    value = Opaque('(long)') + CVarUse(decl = decl.cvar)
+                else:
+                    value = Opaque('((cast_helper)') + CVarUse(decl = decl.cvar) + ').as_integer'
+
                 setter += (flatten(loc, "write_global(") +
-                    self.__fam_context + ', %s' % index + ', (long)' + CVarUse(decl = decl.cvar) + ', 0);\n')
+                    self.__fam_context + ', %s' % index + ', ' + value + ', 0);\n')
             else:  # for ArgMem's, we currently don't write to a temporary, so sl_getma() won't work
                 # TODO: write to a temporary (we need a .cvar in decl)
                 setter = (flatten(loc, "write_global(") +
@@ -470,31 +483,43 @@ class TFun_2_HydraCFunctions(DefaultVisitor):
     def visit_getp(self, getp):
         newbl = []
         param = self.__paramNames_2_params[getp.name]
-       
+        
+
+        conversion = None
+        if param.floating_point:
+            conversion = Opaque('((') + getp.decl.ctype + ')(((cast_helper)' 
+        else:
+            conversion = Opaque('((') + getp.decl.ctype + ')(' 
+
+        newbl.append(conversion)
+
         if not param.isShared:
-            newbl.append(flatten(None, '((') + getp.decl.ctype + ')'
-                        'read_istruct(&_cur_tc->globals[%d], _get_parent_ident()))' %
-                        param.index)
+            newbl.append(#flatten(None, '((') + getp.decl.ctype + ')'
+                        Opaque('read_istruct(&_cur_tc->globals[%d], _get_parent_ident()))' %
+                        param.index))
         else: #shared
             if self.__state == 0: #begin
-                newbl.append(flatten(None, '((') + getp.decl.ctype + ')' +
-                            'read_istruct(&_cur_tc->shareds[_cur_tc->current_generation][%d], prev))' %
-                            param.index)
+                newbl.append(#flatten(None, '((') + getp.decl.ctype + ')' +
+                            Opaque('read_istruct(&_cur_tc->shareds[_cur_tc->current_generation][%d], prev))' %
+                            param.index))
             elif self.__state == 1: #middle
-                newbl.append(flatten(None, '((') + getp.decl.ctype + ')' +
-                            'read_istruct_same_tc(&_cur_tc->shareds[_cur_tc->current_generation][%d]))' %
-                            param.index)
+                newbl.append(#flatten(None, '((') + getp.decl.ctype + ')' +
+                            Opaque('read_istruct_same_tc(&_cur_tc->shareds[_cur_tc->current_generation][%d]))' %
+                            param.index))
             elif self.__state == 2: #end
-                newbl.append(flatten(None, '((') + getp.decl.ctype + ')' +
-                            'read_istruct_same_tc(&_cur_tc->shareds[_cur_tc->current_generation][%d]))' %
-                            param.index)
+                newbl.append(#flatten(None, '((') + getp.decl.ctype + ')' +
+                            Opaque('read_istruct_same_tc(&_cur_tc->shareds[_cur_tc->current_generation][%d]))' %
+                            param.index))
             elif self.__state == 3: #generic
-                newbl.append(flatten(None, '((') + getp.decl.ctype + ')' +
-                            'read_istruct(&_cur_tc->shareds[_cur_tc->current_generation][%d], prev))' %
-                            param.index)
+                newbl.append(#flatten(None, '((') + getp.decl.ctype + ')' +
+                            Opaque('read_istruct(&_cur_tc->shareds[_cur_tc->current_generation][%d], prev))' %
+                            param.index))
             else:
                assert False
 
+        if param.floating_point:
+            newbl.append(Opaque('.as_floating)'));
+        newbl.append(Opaque(')'))
         return newbl
 
     def visit_setp(self, setp):
@@ -506,22 +531,29 @@ class TFun_2_HydraCFunctions(DefaultVisitor):
         #write to a global (from a child) and, if so, what it's supposed to mean
         assert(param.isShared)
 
-        if setp.decl.seen_get:  # TODO: do I need casting for b in all the branches below?
+        val = None
+        if param.floating_point:
+            val = Opaque('((cast_helper)(') + b + ')).as_integer'
+        else:
+            val = b
+
+        if setp.decl.seen_get:
             if self.__state == 0: #begin
                 newbl.append(flatten(None,#setp.loc,
                              'write_istruct_same_tc(&_cur_tc->shareds[_cur_tc->current_generation][%d],' %
-                              param.index) + b + ')')
+                              param.index) + val + ')')
                 
             elif self.__state == 1: #middle
                 newbl.append(flatten(None,#setp.loc,
                              'write_istruct_same_tc(&_cur_tc->shareds[_cur_tc->current_generation][%d],' %
-                              param.index) + b + ')')
+                              param.index) + val + ')')
             elif self.__state == 2 or self.__state == 3: #end and generic
                 newbl.append(flatten(setp.loc,  # end and generic are passed the array of shareds as an argument
                              'write_istruct(next->node_index, &shareds[%d],' % param.index) \
-                             + b + ', next);//, 0);')
+                             + val + ', next);//, 0);')
             else:
                 assert(0)
+
         else:  # no need to write to anything; just generate the rhs
             #TODO(kena): check that you're fine with this
             newbl.append(flatten(setp.loc,'(void)(') + b + ');') # cast to void suppress "statement has no effect warning" 
@@ -562,7 +594,11 @@ class TFun_2_HydraCFunctions(DefaultVisitor):
 
     def visit_funparm(self, parm):
         self.__paramNames_2_params[parm.name] = parm
-        assert not (parm.type.startswith("shf") or parm.type.startswith("glf"))
+        if (parm.type.startswith("shf") or parm.type.startswith("glf")):
+            parm.floating_point = True
+        else:
+            parm.floating_point = False
+        #assert not (parm.type.startswith("shf") or parm.type.startswith("glf"))
         if parm.type.startswith("sh"):
             parm.isShared = True
             parm.index = self.__sh_parm_index
@@ -591,12 +627,15 @@ class TFun_2_HydraCFunctions(DefaultVisitor):
             qual = "extern"
 
         newitems = Block()
+        
+
         #TODO: what does keep mean? :)
         if not keep:
             #newitems = flatten(fundecl.loc, "%s void " % qual) + gen_loop_fun_name(fundecl.name) + "();";
             #newitems = flatten(fundecl.loc, "%s void " % qual) + fundecl.name + "();";
 
             # emit declaration for metaloop function
+            #print 'generating declaration for ' + gen_loop_fun_name(fundecl.name)
             newitems += flatten(fundecl.loc, "%s void " % qual) + gen_meta_loop_fun_name(fundecl.name) + "();";
             # emit declaration for loop function
             newitems += flatten(fundecl.loc, "%s void " % qual) + gen_loop_fun_name(fundecl.name) + "();";
@@ -869,6 +908,11 @@ class TFun_2_HydraCFunctions(DefaultVisitor):
 
 
     def visit_indexdecl(self, idecl):
+        #newbl = []
+        #newbl.append(Opaque('cast_helper c; double v1 = (cast_helper)c.as_floating);'))
+        #newbl.append(Opaque('((union cast_helperr)((double)1)).as_floating;'))
+        #newbl.append(Opaque('double v1 = ((union cast_helper)(read_istruct(&_cur_tc->globals[0],_get_parent_ident()))).as_floating;'))
+        #return newbl
         return flatten(idecl.loc, "register const long %s = __index" %
                        idecl.indexname)
 

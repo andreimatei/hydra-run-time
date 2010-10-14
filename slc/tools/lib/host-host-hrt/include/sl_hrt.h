@@ -356,9 +356,6 @@ tc_ident_t create_fam(fam_context_t* fc,
                       );
 
 long sync_fam(fam_context_t* fc, /*long* shareds_dest,*/ int no_shareds, ...);
-//TODO: release was removed, as it appears there's nothing for it to do. Recheck the
-//decision.
-//void release_fam(fam_context_t* fc);
 
 void _memdesc(memdesc_t* memdesc, void* p, unsigned int no_elements, unsigned int sizeof_element);
 
@@ -650,5 +647,11 @@ static inline void _advance_generation(unsigned int no_shareds, bool first_gener
 static inline long _denormalize_index(long normalized_index, long real_start, long step) {
   return real_start + (normalized_index * step);
 }
+
+union cast_helper{
+  long as_integer;
+  double as_floating;
+};
+typedef union cast_helper cast_helper;
 
 #endif
