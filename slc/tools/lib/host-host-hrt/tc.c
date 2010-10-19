@@ -25,7 +25,7 @@
 #define MAPPING_CHUNK (1<<20)  // the size and allignment of chunks to map on SIGSEGV
 
 /* the start of then address space used by the TCs of nodes */
-#define ADDR_SPACE_START ((void*)0x100000)  // 1 MB
+#define ADDR_SPACE_START ((void*)0x40000000)  // 50MB
 
 #define VM_BITS_PER_NODE 40
 #define VM_PER_NODE (1L<<VM_BITS_PER_NODE)
@@ -313,6 +313,8 @@ static void figure_out_fam_distribution(sl_place_t place,
                                         unsigned long* block,
                                         unsigned long* no_generations
                                         ) {
+  LOG(DEBUG, "figure_out_fam_distribution: got hint: %d nodes, %d procs, %d tcs, %ld block\n",
+      hint.hint_nodes, hint.hint_procs, hint.hint_tcs, hint.hint_block);
 
   sl_place_t final_place = _place_2_canonical_place(place);
   assert(hint.hint_nodes > 0 && hint.hint_procs > 0 && hint.hint_tcs > 0 && hint.hint_block > 0);
@@ -349,6 +351,8 @@ static void figure_out_fam_distribution(sl_place_t place,
   *no_procs = hint.hint_procs;
   *no_tcs   = hint.hint_tcs; 
   *block    = hint.hint_block;
+  LOG(DEBUG, "figure_out_fam_distribution: results: %d nodes, %d procs, %d tcs, %ld block\n",
+      *no_nodes, *no_procs, *no_tcs, *block);
 }
 
 mapping_decision map_fam(
@@ -1071,8 +1075,6 @@ static void rt_init() {
   int fc_index = 0;
   for (i = 0; i < NO_PROCS; ++i) {
     for (j = 0; j < NO_FAM_CONTEXTS_PER_PROC; ++j) {
-      if (i == 1 && j == 5) 
-        LOG(DEBUG, "0 initializing fam_contexts[%d][%d] - > %x.\n", i, j, &fam_contexts[i][j]);
       fam_contexts[i][j].empty = 1;
       //LOG(DEBUG, "1 initializing fam_contexts[%d][%d].\n", i, j);
       fam_contexts[i][j].done.state = EMPTY;
@@ -1458,10 +1460,6 @@ void write_istruct(//i_struct_fat_pointer istruct,
     //volatile i_struct* istructp;
     tc_ident_t cur_ident = get_current_context_ident();
 
-    //assert(cur_ident.node_index == _cur_tc->ident.node_index);  //TODO: remove these
-    //assert(cur_ident.proc_index == _cur_tc->ident.proc_index);
-    //assert(cur_ident.tc_index == _cur_tc->ident.tc_index);
-
     assert(reading_tc->node_index == cur_ident.node_index);  // assume same node, for now
     tc_t* dest_tc = (tc_t*)reading_tc->tc;
     if (reading_tc->tc_index == cur_ident.tc_index) {  // same thread context
@@ -1828,7 +1826,7 @@ void parse_mem_map(char* buf, mem_range* mem_ranges, int* no_mem_ranges) {
   while (range) {
     long long l,r;
     int res = sscanf(range, "%LX-%LX", &l, &r);
-    //LOG(DEBUG, "parse_mem_map: parsing range \"%s\".\t Got %LX - %LX.\n", range, l, r);
+    LOG(DEBUG, "parse_mem_map: parsing range \"%s\".\t Got %LX - %LX.\n", range, l, r);
     assert(res = 2);
 
     if (l > 0x7fffffffffffLL) {  // we ignore ranges above 0x7fffffffffff; those belong to the kernel,
@@ -1853,7 +1851,9 @@ void parse_own_memory_map(char* map) {
   FILE* f = fopen(file, "rt");
   char buf[500];
   int first = 1;
+  LOG(DEBUG, "parse_own_memory_map: reading /proc/%d/maps\n", pid);
   while (fgets(buf, 500, f)) {
+    LOG(DEBUG, "parse_own_memory_map: got a line: \"%s\"\n", buf);
     char* l = strtok(buf, "-");
     assert(l);
     char* r = strtok(NULL, " ");
@@ -2304,6 +2304,7 @@ int main(int argc, char** argv) {
     LOG(INFO, "running in standalone mode; no peers\n");
     //return start_standalone(argc, argv);  
     NODE_INDEX = 0;
+    no_secondaries = 1;
     return start(argc, argv);
   }
 }

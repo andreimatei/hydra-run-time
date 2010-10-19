@@ -581,7 +581,9 @@ static inline long timediff_now(struct timeval t) {
  */
 static inline sl_place_t _place_2_canonical_place(sl_place_t place) {
   if (!place.place_local && !place.place_default) return place;
-  if (place.place_default) return _cur_tc->place_default;
+  if (place.place_default) {
+    return _cur_tc->place_default;
+  }
   assert(place.place_local); 
   return _cur_tc->place_local;
 }
