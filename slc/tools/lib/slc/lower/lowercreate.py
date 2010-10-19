@@ -68,6 +68,9 @@ class Create_2_LowCreate(DefaultVisitor):
                     initvar = CVarDecl(loc = a.loc, name = 'C$ai$%s' % a.name, ctype = a.ctype)
 
                     decls += initvar
+                    initvar.alignment = 8  # request 8-byte alignment; useful for the hrt target, for
+                                           # shared arguments, as the sync will write to them
+                                           # using a (long*).
                     a.cvar_init = initvar
 
                     newbl.append(CVarSet(loc = a.loc, decl = initvar, 

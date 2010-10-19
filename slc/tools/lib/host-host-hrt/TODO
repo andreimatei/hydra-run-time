@@ -1,3 +1,7 @@
+- revisit communication of shareds from last child to parent for hrt. It is done using a write to a long*.
+The variables are declared in the parent using 8-byte alignment, but is this enough? Are they the only variables
+in their scope? Otherwise the write to the last one might overwrite other variables introduced by the programmer,
+right?
 - seq-c is not ready for merging... besides other possible problems, visit_createargmem makes assumptions
 about the C type of stubs and descriptors, plus it makes a call to set_stub_pointer
 - program crashes when the block size >= the number of threads

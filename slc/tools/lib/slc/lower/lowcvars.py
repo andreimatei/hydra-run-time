@@ -39,6 +39,9 @@ class ReduceCVars(DefaultVisitor):
         vd.ctype.accept(self)
         t = decapsulate_ctype(vd.ctype)
 
+        if hasattr(vd, 'alignment'):
+            t += (' __attribute__((aligned(%d))) ' % vd.alignment)
+
         if self.cur_ctypename is not None:
             # no head, append name
             t += Opaque(text = ' %s' % vd.name)
@@ -49,6 +52,7 @@ class ReduceCVars(DefaultVisitor):
         vd.init.accept(self)       
         if len(vd.init) > 0:
             newbl += Opaque(text = ' = (') + vd.init + ')'
+
 
         newbl += ';'
         return newbl
