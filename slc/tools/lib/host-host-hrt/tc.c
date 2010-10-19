@@ -84,7 +84,7 @@ static const char* log_prefix[20] = {"[CRASH]!!!!!!!!!!!!!!!!!!!! ",  // 0
 #ifdef LOGGING
 LOG_LEVEL _logging_level = LOGGING;
 #else
-LOG_LEVEL _logging_level = DEBUG;
+LOG_LEVEL _logging_level = WARNING;
 #endif
 
 void LOG(LOG_LEVEL level, char* fmt, ...) {

@@ -445,14 +445,10 @@ static bool parse_incoming_memchunk(int incoming_index, char* buf, int len, int*
       mem_dest = desc->ranges[i].p + incoming_state[incoming_index].offset_within_range;
     }
 
-    LOG(DEBUG, "network: parse_incoming_mem_chunk: we need %d bytes for range %d\n", bytes_needed, i);
+    LOG(DEBUG + 1, "network: parse_incoming_mem_chunk: we need %d bytes for range %d\n", bytes_needed, i);
     int read = MIN(bytes_needed, len);
     *bytes_used += read;
     memcpy(mem_dest, buf, read);
-    LOG(DEBUG, "network: parse_incoming_mem_chunk: copied %d bytes at %p\n", read, mem_dest);
-    if (read == 4) {
-      LOG(DEBUG, "network: parse_incoming_mem_chunk: value copied = %d\n", *(int*)mem_dest);
-    }
     bytes_needed -= read;
     len -= read;
     buf += read;
@@ -756,6 +752,7 @@ static size_t prepare_push_buffer(char* buf, size_t len, const tcp_sending_state
         + offset_within_segment;
     }
     size_t to_copy = MIN(left_in_segment, len);
+    LOG(DEBUG, "network: prepare_push_buffer: copying %d bytes of data from %p\n", to_copy, p);
     memcpy(buf + res, p, to_copy);
     len -= to_copy;
     res += to_copy;

@@ -28,14 +28,9 @@ typedef struct mem_range {
   void *p, *orig_p;
   int no_elements;
   int sizeof_element;
-  //struct mem_range* next;
 }mem_range_t;
 
 typedef struct memdesc {
-  //enum memdesc_type type;
-  //memdesc_stub_t orig_stub;  // valid only if type == RESTRICT
-  //unsigned int start_element, no_elements;  // valid only if type == RESTRICT
-
   mem_range_t ranges[MAX_RANGES_PER_MEM];
   int no_ranges;
   char padding[24];  // padding to make the size of the structure a multiple of 32, so that
