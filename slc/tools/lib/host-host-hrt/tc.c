@@ -25,7 +25,7 @@
 #define MAPPING_CHUNK (1<<20)  // the size and allignment of chunks to map on SIGSEGV
 
 /* the start of then address space used by the TCs of nodes */
-#define ADDR_SPACE_START ((void*)0x40000000)  // 50MB
+#define ADDR_SPACE_START ((void*)0x40000000)  // 1GB
 
 #define VM_BITS_PER_NODE 40
 #define VM_PER_NODE (1L<<VM_BITS_PER_NODE)
