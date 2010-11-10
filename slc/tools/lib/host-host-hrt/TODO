@@ -1,7 +1,15 @@
+- each idle processor wakes up every 1ms to check for a runnable tc. Replace this with a signaling mechanism.
+
 - revisit communication of shareds from last child to parent for hrt. It is done using a write to a long*.
 The variables are declared in the parent using 8-byte alignment, but is this enough? Are they the only variables
 in their scope? Otherwise the write to the last one might overwrite other variables introduced by the programmer,
 right?
+
+- currently, the address space for TC's starts at 1GB. This seems to be enough to avoid clashes
+with the sections used for global variables. We should test this at runtime by, and not create TC's
+that clash with mmaped sections. This is currently only done when running on multiple nodes; it should
+also be done when running on a single node.
+
 - seq-c is not ready for merging... besides other possible problems, visit_createargmem makes assumptions
 about the C type of stubs and descriptors, plus it makes a call to set_stub_pointer
 - program crashes when the block size >= the number of threads

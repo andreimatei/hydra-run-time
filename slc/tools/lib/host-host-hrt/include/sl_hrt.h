@@ -14,7 +14,7 @@
 
 
 extern unsigned int NODE_INDEX;  // index of the current node
-
+extern unsigned int NO_PROCS;
 void exit(int);
 
 struct tc_t;
@@ -645,10 +645,24 @@ static inline long _denormalize_index(long normalized_index, long real_start, lo
   return real_start + (normalized_index * step);
 }
 
-union cast_helper{
+// Check whether the descriptor associated with a stub is present on the current node.
+bool memdesc_desc_local(memdesc_stub_t stub);
+
+static inline void assert_memdesc_desc_local(memdesc_stub_t stub) {
+  assert(memdesc_desc_local(stub));
+}
+
+void pull_descriptor_in_place(memdesc_stub_t stub);
+
+union cast_helper {  // union to help with bitwise casting to i-structures. Used by the compiler when
+                     // sending arguments to threads and reading them back.
   long as_integer;
   double as_floating;
 };
 typedef union cast_helper cast_helper;
+
+static inline unsigned int get_processors() {
+  return NO_PROCS;
+}
 
 #endif

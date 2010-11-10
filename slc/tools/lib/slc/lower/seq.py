@@ -190,9 +190,13 @@ class TFun_2_CFun(DefaultVisitor):
     def visit_setmemp(self, setp):
         # copy the stub as it is, since it's going to be read on the same node
         stub = CVarUse(decl = setp.rhs_decl.cvar_stub)
-        desc = CVarUse(decl = setp.rhs_decl.cvar_desc)
         if setp.name in self.__shlist:
+            # desc = CVarUse(decl = setp.rhs_decl.cvar_desc)
+            desc = Opaque('*get_stub_pointer(') + stub + ')';  
             res = Block()
+            res += (Opaque('if (!memdesc_desc_local(') + stub + ')) {\n' +
+              'pull_descriptor_in_place(' + stub + ');}\n')
+
             # copy the descriptor
             res += (Opaque("(*__slP_desc_%s) = " % setp.name)
                     + desc + ';\n'

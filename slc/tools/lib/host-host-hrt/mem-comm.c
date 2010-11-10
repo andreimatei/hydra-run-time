@@ -79,7 +79,7 @@ memdesc_stub_t _stub_2_canonical_stub(memdesc_stub_t stub, int S) {
 /*
  * Pull a descriptor from the descriptor provider of stub and updates the stub to point to the local copy.
  * Note that if the descriptor has a single range, no network operation is done, since info about the first 
- * range is provided directly to this function.
+ * range is always present on the current node, even if the rest of the descriptor is not.
  */
 void pull_desc(memdesc_t* new_desc, memdesc_stub_t* stub, memdesc_t* orig_desc) {//,
                       //mem_range_t first_range, unsigned int no_ranges) {
@@ -110,6 +110,10 @@ void pull_desc(memdesc_t* new_desc, memdesc_stub_t* stub, memdesc_t* orig_desc) 
   stub->node = NODE_INDEX; 
   // make the stub point to the new (local) descriptor
   set_stub_pointer(stub, new_desc);
+}
+
+void pull_descriptor_in_place(memdesc_stub_t stub) {
+  pull_desc(get_stub_pointer(stub), &stub, get_stub_pointer(stub));
 }
 
 static void pull_data(memdesc_stub_t* stub) {
@@ -242,7 +246,7 @@ void push_data(memdesc_stub_t stub, unsigned int dest_node) {
   LOG(DEBUG, "mem-comm: push_data: blocking until all the push data is received.\n");
   struct timeval t1, t2;
   assert(!gettimeofday(&t1, NULL));
-  block_for_confirmation(pending);
+  block_for_confirmation(pending);  // block until all the data has been received
   assert(!gettimeofday(&t2, NULL));
   long microsec = 1000000 * (t2.tv_sec - t1.tv_sec);
   microsec += t2.tv_usec - t1.tv_usec;

@@ -48,9 +48,7 @@
 #define NO_FAM_CONTEXTS_PER_PROC 1024
 
 unsigned int NODE_INDEX = 0;
-//#define NODE_INDEX 16L
-//void* node_start_addr = (void*)(NODE_INDEX * VM_PER_NODE);
-unsigned int NO_PROCS = 2;  // the number of processors that will be created and used on the current node
+unsigned int NO_PROCS;  // the number of processors that will be created and used on the current node
 processor_t _processor[MAX_PROCS_PER_NODE];
 
 
@@ -84,7 +82,7 @@ static const char* log_prefix[20] = {"[CRASH]!!!!!!!!!!!!!!!!!!!! ",  // 0
 #ifdef LOGGING
 LOG_LEVEL _logging_level = LOGGING;
 #else
-LOG_LEVEL _logging_level = WARNING;
+LOG_LEVEL _logging_level = DEBUG;
 #endif
 
 void LOG(LOG_LEVEL level, char* fmt, ...) {
@@ -538,7 +536,8 @@ fam_context_t* allocate_fam(
 
   unsigned int allocated_procs = 0;
   int last_allocated_proc_index = -1;
-  unsigned int load_to_redistribute = 0;
+  unsigned int load_to_redistribute = 0;  // percentage of threads that need to be redistributed because
+                                  // we failed to allocated TC's on some processors
 
   for (i = 0; i < mapping->no_proc_assignments; ++i) {
     proc_assignment as = mapping->proc_assignments[i];
@@ -599,9 +598,14 @@ fam_context_t* allocate_fam(
     // compute the number of threads going to this proc
     if (i < last_allocated_proc_index) {
       allocated_tcs[i].no_threads = load * total_threads / 100;
+      allocated_tcs[i].no_threads = MAX(allocated_tcs[i].no_threads, mapping->no_ranges_per_tc);
       allocated_threads += allocated_tcs[i].no_threads;
+      assert(allocated_tcs[i].no_threads >= mapping->no_ranges_per_tc);  // all TC's have to have the
+                                                // same number of generations, and each generation has to
+                                                // have at least one thread
     } else {
       allocated_tcs[i].no_threads = total_threads - allocated_threads;
+      assert(allocated_tcs[i].no_threads >= mapping->no_ranges_per_tc);
     }
     LOG(DEBUG, "allocate_fam: %dth proc involved will be assigned %ld threads.\n",
         i, allocated_tcs[i].no_threads);
@@ -899,9 +903,13 @@ void run_tc(unsigned int processor_index, tc_t* tc) {
   assert(tc->ident.proc_index == (signed)processor_index);
 
   _cur_tc = tc;
+  struct timeval start;
+  gettimeofday(&start, NULL);
   LOG(DEBUG, "run_tc: jumping to user code. proc_index = %d\n", processor_index);
   swapcontext(&_processor[processor_index].scheduler_context, &tc->context);
   LOG(DEBUG, "run_tc: back from user code. proc_index = %d\n", processor_index);
+  long time = timediff_now(start);
+  LOG(DEBUG, "TC %d finished. Processing took %ld ms.\n", tc->ident.tc_index, time);
 
   //return to the scheduler
   return;
@@ -2270,6 +2278,14 @@ int main(int argc, char** argv) {
   LOG(DEBUG, "starting\n");
   srand(getpid());
   _cur_tc = NULL;
+
+
+  // allocate and free some memory, so that the dynamic memory allocator has a chance to map some memory
+  // for the heap in the address space
+  void *pp = malloc(400000000);
+  assert(pp);
+  LOG(DEBUG, "dynamically allocated some memory at address %p\n", pp);
+  free(pp);
   
   // read the number of CPUs on the system
   NO_PROCS = get_no_CPUs();
